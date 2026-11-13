@@ -1,0 +1,32 @@
+name: Crea HelpDeskINAIL.exe
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installa le librerie
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Crea il .exe
+        run: >
+          pyinstaller --noconfirm --onefile --windowed
+          --name HelpDeskINAIL --icon icon.ico
+          --add-data "logo.png;." --add-data "logo_header.png;." --add-data "icon.ico;."
+          helpdesk.py
+
+      - name: Salva il .exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: HelpDeskINAIL
+          path: dist/HelpDeskINAIL.exe
