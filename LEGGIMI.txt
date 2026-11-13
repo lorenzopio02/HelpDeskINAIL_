@@ -1,0 +1,15 @@
+HELP DESK INAIL - Registro interventi
+=====================================
+
+COME OTTENERE IL .EXE (da GitHub)
+1. Su GitHub crea un repository (anche privato).
+2. Carica TUTTI i file di questa cartella, compresa la cartella nascosta ".github"
+   (Add file > Upload files, trascina dentro i file e la cartella .github).
+3. Vai nella scheda "Actions": parte da solo "Crea HelpDeskINAIL.exe"
+   (se non parte: scegli il workflow e premi "Run workflow").
+4. Dopo 2-3 minuti apri l'esecuzione completata e in fondo, alla voce "Artifacts",
+   scarica "HelpDeskINAIL" (e' uno zip con dentro HelpDeskINAIL.exe).
+
+DOVE SONO I DATI
+Il database e' in:  %APPDATA%\HelpDeskINAIL
+(da programma: File > Apri la cartella dei dati). Per un backup: File > Salva una copia.
