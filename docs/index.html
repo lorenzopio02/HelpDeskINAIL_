@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Help Desk">
+<meta name="theme-color" content="#002D5C">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<title>Help Desk INAIL</title>
+<style>
+:root{--navy:#002D5C;--navy2:#001f40;--green:#2c954b;--red:#d12233;--light:#f2f9fd;--grey:#5b6b7d;--border:#c5d3e0;--text:#1c2733;--white:#fff}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--light);color:var(--text);font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+header{background:var(--white);padding:calc(env(safe-area-inset-top) + 8px) 14px 8px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:5}
+header img{height:34px;width:auto}
+header h1{font-size:17px;margin:0;color:var(--navy)}
+.tri{display:flex;height:4px;position:sticky;top:calc(env(safe-area-inset-top) + 50px);z-index:5}
+.tri i{flex:1}.tri i:nth-child(1){background:var(--green)}.tri i:nth-child(2){background:#dfe9f2}.tri i:nth-child(3){background:var(--red)}
+main{padding:14px 14px calc(88px + env(safe-area-inset-bottom))}
+nav{position:fixed;left:0;right:0;bottom:0;background:var(--navy);display:flex;padding-bottom:env(safe-area-inset-bottom);z-index:10}
+nav button{flex:1;background:none;border:0;color:#b8c7d9;padding:11px 2px 9px;font-size:12px;font-weight:600}
+nav button b{display:block;font-size:20px;line-height:1.1}
+nav button.on{color:#fff;background:var(--navy2)}
+label{display:block;font-size:13px;font-weight:700;color:var(--navy);margin:12px 0 4px}
+input,textarea,select{width:100%;font:inherit;padding:11px;border:1px solid var(--border);border-radius:10px;background:var(--white);color:var(--text)}
+textarea{min-height:76px;resize:vertical}
+.row{display:flex;gap:10px}.row>div{flex:1;min-width:0}
+button.btn{font:inherit;font-weight:700;border:0;border-radius:10px;padding:13px 16px;background:#dde8f3;color:var(--navy);width:100%;margin-top:10px}
+button.btn.green{background:var(--green);color:#fff}button.btn.navy{background:var(--navy);color:#fff}button.btn.red{background:var(--red);color:#fff}
+button.sm{width:auto;padding:8px 12px;margin:0;font-size:14px}
+.hint{font-size:13px;color:var(--grey);margin:6px 0}
+.card{background:var(--white);border:1px solid var(--border);border-radius:12px;padding:12px;margin:10px 0}
+.card h3{margin:0 0 2px;font-size:16px;color:var(--navy)}
+.meta{font-size:13px;color:var(--grey)}
+.tag{display:inline-block;background:#dde8f3;color:var(--navy);border-radius:6px;padding:1px 7px;font-size:12px;font-weight:700;margin-right:4px}
+.thumbs{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.thumbs div{position:relative}
+.thumbs img{width:78px;height:78px;object-fit:cover;border-radius:8px;border:1px solid var(--border)}
+.thumbs .x{position:absolute;top:-6px;right:-6px;background:var(--red);color:#fff;border:0;border-radius:50%;width:24px;height:24px;font-weight:700}
+.stats{display:flex;gap:8px}.stats div{flex:1;background:var(--white);border:1px solid var(--border);border-radius:10px;text-align:center;padding:8px 2px}
+.stats b{display:block;font-size:22px;color:var(--navy)}.stats span{font-size:11px;color:var(--grey)}
+.msg{background:#e6f4ea;border:1px solid #b7dcc0;color:#14532d;border-radius:10px;padding:10px;margin:10px 0;white-space:pre-line}
+.msg.err{background:#fde8ea;border-color:#f3b6bc;color:#7a1420}
+.hidden{display:none}
+h2{font-size:19px;color:var(--navy);margin:4px 0 8px}
+.full img{width:100%;border-radius:10px;margin-top:8px}
+.modal{position:fixed;inset:0;background:rgba(0,20,45,.78);z-index:20;overflow:auto;padding:16px}
+.modal img{width:100%;border-radius:10px}
+</style>
+</head>
+<body>
+<header><img src="logo_header.png" alt="INAIL"><h1>Help Desk</h1></header>
+<div class="tri"><i></i><i></i><i></i></div>
+<main>
+ <!-- NUOVO INTERVENTO -->
+ <section id="p-new">
+  <h2 id="newTitle">Nuovo intervento</h2>
+  <div class="stats"><div><b id="sOggi">0</b><span>Oggi</span></div><div><b id="sMese">0</b><span>Mese</span></div><div><b id="sTot">0</b><span>Totale</span></div></div>
+  <label for="fDt">Data e ora</label><input id="fDt" type="datetime-local">
+  <label for="fUser">Utente *</label><input id="fUser" list="dlUsers" autocomplete="off" autocapitalize="words" placeholder="Nome e cognome">
+  <datalist id="dlUsers"></datalist>
+  <div class="hint" id="userHint"></div>
+  <label for="fSede">Sede</label><input id="fSede" list="dlSedi" autocomplete="off" autocapitalize="words" placeholder="Firenze, Livorno, DR Toscana…">
+  <datalist id="dlSedi"></datalist>
+  <div class="row"><div><label for="fTel">Telefono</label><input id="fTel" inputmode="tel"></div><div><label for="fImei">IMEI cellulare</label><input id="fImei" inputmode="numeric"></div></div>
+  <label for="fSn">Seriale del PC</label><input id="fSn" autocapitalize="characters">
+  <label for="fTicket">N. ticket (facoltativo)</label><input id="fTicket" autocapitalize="characters">
+  <label for="fReq">Per cosa mi hanno chiamato *</label><textarea id="fReq"></textarea>
+  <label for="fSol">Come ho risolto</label><textarea id="fSol"></textarea>
+  <label for="fNote">Note</label><textarea id="fNote" style="min-height:56px"></textarea>
+  <label>Foto</label>
+  <input id="fFoto" type="file" accept="image/*" multiple class="hidden">
+  <button class="btn" type="button" id="btnFoto">📷 Scatta o scegli foto</button>
+  <div class="thumbs" id="thumbs"></div>
+  <button class="btn green" type="button" id="btnSave">Salva intervento</button>
+  <button class="btn" type="button" id="btnCancelEdit" style="display:none">Annulla modifica</button>
+  <div id="newMsg"></div>
+ </section>
+
+ <!-- REGISTRO -->
+ <section id="p-reg" class="hidden">
+  <h2>Registro</h2>
+  <input id="rSearch" type="search" placeholder="Cerca (utente, testo, ticket…)">
+  <div class="row"><div><label for="rSede">Sede</label><select id="rSede"></select></div><div><label for="rTicket">Ticket</label><select id="rTicket"><option value="">Tutti</option><option value="con">Con ticket</option><option value="senza">Senza ticket</option></select></div></div>
+  <div class="hint" id="rCount"></div>
+  <div id="rList"></div>
+ </section>
+
+ <!-- UTENTI -->
+ <section id="p-usr" class="hidden">
+  <h2>Utenti</h2>
+  <input id="uSearch" type="search" placeholder="Cerca utente, sede, seriale…">
+  <div class="hint" id="uCount"></div>
+  <div id="uList"></div>
+ </section>
+
+ <!-- SCAMBIO -->
+ <section id="p-ex" class="hidden">
+  <h2>Scambio con il PC</h2>
+  <div class="card">
+   <h3>Dal telefono al PC</h3>
+   <div class="hint">Crea un file con gli interventi, le foto e gli utenti nuovi o modificati. Mandalo al PC (posta aziendale, AirDrop…) e nel programma usa File › Importa dati dal telefono.</div>
+   <label for="exMode">Cosa invio</label>
+   <select id="exMode"><option value="new">Solo le novità dall'ultimo invio</option><option value="all">Tutto (anche come copia di sicurezza)</option></select>
+   <div class="hint" id="exInfo"></div>
+   <button class="btn navy" type="button" id="btnExport">Prepara file per il PC</button>
+  </div>
+  <div class="card">
+   <h3>Dal PC al telefono</h3>
+   <div class="hint">Nel programma del PC usa File › Esporta utenti per il telefono, poi scegli qui quel file. Gli utenti del PC si aggiungono; se c'è una modifica più recente vince quella.</div>
+   <input id="imFile" type="file" accept=".json,application/json" class="hidden">
+   <button class="btn navy" type="button" id="btnImport">Ricevi dal PC</button>
+  </div>
+  <div class="card">
+   <h3>Ripristina da una copia</h3>
+   <div class="hint">Se hai perso i dati del telefono, scegli qui un file «Tutto» creato in precedenza.</div>
+   <input id="rsFile" type="file" accept=".json,application/json" class="hidden">
+   <button class="btn" type="button" id="btnRestore">Ripristina da file</button>
+  </div>
+  <div id="exMsg"></div>
+  <div class="hint">I dati restano solo su questo telefono, finché non crei un file. Fai ogni tanto un invio «Tutto» al PC: se cancelli l'app o resetti l'iPhone, i dati non inviati si perdono. Per i file con dati dei dipendenti usa i canali consentiti dall'INAIL.</div>
+  <div class="hint" id="storInfo"></div>
+ </section>
+</main>
+<div id="modal" class="modal hidden"></div>
+<nav>
+ <button data-p="new" class="on"><b>＋</b>Nuovo</button>
+ <button data-p="reg"><b>☰</b>Registro</button>
+ <button data-p="usr"><b>👤</b>Utenti</button>
+ <button data-p="ex"><b>⇄</b>Scambio</button>
+</nav>
+
+<script>
+"use strict";
+/* ================== Database (IndexedDB) ================== */
+const DB_NAME = "helpdesk-inail", DB_VER = 1;
+let db;
+function openDb() {
+  return new Promise((res, rej) => {
+    const rq = indexedDB.open(DB_NAME, DB_VER);
+    rq.onupgradeneeded = () => {
+      const d = rq.result;
+      d.createObjectStore("utenti", { keyPath: "key" });
+      d.createObjectStore("interventi", { keyPath: "uid" });
+      d.createObjectStore("meta", { keyPath: "k" });
+    };
+    rq.onsuccess = () => { db = rq.result; res(); };
+    rq.onerror = () => rej(rq.error);
+  });
+}
+const tx = (store, mode = "readonly") => db.transaction(store, mode).objectStore(store);
+const req = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+const getAll = s => req(tx(s).getAll());
+const put = (s, v) => req(tx(s, "readwrite").put(v));
+const del = (s, k) => req(tx(s, "readwrite").delete(k));
+const getKey = (s, k) => req(tx(s).get(k));
+async function getMeta(k) { const r = await getKey("meta", k); return r ? r.v : null; }
+const setMeta = (k, v) => put("meta", { k, v });
+
+/* ================== Utilità ================== */
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const nowIso = () => new Date().toISOString();
+const pad = n => String(n).padStart(2, "0");
+const localInput = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const toDataOra = v => v.replace("T", " ").slice(0, 16);
+const fromDataOra = v => v.replace(" ", "T").slice(0, 16);
+const fmtDt = v => { const m = /^(\d{4})-(\d\d)-(\d\d)[ T](\d\d):(\d\d)/.exec(v || ""); return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}` : (v || ""); };
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === "x" ? r : (r & 3 | 8)).toString(16); }));
+function normName(n) {
+  n = (n || "").replace(/\s+/g, " ").trim();
+  if (n && (n === n.toLowerCase() || n === n.toUpperCase())) n = n.toLowerCase().replace(/(^|[\s'’-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+  return n;
+}
+const keyOf = n => normName(n).toLowerCase();
+const SEDI = ["Arezzo","Carrara","DR Toscana","Firenze","Grosseto","Livorno","Lucca","Massa","Pisa","Pistoia","Prato","Siena"];
+function show(el, text, err) { el.innerHTML = text ? `<div class="msg${err ? " err" : ""}">${esc(text)}</div>` : ""; }
+
+/* riduce le foto (lato lungo max 1800 px) per risparmiare spazio */
+function shrink(file, max = 1800) {
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL("image/jpeg", 0.82));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); const fr = new FileReader(); fr.onload = () => resolve(fr.result); fr.readAsDataURL(file); };
+    img.src = url;
+  });
+}
+
+/* ================== Stato ================== */
+let users = [], editUid = null, photos = [], autoFor = null;
+
+async function loadUsers() {
+  users = (await getAll("utenti")).sort((a, b) => a.nome.localeCompare(b.nome, "it"));
+  $("dlUsers").innerHTML = users.map(u => `<option value="${esc(u.nome)}">`).join("");
+  const sedi = new Set(SEDI); users.forEach(u => u.sede && sedi.add(u.sede));
+  (await getAll("interventi")).forEach(i => i.sede && sedi.add(i.sede));
+  const list = [...sedi].sort((a, b) => a.localeCompare(b, "it"));
+  $("dlSedi").innerHTML = list.map(s => `<option value="${esc(s)}">`).join("");
+  const cur = $("rSede").value;
+  $("rSede").innerHTML = `<option value="">Tutte</option>` + list.map(s => `<option>${esc(s)}</option>`).join("");
+  $("rSede").value = list.includes(cur) ? cur : "";
+}
+async function stats() {
+  const all = await getAll("interventi"), d = new Date();
+  const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  $("sOggi").textContent = all.filter(i => i.data_ora.startsWith(today)).length;
+  $("sMese").textContent = all.filter(i => i.data_ora.startsWith(today.slice(0, 7))).length;
+  $("sTot").textContent = all.length;
+}
+
+/* ================== Navigazione ================== */
+function go(p) {
+  ["new", "reg", "usr", "ex"].forEach(x => $("p-" + x).classList.toggle("hidden", x !== p));
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.p === p));
+  window.scrollTo(0, 0);
+  if (p === "reg") renderReg();
+  if (p === "usr") renderUsers();
+  if (p === "ex") renderEx();
+}
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => go(b.dataset.p));
+
+/* ================== Nuovo intervento ================== */
+function userHint() {
+  const t = $("fUser").value.trim(), k = keyOf(t);
+  const m = t && users.find(u => u.key === k);
+  if (m && autoFor !== k) {
+    autoFor = k;
+    $("fSede").value = m.sede || ""; $("fTel").value = m.telefono || ""; $("fSn").value = m.seriale_pc || ""; $("fImei").value = m.imei || "";
+  } else if (!m && autoFor !== null) {
+    autoFor = null; $("fSede").value = $("fTel").value = $("fSn").value = $("fImei").value = "";
+  }
+  $("userHint").textContent = !t ? "" : m ? "Utente già in lista: dati compilati." : "Nuovo utente: verrà aggiunto alla lista quando salvi.";
+}
+$("fUser").addEventListener("input", userHint);
+$("fUser").addEventListener("change", userHint);
+
+function renderThumbs() {
+  $("thumbs").innerHTML = photos.map((p, i) => `<div><img src="${p.data}" alt=""><button class="x" data-i="${i}" type="button">×</button></div>`).join("");
+  $("thumbs").querySelectorAll(".x").forEach(b => b.onclick = () => { photos.splice(+b.dataset.i, 1); renderThumbs(); });
+}
+$("btnFoto").onclick = () => $("fFoto").click();
+$("fFoto").onchange = async e => {
+  for (const f of e.target.files) {
+    const data = await shrink(f);
+    photos.push({ nome: `foto_${Date.now()}_${photos.length + 1}.jpg`, data });
+  }
+  e.target.value = ""; renderThumbs();
+};
+
+function clearForm() {
+  editUid = null; autoFor = null; photos = [];
+  $("fDt").value = localInput();
+  ["fUser", "fSede", "fTel", "fImei", "fSn", "fTicket", "fReq", "fSol", "fNote"].forEach(i => $(i).value = "");
+  $("newTitle").textContent = "Nuovo intervento"; $("btnSave").textContent = "Salva intervento"; $("btnCancelEdit").style.display = "none";
+  userHint(); renderThumbs();
+}
+$("btnCancelEdit").onclick = () => { clearForm(); show($("newMsg"), ""); };
+
+$("btnSave").onclick = async () => {
+  const nome = normName($("fUser").value), req_ = $("fReq").value.trim();
+  if (!$("fDt").value) return show($("newMsg"), "Controlla data e ora.", true);
+  if (!nome) return show($("newMsg"), "Scrivi il nome dell'utente.", true);
+  if (!req_) return show($("newMsg"), "Scrivi per cosa ti hanno chiamato.", true);
+  const sede = normName($("fSede").value), mod = nowIso();
+  const k = keyOf(nome), old = users.find(u => u.key === k);
+  const fields = { sede, telefono: $("fTel").value.trim(), seriale_pc: $("fSn").value.trim(), imei: $("fImei").value.trim() };
+  const changed = !old || ["sede", "telefono", "seriale_pc", "imei"].some(f => (old[f] || "") !== fields[f]);
+  if (changed) await put("utenti", { key: k, nome: old ? old.nome : nome, ...fields, modificato: mod });
+  const prev = editUid ? await getKey("interventi", editUid) : null;
+  await put("interventi", {
+    uid: editUid || uuid(), data_ora: toDataOra($("fDt").value), utente: old ? old.nome : nome, sede,
+    richiesta: req_, soluzione: $("fSol").value.trim(), note: $("fNote").value.trim(), ticket: $("fTicket").value.trim(),
+    foto: photos, creato: prev ? prev.creato : mod, modificato: mod
+  });
+  const msg = (editUid ? "Modifiche salvate." : "Intervento salvato.") + (old ? "" : " Nuovo utente aggiunto: " + nome + ".") + (photos.length ? ` Foto: ${photos.length}.` : "");
+  clearForm(); await loadUsers(); await stats(); show($("newMsg"), msg);
+};
+
+/* ================== Registro ================== */
+let regCache = [];
+async function renderReg() {
+  regCache = (await getAll("interventi")).sort((a, b) => (b.data_ora + b.modificato).localeCompare(a.data_ora + a.modificato));
+  const q = $("rSearch").value.trim().toLowerCase().split(/\s+/).filter(Boolean), sede = $("rSede").value, tk = $("rTicket").value;
+  const rows = regCache.filter(i => {
+    if (sede && i.sede !== sede) return false;
+    if (tk === "con" && !i.ticket) return false;
+    if (tk === "senza" && i.ticket) return false;
+    const hay = [i.utente, i.sede, i.ticket, i.richiesta, i.soluzione, i.note].join(" ").toLowerCase();
+    return q.every(t => hay.includes(t));
+  });
+  $("rCount").textContent = `Interventi trovati: ${rows.length} su ${regCache.length}`;
+  $("rList").innerHTML = rows.map(i => `<div class="card" data-u="${esc(i.uid)}"><h3>${esc(i.utente)}</h3>
+    <div class="meta">${fmtDt(i.data_ora)}${i.sede ? " · " + esc(i.sede) : ""}</div>
+    <div style="margin:4px 0">${i.ticket ? `<span class="tag">Ticket ${esc(i.ticket)}</span>` : ""}${i.foto && i.foto.length ? `<span class="tag">📷 ${i.foto.length}</span>` : ""}</div>
+    <div>${esc(i.richiesta).slice(0, 140)}${i.richiesta.length > 140 ? "…" : ""}</div></div>`).join("") || `<div class="hint">Nessun intervento.</div>`;
+  $("rList").querySelectorAll(".card").forEach(c => c.onclick = () => openDetail(c.dataset.u));
+}
+["rSearch", "rSede", "rTicket"].forEach(id => $(id).addEventListener("input", renderReg));
+
+async function openDetail(uid) {
+  const i = await getKey("interventi", uid); if (!i) return;
+  const u = users.find(x => x.key === keyOf(i.utente)) || {};
+  const m = $("modal");
+  m.innerHTML = `<div class="card full"><h3>${esc(i.utente)}</h3><div class="meta">${fmtDt(i.data_ora)}${i.sede ? " · " + esc(i.sede) : ""}${i.ticket ? " · Ticket " + esc(i.ticket) : ""}</div>
+    ${u.telefono || u.seriale_pc || u.imei ? `<div class="meta" style="margin-top:6px">${u.telefono ? "Tel " + esc(u.telefono) + " · " : ""}${u.seriale_pc ? "SN " + esc(u.seriale_pc) + " · " : ""}${u.imei ? "IMEI " + esc(u.imei) : ""}</div>` : ""}
+    <label>Per cosa mi hanno chiamato</label><div style="white-space:pre-wrap">${esc(i.richiesta)}</div>
+    ${i.soluzione ? `<label>Come ho risolto</label><div style="white-space:pre-wrap">${esc(i.soluzione)}</div>` : ""}
+    ${i.note ? `<label>Note</label><div style="white-space:pre-wrap">${esc(i.note)}</div>` : ""}
+    ${(i.foto || []).map(f => `<img src="${f.data}" alt="">`).join("")}
+    <button class="btn navy" id="dEdit" type="button">Modifica</button>
+    <button class="btn red" id="dDel" type="button">Elimina dal telefono</button>
+    <button class="btn" id="dClose" type="button">Chiudi</button>
+    <div class="hint">L'eliminazione vale solo qui: se l'intervento è già stato importato nel PC, nel PC resta.</div></div>`;
+  m.classList.remove("hidden");
+  $("dClose").onclick = () => m.classList.add("hidden");
+  $("dDel").onclick = async () => { if (confirm("Eliminare questo intervento dal telefono?")) { await del("interventi", uid); m.classList.add("hidden"); await stats(); renderReg(); } };
+  $("dEdit").onclick = () => {
+    m.classList.add("hidden"); editUid = i.uid; autoFor = keyOf(i.utente); photos = (i.foto || []).map(f => ({ ...f }));
+    $("fDt").value = fromDataOra(i.data_ora); $("fUser").value = i.utente; $("fSede").value = i.sede || "";
+    $("fTel").value = u.telefono || ""; $("fSn").value = u.seriale_pc || ""; $("fImei").value = u.imei || "";
+    $("fTicket").value = i.ticket || ""; $("fReq").value = i.richiesta; $("fSol").value = i.soluzione || ""; $("fNote").value = i.note || "";
+    $("newTitle").textContent = "Modifica intervento"; $("btnSave").textContent = "Salva modifiche"; $("btnCancelEdit").style.display = "block";
+    userHint(); renderThumbs(); go("new");
+  };
+}
+
+/* ================== Utenti ================== */
+async function renderUsers() {
+  const all = await getAll("interventi"), count = {};
+  all.forEach(i => { const k = keyOf(i.utente); count[k] = (count[k] || 0) + 1; });
+  const q = $("uSearch").value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const rows = users.filter(u => { const h = [u.nome, u.sede, u.telefono, u.seriale_pc, u.imei].join(" ").toLowerCase(); return q.every(t => h.includes(t)); });
+  $("uCount").textContent = `Utenti: ${rows.length} su ${users.length}`;
+  $("uList").innerHTML = rows.map(u => `<div class="card" data-k="${esc(u.key)}"><h3>${esc(u.nome)}</h3>
+    <div class="meta">${esc(u.sede || "sede non indicata")} · ${count[u.key] || 0} interventi</div>
+    <div class="meta">${u.telefono ? "Tel " + esc(u.telefono) + " · " : ""}${u.seriale_pc ? "SN " + esc(u.seriale_pc) + " · " : ""}${u.imei ? "IMEI " + esc(u.imei) : ""}</div></div>`).join("") || `<div class="hint">Nessun utente. Si aggiungono da soli quando salvi un intervento.</div>`;
+  $("uList").querySelectorAll(".card").forEach(c => c.onclick = () => editUser(c.dataset.k));
+}
+$("uSearch").addEventListener("input", renderUsers);
+function editUser(k) {
+  const u = users.find(x => x.key === k); if (!u) return;
+  const m = $("modal");
+  m.innerHTML = `<div class="card"><h3>Scheda utente</h3>
+    <label>Nome e cognome</label><input id="eNome" value="${esc(u.nome)}">
+    <label>Sede</label><input id="eSede" list="dlSedi" value="${esc(u.sede)}">
+    <label>Telefono</label><input id="eTel" inputmode="tel" value="${esc(u.telefono)}">
+    <label>Seriale PC</label><input id="eSn" value="${esc(u.seriale_pc)}">
+    <label>IMEI cellulare</label><input id="eImei" inputmode="numeric" value="${esc(u.imei)}">
+    <button class="btn green" id="eSave" type="button">Salva</button><button class="btn" id="eClose" type="button">Chiudi</button><div id="eMsg"></div></div>`;
+  m.classList.remove("hidden");
+  $("eClose").onclick = () => m.classList.add("hidden");
+  $("eSave").onclick = async () => {
+    const nome = normName($("eNome").value); if (!nome) return show($("eMsg"), "Scrivi il nome.", true);
+    const nk = keyOf(nome);
+    if (nk !== u.key && users.some(x => x.key === nk)) return show($("eMsg"), "Esiste già un utente con questo nome.", true);
+    const nu = { key: nk, nome, sede: normName($("eSede").value), telefono: $("eTel").value.trim(), seriale_pc: $("eSn").value.trim(), imei: $("eImei").value.trim(), modificato: nowIso() };
+    if (nk !== u.key) {
+      await del("utenti", u.key);
+      for (const i of await getAll("interventi")) if (keyOf(i.utente) === u.key) { i.utente = nome; i.modificato = nowIso(); await put("interventi", i); }
+    }
+    await put("utenti", nu); m.classList.add("hidden"); await loadUsers(); renderUsers();
+  };
+}
+
+/* ================== Scambio ================== */
+async function renderEx() {
+  const last = await getMeta("lastSent"), all = await getAll("interventi");
+  const n = all.filter(i => !last || i.modificato > last).length;
+  $("exInfo").textContent = last ? `Ultimo invio: ${fmtDt(last.replace("T", " ").slice(0, 16))} (ora locale può differire di 1-2 ore). Interventi da inviare: ${n}.` : `Non hai ancora creato nessun file. Interventi da inviare: ${n}.`;
+  if (navigator.storage && navigator.storage.estimate) {
+    const e = await navigator.storage.estimate(), p = navigator.storage.persisted ? await navigator.storage.persisted() : false;
+    $("storInfo").textContent = `Spazio usato dall'app: ${((e.usage || 0) / 1048576).toFixed(1)} MB. Archivio protetto: ${p ? "sì" : "non garantito"}.`;
+  }
+}
+async function buildExport(mode) {
+  const last = await getMeta("lastSent"), all = await getAll("interventi");
+  const items = mode === "all" ? all : all.filter(i => !last || i.modificato > last);
+  const us = mode === "all" ? users : users.filter(u => !last || (u.modificato || "") > last);
+  const needed = new Set(items.map(i => keyOf(i.utente)));
+  const usersOut = [...us, ...users.filter(u => needed.has(u.key) && !us.includes(u))];
+  return {
+    tipo: "helpdesk-telefono", versione: 1, creato: nowIso(),
+    utenti: usersOut.map(u => ({ nome: u.nome, sede: u.sede || "", telefono: u.telefono || "", seriale_pc: u.seriale_pc || "", imei: u.imei || "", modificato: u.modificato || nowIso() })),
+    interventi: items.map(i => ({ uid: i.uid, data_ora: i.data_ora, utente: i.utente, sede: i.sede || "", richiesta: i.richiesta, soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", modificato: i.modificato, foto: (i.foto || []).map(f => ({ nome: f.nome, data: f.data })) }))
+  };
+}
+$("btnExport").onclick = async () => {
+  const mode = $("exMode").value, data = await buildExport(mode);
+  if (!data.interventi.length && !data.utenti.length) return show($("exMsg"), "Non c'è niente di nuovo da inviare.", true);
+  const name = `dati_telefono_${localInput().replace(/[-:T]/g, "").slice(0, 12)}.json`;
+  const file = new File([JSON.stringify(data)], name, { type: "application/json" });
+  const done = async () => { if (mode === "new") await setMeta("lastSent", data.creato); show($("exMsg"), `File creato: ${data.interventi.length} interventi, ${data.utenti.length} utenti.\nNel PC: File › Importa dati dal telefono.`); renderEx(); };
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: "Dati Help Desk" }); return done(); }
+  } catch (e) { if (e && e.name === "AbortError") return show($("exMsg"), "Invio annullato: niente è stato segnato come inviato.", true); }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000); done();
+};
+
+async function mergeFile(file, restore) {
+  const data = JSON.parse(await file.text());
+  if (!data || !["helpdesk-pc", "helpdesk-telefono"].includes(data.tipo)) throw new Error("Questo non è un file dell'app Help Desk.");
+  if (restore && data.tipo !== "helpdesk-telefono") throw new Error("Per ripristinare serve un file creato da questa app (non quello degli utenti dal PC).");
+  let nu = 0, au = 0, ni = 0, ai = 0, sk = 0;
+  for (const u of data.utenti || []) {
+    const nome = normName(u.nome || ""); if (!nome) continue;
+    const k = keyOf(nome), cur = users.find(x => x.key === k), mod = u.modificato || "";
+    const rec = { key: k, nome: cur ? cur.nome : nome, sede: normName(u.sede || ""), telefono: String(u.telefono || "").trim(), seriale_pc: String(u.seriale_pc || "").trim(), imei: String(u.imei || "").trim(), modificato: mod || nowIso() };
+    if (!cur) { await put("utenti", rec); nu++; }
+    else if (mod && mod > (cur.modificato || "")) { await put("utenti", rec); au++; }
+    users = (await getAll("utenti"));
+  }
+  if (restore) for (const i of data.interventi || []) {
+    if (!i.uid || !i.utente || !/^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(i.data_ora || "")) { sk++; continue; }
+    const cur = await getKey("interventi", i.uid);
+    if (cur && !(i.modificato > cur.modificato)) { sk++; continue; }
+    await put("interventi", { uid: i.uid, data_ora: i.data_ora, utente: normName(i.utente), sede: i.sede || "", richiesta: i.richiesta || "", soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", foto: i.foto || [], creato: i.modificato, modificato: i.modificato || nowIso() });
+    cur ? ai++ : ni++;
+  }
+  return `Utenti nuovi: ${nu}, aggiornati: ${au}` + (restore ? `\nInterventi ripristinati: ${ni}, aggiornati: ${ai}, già presenti: ${sk}` : "");
+}
+function wire(btn, inp, restore) {
+  $(btn).onclick = () => $(inp).click();
+  $(inp).onchange = async e => {
+    const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+    try { const t = await mergeFile(f, restore); await loadUsers(); await stats(); show($("exMsg"), t); }
+    catch (err) { show($("exMsg"), "Non riesco a leggere il file: " + err.message, true); }
+  };
+}
+wire("btnImport", "imFile", false); wire("btnRestore", "rsFile", true);
+
+/* ================== Avvio ================== */
+(async () => {
+  try { await openDb(); } catch (e) { document.body.innerHTML = "<p style='padding:20px'>Impossibile aprire l'archivio del telefono. Esci dalla navigazione privata e riprova.</p>"; return; }
+  if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+  await loadUsers(); await stats(); clearForm();
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+})();
+</script>
+</body>
+</html>
