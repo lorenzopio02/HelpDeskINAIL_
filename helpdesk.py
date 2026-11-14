@@ -37,7 +37,7 @@ TEXT = "#1c2733"
 BTN_BG = "#dde8f3"
 BTN_BG_ACTIVE = "#c9daec"
 
-SEDI_TOSCANA = ["Arezzo", "Carrara", "Firenze", "Grosseto", "Livorno", "Lucca", "Massa",
+SEDI_TOSCANA = ["Arezzo", "Carrara", "Firenze", , "DR Toscana", "Grosseto", "Livorno", "Lucca", "Massa",
                 "Pisa", "Pistoia", "Prato", "Siena"]
 
 # (nome, colore a schermo, colore leggibile su carta bianca)
