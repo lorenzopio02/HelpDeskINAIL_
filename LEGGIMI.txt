@@ -1,15 +1,18 @@
-HELP DESK INAIL - Registro interventi
-=====================================
+HELP DESK INAIL - Registro interventi, utenti, stampanti e toner
+================================================================
 
-COME OTTENERE IL .EXE (da GitHub)
-1. Su GitHub crea un repository (anche privato).
-2. Carica TUTTI i file di questa cartella, compresa la cartella nascosta ".github"
-   (Add file > Upload files, trascina dentro i file e la cartella .github).
-3. Vai nella scheda "Actions": parte da solo "Crea HelpDeskINAIL.exe"
-   (se non parte: scegli il workflow e premi "Run workflow").
-4. Dopo 2-3 minuti apri l'esecuzione completata e in fondo, alla voce "Artifacts",
-   scarica "HelpDeskINAIL" (e' uno zip con dentro HelpDeskINAIL.exe).
+SE HAI GIA' IL REPOSITORY SU GITHUB (aggiornamento)
+1. Apri il repository > clicca helpdesk.py > icona matita > cancella tutto e incolla il nuovo
+   helpdesk.py > Commit changes.
+   (oppure: Add file > Upload files, trascina i nuovi file e conferma: sostituisce quelli vecchi)
+2. Add file > Upload files: carica anche il NUOVO file printer_images.py. Commit changes.
+3. Il workflow (.github/workflows/build.yml) NON cambia.
+4. Scheda Actions: il .exe si ricrea da solo. Scarica il nuovo "HelpDeskINAIL" da Artifacts.
+I dati gia' inseriti restano: l'app li aggiorna da sola al primo avvio.
+
+PRIMA INSTALLAZIONE
+Carica tutti i file di questa cartella (compresa .github/workflows/build.yml) in un repository.
 
 DOVE SONO I DATI
-Il database e' in:  %APPDATA%\HelpDeskINAIL
-(da programma: File > Apri la cartella dei dati). Per un backup: File > Salva una copia.
+%APPDATA%\HelpDeskINAIL  (da programma: File > Apri la cartella dei dati).
+Backup: File > Salva una copia di backup.
