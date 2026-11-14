@@ -22,7 +22,7 @@ header h1{font-size:17px;margin:0;color:var(--navy)}
 .tri i{flex:1}.tri i:nth-child(1){background:var(--green)}.tri i:nth-child(2){background:#dfe9f2}.tri i:nth-child(3){background:var(--red)}
 main{padding:14px 14px calc(88px + env(safe-area-inset-bottom))}
 nav{position:fixed;left:0;right:0;bottom:0;background:var(--navy);display:flex;padding-bottom:env(safe-area-inset-bottom);z-index:10}
-nav button{flex:1;background:none;border:0;color:#b8c7d9;padding:11px 2px 9px;font-size:12px;font-weight:600}
+nav button{flex:1;background:none;border:0;color:#b8c7d9;padding:11px 1px 9px;font-size:11px;font-weight:600}
 nav button b{display:block;font-size:20px;line-height:1.1}
 nav button.on{color:#fff;background:var(--navy2)}
 label{display:block;font-size:13px;font-weight:700;color:var(--navy);margin:12px 0 4px}
@@ -50,6 +50,16 @@ h2{font-size:19px;color:var(--navy);margin:4px 0 8px}
 .full img{width:100%;border-radius:10px;margin-top:8px}
 .modal{position:fixed;inset:0;background:rgba(0,20,45,.78);z-index:20;overflow:auto;padding:16px}
 .modal img{width:100%;border-radius:10px}
+.seg{display:flex;gap:6px;margin:8px 0}.seg button{flex:1;border:1px solid var(--border);background:var(--white);color:var(--navy);font:inherit;font-weight:700;padding:10px 4px;border-radius:10px}.seg button.on{background:var(--navy);color:#fff;border-color:var(--navy)}
+details.flt{background:var(--white);border:1px solid var(--border);border-radius:12px;padding:2px 12px 12px;margin:8px 0}details.flt summary{font-weight:700;color:var(--navy);padding:10px 0;cursor:pointer}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.chips button{font:inherit;font-size:14px;font-weight:700;border:1px solid var(--border);background:#eef4fa;color:var(--navy);border-radius:18px;padding:8px 13px}.chips button.on{background:var(--navy);color:#fff;border-color:var(--navy)}
+.bld{border-radius:12px;overflow:hidden;border:1px solid var(--border);background:#efe6cf;margin-top:10px}
+.roof{background:var(--navy);color:#fff;text-align:center;font-weight:700;padding:12px 8px;font-size:15px}
+.floor{display:flex;border-top:2px solid #cfc3a3;min-height:96px}.floor .fl{flex:0 0 72px;background:var(--navy);color:#fff;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;text-align:center;padding:4px}
+.floor .ps{flex:1;display:flex;flex-wrap:wrap;gap:6px;padding:8px;align-content:flex-start;min-width:0}
+.pr{width:92px;text-align:center;background:rgba(255,255,255,.6);border:1px solid #d8cdb0;border-radius:10px;padding:6px 3px;font-size:12px}.pr img{height:60px;width:auto;max-width:100%;object-fit:contain}.pr b{display:block;color:var(--navy);line-height:1.15;word-break:break-word}.pr span{color:var(--grey);font-size:11px}
+.sw{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:6px;vertical-align:-1px;border:1px solid rgba(0,0,0,.25)}
+label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;color:var(--text)}label.chk input{width:22px;height:22px;flex:none}
 </style>
 </head>
 <body>
@@ -68,6 +78,7 @@ h2{font-size:19px;color:var(--navy);margin:4px 0 8px}
   <datalist id="dlSedi"></datalist>
   <div class="row"><div><label for="fTel">Telefono</label><input id="fTel" inputmode="tel"></div><div><label for="fImei">IMEI cellulare</label><input id="fImei" inputmode="numeric"></div></div>
   <label for="fSn">Seriale del PC</label><input id="fSn" autocapitalize="characters">
+  <button class="btn" type="button" id="btnCopy">📋 Copia dati utente</button>
   <label for="fTicket">N. ticket (facoltativo)</label><input id="fTicket" autocapitalize="characters">
   <label for="fReq">Per cosa mi hanno chiamato *</label><textarea id="fReq"></textarea>
   <label for="fSol">Come ho risolto</label><textarea id="fSol"></textarea>
@@ -84,18 +95,52 @@ h2{font-size:19px;color:var(--navy);margin:4px 0 8px}
  <!-- REGISTRO -->
  <section id="p-reg" class="hidden">
   <h2>Registro</h2>
-  <input id="rSearch" type="search" placeholder="Cerca (utente, testo, ticket…)">
-  <div class="row"><div><label for="rSede">Sede</label><select id="rSede"></select></div><div><label for="rTicket">Ticket</label><select id="rTicket"><option value="">Tutti</option><option value="con">Con ticket</option><option value="senza">Senza ticket</option></select></div></div>
+  <details class="flt" id="rFlt">
+   <summary id="rFltSum">Filtri</summary>
+   <label for="rUser">Utente (nome o cognome)</label><input id="rUser" list="dlUsers" autocomplete="off" placeholder="Tutti">
+   <div class="row"><div><label for="rSede">Sede</label><select id="rSede"></select></div><div><label for="rTicket">Ticket</label><select id="rTicket"><option value="">Tutti</option><option value="con">Con ticket</option><option value="senza">Senza ticket</option></select></div></div>
+   <label for="rTicketNo">N. ticket</label><input id="rTicketNo" autocapitalize="characters" autocomplete="off">
+   <div class="row"><div><label for="rDal">Dal</label><input id="rDal" type="date"></div><div><label for="rAl">Al</label><input id="rAl" type="date"></div></div>
+   <div class="chips" id="rQuick"><button type="button" data-q="oggi">Oggi</button><button type="button" data-q="7">7 giorni</button><button type="button" data-q="mese">Questo mese</button><button type="button" data-q="anno">Quest'anno</button><button type="button" data-q="tutto">Tutto</button></div>
+   <label for="rSearch">Cerca nel testo</label><input id="rSearch" type="search" placeholder="Per cosa, come, note…">
+   <button class="btn navy" type="button" id="rReset">Azzera filtri</button>
+  </details>
   <div class="hint" id="rCount"></div>
+  <button class="btn" type="button" id="rExport">⬇ Esporta PDF / Excel</button>
   <div id="rList"></div>
  </section>
 
  <!-- UTENTI -->
  <section id="p-usr" class="hidden">
   <h2>Utenti</h2>
-  <input id="uSearch" type="search" placeholder="Cerca utente, sede, seriale…">
+  <div class="row"><div><button class="btn green" type="button" id="uNew">＋ Nuovo utente</button></div><div><button class="btn navy" type="button" id="uExport">⬇ Esporta dati</button></div></div>
+  <label for="uSearch">Cerca</label><input id="uSearch" type="search" placeholder="Nome, telefono, seriale, IMEI…">
+  <label for="uSede">Sede</label><select id="uSede"></select>
   <div class="hint" id="uCount"></div>
   <div id="uList"></div>
+ </section>
+
+ <!-- STAMPANTI -->
+ <section id="p-prn" class="hidden">
+  <h2>Stampanti</h2>
+  <div class="seg" id="prnSeg"><button type="button" data-t="a" class="on">Edificio e stampanti</button><button type="button" data-t="b">Cambi toner</button></div>
+  <div id="prnA">
+   <select id="bSel"></select>
+   <div id="bld"></div>
+   <div class="hint">Tocca una stampante per registrare il cambio toner e vedere lo storico.</div>
+  </div>
+  <div id="prnB" class="hidden">
+   <details class="flt" id="tFlt">
+    <summary id="tFltSum">Filtri</summary>
+    <div class="row"><div><label for="tEd">Edificio</label><select id="tEd"></select></div><div><label for="tCol">Colore</label><select id="tCol"></select></div></div>
+    <label for="tPr">Stampante</label><select id="tPr"></select>
+    <div class="row"><div><label for="tDal">Dal</label><input id="tDal" type="date"></div><div><label for="tAl">Al</label><input id="tAl" type="date"></div></div>
+    <button class="btn navy" type="button" id="tReset">Azzera filtri</button>
+   </details>
+   <div class="hint" id="tCount"></div>
+   <button class="btn" type="button" id="tExport">⬇ Esporta PDF / Excel</button>
+   <div id="tList"></div>
+  </div>
  </section>
 
  <!-- SCAMBIO -->
@@ -103,7 +148,7 @@ h2{font-size:19px;color:var(--navy);margin:4px 0 8px}
   <h2>Scambio con il PC</h2>
   <div class="card">
    <h3>Dal telefono al PC</h3>
-   <div class="hint">Crea un file con gli interventi, le foto e gli utenti nuovi o modificati. Mandalo al PC (posta aziendale, AirDrop…) e nel programma usa File › Importa dati dal telefono.</div>
+   <div class="hint">Crea un file con gli interventi, le foto, i cambi toner e gli utenti nuovi o modificati. Mandalo al PC (posta aziendale, AirDrop…) e nel programma usa File › Importa dati dal telefono.</div>
    <label for="exMode">Cosa invio</label>
    <select id="exMode"><option value="new">Solo le novità dall'ultimo invio</option><option value="all">Tutto (anche come copia di sicurezza)</option></select>
    <div class="hint" id="exInfo"></div>
@@ -111,7 +156,7 @@ h2{font-size:19px;color:var(--navy);margin:4px 0 8px}
   </div>
   <div class="card">
    <h3>Dal PC al telefono</h3>
-   <div class="hint">Nel programma del PC usa File › Esporta dati per il telefono, poi scegli qui quel file. Arrivano gli utenti e gli interventi del PC (con le foto, se le hai incluse). Quello che c'è già sul telefono non viene duplicato; se c'è una modifica più recente vince quella.</div>
+   <div class="hint">Nel programma del PC usa File › Esporta dati per il telefono, poi scegli qui quel file. Arrivano utenti, interventi, edificio, stampanti e cambi toner del PC (con le foto, se le hai incluse). Quello che c'è già sul telefono non viene duplicato; se c'è una modifica più recente vince quella.</div>
    <input id="imFile" type="file" accept=".json,application/json" class="hidden">
    <button class="btn navy" type="button" id="btnImport">Ricevi dal PC</button>
   </div>
@@ -131,24 +176,24 @@ h2{font-size:19px;color:var(--navy);margin:4px 0 8px}
  <button data-p="new" class="on"><b>＋</b>Nuovo</button>
  <button data-p="reg"><b>☰</b>Registro</button>
  <button data-p="usr"><b>👤</b>Utenti</button>
+ <button data-p="prn"><b>🖨</b>Stampanti</button>
  <button data-p="ex"><b>⇄</b>Scambio</button>
 </nav>
 
+<script src="export.js"></script>
 <script>
 "use strict";
 /* ================== Database (IndexedDB) ================== */
-const DB_NAME = "helpdesk-inail", DB_VER = 1;
+const DB_NAME = "helpdesk-inail", DB_VER = 2;
 let db;
 function openDb() {
   return new Promise((res, rej) => {
     const rq = indexedDB.open(DB_NAME, DB_VER);
     rq.onupgradeneeded = () => {
-      const d = rq.result;
-      d.createObjectStore("utenti", { keyPath: "key" });
-      d.createObjectStore("interventi", { keyPath: "uid" });
-      d.createObjectStore("meta", { keyPath: "k" });
+      const d = rq.result, mk = (n, k) => { if (!d.objectStoreNames.contains(n)) d.createObjectStore(n, { keyPath: k }); };
+      mk("utenti", "key"); mk("interventi", "uid"); mk("meta", "k"); mk("edifici", "uid"); mk("stampanti", "uid"); mk("toner", "uid");
     };
-    rq.onsuccess = () => { db = rq.result; res(); };
+    rq.onsuccess = () => { db = rq.result; db.onversionchange = () => db.close(); res(); };
     rq.onerror = () => rej(rq.error);
   });
 }
@@ -205,11 +250,14 @@ async function loadUsers() {
   $("dlUsers").innerHTML = users.map(u => `<option value="${esc(u.nome)}">`).join("");
   const sedi = new Set(SEDI); users.forEach(u => u.sede && sedi.add(u.sede));
   (await getAll("interventi")).forEach(i => i.sede && sedi.add(i.sede));
+  edifici.forEach(e => e.sede && sedi.add(e.sede));
   const list = [...sedi].sort((a, b) => a.localeCompare(b, "it"));
   $("dlSedi").innerHTML = list.map(s => `<option value="${esc(s)}">`).join("");
-  const cur = $("rSede").value;
-  $("rSede").innerHTML = `<option value="">Tutte</option>` + list.map(s => `<option>${esc(s)}</option>`).join("");
-  $("rSede").value = list.includes(cur) ? cur : "";
+  for (const id of ["rSede", "uSede"]) {
+    const cur = $(id).value;
+    $(id).innerHTML = `<option value="">Tutte</option>` + list.map(s => `<option>${esc(s)}</option>`).join("");
+    $(id).value = list.includes(cur) ? cur : "";
+  }
 }
 async function stats() {
   const all = await getAll("interventi"), d = new Date();
@@ -221,11 +269,12 @@ async function stats() {
 
 /* ================== Navigazione ================== */
 function go(p) {
-  ["new", "reg", "usr", "ex"].forEach(x => $("p-" + x).classList.toggle("hidden", x !== p));
+  ["new", "reg", "usr", "prn", "ex"].forEach(x => $("p-" + x).classList.toggle("hidden", x !== p));
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.p === p));
   window.scrollTo(0, 0);
   if (p === "reg") renderReg();
   if (p === "usr") renderUsers();
+  if (p === "prn") renderPrn();
   if (p === "ex") renderEx();
 }
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => go(b.dataset.p));
@@ -287,26 +336,80 @@ $("btnSave").onclick = async () => {
   clearForm(); await loadUsers(); await stats(); show($("newMsg"), msg);
 };
 
+/* ================== Appunti: copia dati utente ================== */
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); return true; }
+  catch (e) {
+    try { const ta = document.createElement("textarea"); ta.value = t; ta.style.cssText = "position:fixed;opacity:0;top:0"; document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, 99999); const ok = document.execCommand("copy"); ta.remove(); return ok; }
+    catch (e2) { return false; }
+  }
+}
+function userLines(o) {
+  return [["Utente", o.nome], ["Sede", o.sede], ["Telefono", o.tel], ["Seriale PC", o.sn], ["IMEI cellulare", o.imei]]
+    .filter(([k, v]) => v && String(v).trim()).map(([k, v]) => `${k}: ${String(v).trim()}`).join("\n");
+}
+$("btnCopy").onclick = async () => {
+  const t = userLines({ nome: normName($("fUser").value), sede: normName($("fSede").value), tel: $("fTel").value, sn: $("fSn").value, imei: $("fImei").value });
+  if (!t) return show($("newMsg"), "Non c'è ancora nessun dato da copiare.", true);
+  const ok = await copyText(t);
+  show($("newMsg"), ok ? "Dati dell'utente copiati: ora puoi incollarli nel ticket." : "Non sono riuscito a copiare: tieni premuto sul testo per copiarlo a mano.", !ok);
+};
+
 /* ================== Registro ================== */
-let regCache = [];
+let regCache = [], regFiltered = [];
+const fmtDate = v => { const m = /^(\d{4})-(\d\d)-(\d\d)/.exec(v || ""); return m ? `${m[3]}/${m[2]}/${m[1]}` : (v || ""); };
+const isoDay = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const words = v => (v || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+function regFilter() {
+  return { user: words($("rUser").value), sede: $("rSede").value, tk: $("rTicket").value, tno: $("rTicketNo").value.trim().toLowerCase(), dal: $("rDal").value, al: $("rAl").value, q: words($("rSearch").value) };
+}
+function regFilterText(f) {
+  const p = [];
+  if (f.user.length) p.push("Utente: " + f.user.join(" "));
+  if (f.sede) p.push("Sede: " + f.sede);
+  if (f.tk) p.push(f.tk === "con" ? "Con ticket" : "Senza ticket");
+  if (f.tno) p.push("N. ticket: " + f.tno);
+  if (f.dal || f.al) p.push(`Periodo: ${f.dal ? fmtDate(f.dal) : "..."} - ${f.al ? fmtDate(f.al) : "..."}`);
+  if (f.q.length) p.push("Testo: " + f.q.join(" "));
+  return p.join("; ") || "nessuno";
+}
+function quick(kind) {
+  const d = new Date(); let a = "", b = "";
+  if (kind === "oggi") a = b = isoDay(d);
+  else if (kind === "7") { const s = new Date(d); s.setDate(s.getDate() - 6); a = isoDay(s); b = isoDay(d); }
+  else if (kind === "mese") { a = isoDay(new Date(d.getFullYear(), d.getMonth(), 1)); b = isoDay(d); }
+  else if (kind === "anno") { a = `${d.getFullYear()}-01-01`; b = isoDay(d); }
+  $("rDal").value = a; $("rAl").value = b; renderReg();
+}
 async function renderReg() {
   regCache = (await getAll("interventi")).sort((a, b) => (b.data_ora + b.modificato).localeCompare(a.data_ora + a.modificato));
-  const q = $("rSearch").value.trim().toLowerCase().split(/\s+/).filter(Boolean), sede = $("rSede").value, tk = $("rTicket").value;
-  const rows = regCache.filter(i => {
-    if (sede && i.sede !== sede) return false;
-    if (tk === "con" && !i.ticket) return false;
-    if (tk === "senza" && i.ticket) return false;
+  const f = regFilter();
+  regFiltered = regCache.filter(i => {
+    const d = i.data_ora.slice(0, 10);
+    if (f.dal && d < f.dal) return false;
+    if (f.al && d > f.al) return false;
+    if (f.sede && i.sede !== f.sede) return false;
+    if (f.tk === "con" && !i.ticket) return false;
+    if (f.tk === "senza" && i.ticket) return false;
+    if (f.tno && !(i.ticket || "").toLowerCase().includes(f.tno)) return false;
+    const ul = (i.utente || "").toLowerCase();
+    if (!f.user.every(t => ul.includes(t))) return false;
     const hay = [i.utente, i.sede, i.ticket, i.richiesta, i.soluzione, i.note].join(" ").toLowerCase();
-    return q.every(t => hay.includes(t));
+    return f.q.every(t => hay.includes(t));
   });
-  $("rCount").textContent = `Interventi trovati: ${rows.length} su ${regCache.length}`;
-  $("rList").innerHTML = rows.map(i => `<div class="card" data-u="${esc(i.uid)}"><h3>${esc(i.utente)}</h3>
+  const nu = new Set(regFiltered.map(i => keyOf(i.utente))).size;
+  $("rFltSum").textContent = regFilterText(f) === "nessuno" ? "Filtri (tocca per aprire)" : "Filtri attivi: " + regFilterText(f);
+  $("rCount").textContent = `Interventi trovati: ${regFiltered.length} su ${regCache.length} · Utenti diversi: ${nu}`;
+  $("rList").innerHTML = regFiltered.map(i => `<div class="card" data-u="${esc(i.uid)}"><h3>${esc(i.utente)}</h3>
     <div class="meta">${fmtDt(i.data_ora)}${i.sede ? " · " + esc(i.sede) : ""}</div>
     <div style="margin:4px 0">${i.ticket ? `<span class="tag">Ticket ${esc(i.ticket)}</span>` : ""}${i.foto && i.foto.length ? `<span class="tag">📷 ${i.foto.length}</span>` : ""}</div>
     <div>${esc(i.richiesta).slice(0, 140)}${i.richiesta.length > 140 ? "…" : ""}</div></div>`).join("") || `<div class="hint">Nessun intervento.</div>`;
   $("rList").querySelectorAll(".card").forEach(c => c.onclick = () => openDetail(c.dataset.u));
 }
-["rSearch", "rSede", "rTicket"].forEach(id => $(id).addEventListener("input", renderReg));
+["rUser", "rSede", "rTicket", "rTicketNo", "rDal", "rAl", "rSearch"].forEach(id => { $(id).addEventListener("input", renderReg); $(id).addEventListener("change", renderReg); });
+$("rQuick").querySelectorAll("button").forEach(b => b.onclick = () => quick(b.dataset.q));
+$("rReset").onclick = () => { ["rUser", "rSede", "rTicket", "rTicketNo", "rDal", "rAl", "rSearch"].forEach(id => $(id).value = ""); renderReg(); };
+$("rExport").onclick = () => openExport("int");
 
 async function openDetail(uid) {
   const i = await getKey("interventi", uid); if (!i) return;
@@ -318,12 +421,14 @@ async function openDetail(uid) {
     ${i.soluzione ? `<label>Come ho risolto</label><div style="white-space:pre-wrap">${esc(i.soluzione)}</div>` : ""}
     ${i.note ? `<label>Note</label><div style="white-space:pre-wrap">${esc(i.note)}</div>` : ""}
     ${(i.foto || []).map(f => `<img src="${f.data}" alt="">`).join("")}
+    <button class="btn" id="dCopy" type="button">📋 Copia dati utente</button><div id="dMsg"></div>
     <button class="btn navy" id="dEdit" type="button">Modifica</button>
     <button class="btn red" id="dDel" type="button">Elimina dal telefono</button>
     <button class="btn" id="dClose" type="button">Chiudi</button>
     <div class="hint">L'eliminazione vale solo qui: se l'intervento è già stato importato nel PC, nel PC resta.</div></div>`;
   m.classList.remove("hidden");
   $("dClose").onclick = () => m.classList.add("hidden");
+  $("dCopy").onclick = async () => { const ok = await copyText(userLines({ nome: i.utente, sede: i.sede, tel: u.telefono, sn: u.seriale_pc, imei: u.imei })); show($("dMsg"), ok ? "Dati dell'utente copiati: ora puoi incollarli nel ticket." : "Copia non riuscita.", !ok); };
   $("dDel").onclick = async () => { if (confirm("Eliminare questo intervento dal telefono?")) { await del("interventi", uid); m.classList.add("hidden"); await stats(); renderReg(); } };
   $("dEdit").onclick = () => {
     m.classList.add("hidden"); editUid = i.uid; autoFor = keyOf(i.utente); photos = (i.foto || []).map(f => ({ ...f }));
@@ -336,36 +441,54 @@ async function openDetail(uid) {
 }
 
 /* ================== Utenti ================== */
+let usrFiltered = [];
 async function renderUsers() {
-  const all = await getAll("interventi"), count = {};
-  all.forEach(i => { const k = keyOf(i.utente); count[k] = (count[k] || 0) + 1; });
-  const q = $("uSearch").value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const rows = users.filter(u => { const h = [u.nome, u.sede, u.telefono, u.seriale_pc, u.imei].join(" ").toLowerCase(); return q.every(t => h.includes(t)); });
-  $("uCount").textContent = `Utenti: ${rows.length} su ${users.length}`;
-  $("uList").innerHTML = rows.map(u => `<div class="card" data-k="${esc(u.key)}"><h3>${esc(u.nome)}</h3>
-    <div class="meta">${esc(u.sede || "sede non indicata")} · ${count[u.key] || 0} interventi</div>
+  const all = await getAll("interventi"), count = {}, last = {};
+  all.forEach(i => { const k = keyOf(i.utente); count[k] = (count[k] || 0) + 1; if (!last[k] || i.data_ora > last[k]) last[k] = i.data_ora; });
+  const q = words($("uSearch").value), sede = $("uSede").value;
+  usrFiltered = users.filter(u => { const h = [u.nome, u.sede, u.telefono, u.seriale_pc, u.imei].join(" ").toLowerCase(); return (!sede || u.sede === sede) && q.every(t => h.includes(t)); })
+    .map(u => ({ ...u, n: count[u.key] || 0, ultimo: last[u.key] || "" }));
+  $("uCount").textContent = `Utenti: ${usrFiltered.length} su ${users.length}`;
+  $("uList").innerHTML = usrFiltered.map(u => `<div class="card" data-k="${esc(u.key)}"><h3>${esc(u.nome)}</h3>
+    <div class="meta">${esc(u.sede || "sede non indicata")} · ${u.n} interventi</div>
     <div class="meta">${u.telefono ? "Tel " + esc(u.telefono) + " · " : ""}${u.seriale_pc ? "SN " + esc(u.seriale_pc) + " · " : ""}${u.imei ? "IMEI " + esc(u.imei) : ""}</div></div>`).join("") || `<div class="hint">Nessun utente. Si aggiungono da soli quando salvi un intervento.</div>`;
   $("uList").querySelectorAll(".card").forEach(c => c.onclick = () => editUser(c.dataset.k));
 }
 $("uSearch").addEventListener("input", renderUsers);
+$("uSede").addEventListener("change", renderUsers);
+$("uNew").onclick = () => editUser(null);
+$("uExport").onclick = () => openExport("usr");
 function editUser(k) {
-  const u = users.find(x => x.key === k); if (!u) return;
+  const isNew = !k;
+  const u = isNew ? { key: "", nome: "", sede: "", telefono: "", seriale_pc: "", imei: "" } : users.find(x => x.key === k);
+  if (!u) return;
   const m = $("modal");
-  m.innerHTML = `<div class="card"><h3>Scheda utente</h3>
-    <label>Nome e cognome</label><input id="eNome" value="${esc(u.nome)}">
+  m.innerHTML = `<div class="card"><h3>${isNew ? "Nuovo utente" : "Scheda utente"}</h3>
+    <label>Nome e cognome</label><input id="eNome" autocapitalize="words" value="${esc(u.nome)}">
     <label>Sede</label><input id="eSede" list="dlSedi" value="${esc(u.sede)}">
     <label>Telefono</label><input id="eTel" inputmode="tel" value="${esc(u.telefono)}">
     <label>Seriale PC</label><input id="eSn" value="${esc(u.seriale_pc)}">
     <label>IMEI cellulare</label><input id="eImei" inputmode="numeric" value="${esc(u.imei)}">
-    <button class="btn green" id="eSave" type="button">Salva</button><button class="btn" id="eClose" type="button">Chiudi</button><div id="eMsg"></div></div>`;
+    <button class="btn green" id="eSave" type="button">Salva</button>
+    ${isNew ? "" : `<button class="btn" id="eCopy" type="button">📋 Copia dati utente</button><button class="btn navy" id="eSee" type="button">Vedi i suoi interventi</button><button class="btn red" id="eDel" type="button">Elimina utente</button>`}
+    <button class="btn" id="eClose" type="button">Chiudi</button><div id="eMsg"></div></div>`;
   m.classList.remove("hidden");
   $("eClose").onclick = () => m.classList.add("hidden");
+  if (!isNew) {
+    $("eCopy").onclick = async () => { const ok = await copyText(userLines({ nome: u.nome, sede: $("eSede").value, tel: $("eTel").value, sn: $("eSn").value, imei: $("eImei").value })); show($("eMsg"), ok ? "Dati dell'utente copiati." : "Copia non riuscita.", !ok); };
+    $("eSee").onclick = () => { m.classList.add("hidden"); $("rUser").value = u.nome; ["rSede", "rTicket", "rTicketNo", "rDal", "rAl", "rSearch"].forEach(id => $(id).value = ""); go("reg"); };
+    $("eDel").onclick = async () => {
+      const n = (await getAll("interventi")).filter(i => keyOf(i.utente) === u.key).length;
+      if (n) return show($("eMsg"), `Questo utente ha ${n} interventi: non si può eliminare.`, true);
+      if (confirm("Eliminare questo utente dal telefono?")) { await del("utenti", u.key); m.classList.add("hidden"); await loadUsers(); renderUsers(); }
+    };
+  }
   $("eSave").onclick = async () => {
     const nome = normName($("eNome").value); if (!nome) return show($("eMsg"), "Scrivi il nome.", true);
     const nk = keyOf(nome);
     if (nk !== u.key && users.some(x => x.key === nk)) return show($("eMsg"), "Esiste già un utente con questo nome.", true);
     const nu = { key: nk, nome, sede: normName($("eSede").value), telefono: $("eTel").value.trim(), seriale_pc: $("eSn").value.trim(), imei: $("eImei").value.trim(), modificato: nowIso() };
-    if (nk !== u.key) {
+    if (!isNew && nk !== u.key) {
       await del("utenti", u.key);
       for (const i of await getAll("interventi")) if (keyOf(i.utente) === u.key) { i.utente = nome; i.modificato = nowIso(); await put("interventi", i); }
     }
@@ -373,36 +496,214 @@ function editUser(k) {
   };
 }
 
+/* ================== Stampanti e cambi toner ================== */
+let edifici = [], stampanti = [], tonerAll = [], bSel = null, prnTab = "a", tonFiltered = [];
+const COLORI = [["Nero", "#1c1c1c", "#1c1c1c"], ["Azzurro", "#1fa3dc", "#0d7fb0"], ["Magenta", "#d6247f", "#c0176c"], ["Giallo", "#f2c500", "#a67c00"]];
+const colHex = n => (COLORI.find(c => c[0] === n) || [])[1] || "#888";
+const colText = n => (COLORI.find(c => c[0] === n) || [])[2] || "#444";
+const floorLabel = n => n === 0 ? "Piano terra" : n === -1 ? "Seminterrato" : n < -1 ? `Interrato ${-n}` : `${n}° piano`;
+const printerName = s => s.nome || s.modello || "Stampante";
+const printerImg = s => /3351|3350|3320/i.test(s.modello || "") ? "stampante-c3351i.png" : "stampante-c360i.png";
+async function loadPrn() {
+  edifici = (await getAll("edifici")).sort((a, b) => a.nome.localeCompare(b.nome, "it"));
+  stampanti = await getAll("stampanti"); tonerAll = await getAll("toner");
+}
+function prnLabel(s) { const e = edifici.find(x => x.uid === s.edificio_uid); return `${e ? e.nome : "?"} · ${floorLabel(s.piano)} · ${printerName(s)}`; }
+function renderPrn() {
+  $("prnA").classList.toggle("hidden", prnTab !== "a"); $("prnB").classList.toggle("hidden", prnTab !== "b");
+  document.querySelectorAll("#prnSeg button").forEach(b => b.classList.toggle("on", b.dataset.t === prnTab));
+  prnTab === "a" ? renderBld() : renderTonLog();
+}
+document.querySelectorAll("#prnSeg button").forEach(b => b.onclick = () => { prnTab = b.dataset.t; renderPrn(); });
+$("bSel").addEventListener("change", e => { bSel = e.target.value; renderBld(); });
+function renderBld() {
+  const sel = $("bSel");
+  if (!edifici.length) { sel.style.display = "none"; $("bld").innerHTML = `<div class="card"><div class="hint">Non ci sono ancora stampanti sul telefono.<br>Nel programma del PC usa File › Esporta dati per il telefono, poi qui in Scambio › Ricevi dal PC.</div></div>`; return; }
+  if (!edifici.some(e => e.uid === bSel)) bSel = edifici[0].uid;
+  sel.innerHTML = edifici.map(e => `<option value="${esc(e.uid)}">${esc(e.nome)}${e.sede ? " (" + esc(e.sede) + ")" : ""}</option>`).join("");
+  sel.value = bSel; sel.style.display = edifici.length > 1 ? "" : "none";
+  const b = edifici.find(e => e.uid === bSel), ps = stampanti.filter(s => s.edificio_uid === b.uid);
+  const floors = new Set(); for (let f = Math.max(b.piano_min, b.piano_max); f >= Math.min(b.piano_min, b.piano_max); f--) floors.add(f);
+  ps.forEach(s => floors.add(s.piano));
+  const list = [...floors].sort((a, c) => c - a);
+  $("bld").innerHTML = `<div class="bld"><div class="roof">${esc(b.nome)}${b.sede ? " · " + esc(b.sede) : ""}</div>` + list.map(f => {
+    const here = ps.filter(s => s.piano === f);
+    return `<div class="floor"><div class="fl">${floorLabel(f)}</div><div class="ps">${here.map(s => `<div class="pr" data-u="${esc(s.uid)}"><img src="${printerImg(s)}" alt=""><b>${esc(printerName(s))}</b><span>${esc(s.modello || "")}</span></div>`).join("") || `<span class="meta" style="align-self:center">nessuna stampante</span>`}</div></div>`;
+  }).join("") + `</div>`;
+  $("bld").querySelectorAll(".pr").forEach(c => c.onclick = () => openPrinter(c.dataset.u));
+}
+function lastToner(suid) { const m = {}; tonerAll.filter(t => t.stampante_uid === suid).forEach(t => { if (!m[t.colore] || t.data_ora > m[t.colore]) m[t.colore] = t.data_ora; }); return m; }
+function openPrinter(uid, msg) {
+  const s = stampanti.find(x => x.uid === uid); if (!s) return;
+  const e = edifici.find(x => x.uid === s.edificio_uid) || {}, m = $("modal"), picked = new Set(), last = lastToner(uid);
+  const hist = tonerAll.filter(t => t.stampante_uid === uid).sort((a, b) => (b.data_ora + b.modificato).localeCompare(a.data_ora + a.modificato));
+  m.innerHTML = `<div class="card full"><h3>${esc(printerName(s))}</h3>
+    <div class="meta">${esc(e.nome || "")} · ${floorLabel(s.piano)}${s.modello ? " · " + esc(s.modello) : ""}</div>
+    ${s.ip ? `<div class="meta">IP: ${esc(s.ip)}</div>` : ""}${s.note ? `<div class="meta">Note: ${esc(s.note)}</div>` : ""}
+    <label>Ultimo cambio</label>
+    <div>${COLORI.map(c => `<div class="meta"><span class="sw" style="background:${c[1]}"></span>${c[0]}: ${last[c[0]] ? fmtDt(last[c[0]]) : "mai registrato"}</div>`).join("")}</div>
+    <label>Registra cambio toner</label>
+    <div class="chips" id="pCols">${COLORI.map(c => `<button type="button" data-c="${c[0]}"><span class="sw" style="background:${c[1]}"></span>${c[0]}</button>`).join("")}</div>
+    <label for="pDt">Data e ora</label><input id="pDt" type="datetime-local" value="${localInput()}">
+    <label for="pNote">Note</label><input id="pNote">
+    <button class="btn green" id="pSave" type="button">Registra cambio toner</button><div id="pMsg"></div>
+    <label>Storico</label>
+    <div id="pHist">${hist.map(t => `<div class="card"><div><span class="sw" style="background:${colHex(t.colore)}"></span><b>${esc(t.colore)}</b> · ${fmtDt(t.data_ora)}</div>${t.note ? `<div class="meta">${esc(t.note)}</div>` : ""}<button class="btn red sm" data-d="${esc(t.uid)}" type="button" style="margin-top:6px">Elimina</button></div>`).join("") || `<div class="hint">Nessun cambio registrato.</div>`}</div>
+    <button class="btn" id="pClose" type="button">Chiudi</button></div>`;
+  m.classList.remove("hidden");
+  if (msg) show($("pMsg"), msg);
+  $("pClose").onclick = () => m.classList.add("hidden");
+  $("pCols").querySelectorAll("button").forEach(b => b.onclick = () => { const c = b.dataset.c; picked.has(c) ? picked.delete(c) : picked.add(c); b.classList.toggle("on", picked.has(c)); });
+  $("pSave").onclick = async () => {
+    if (!picked.size) return show($("pMsg"), "Tocca almeno un colore di toner.", true);
+    if (!$("pDt").value) return show($("pMsg"), "Controlla data e ora.", true);
+    const dt = toDataOra($("pDt").value), note = $("pNote").value.trim(), chosen = COLORI.map(c => c[0]).filter(c => picked.has(c));
+    for (const c of chosen) await put("toner", { uid: uuid(), stampante_uid: uid, colore: c, data_ora: dt, note, modificato: nowIso() });
+    await loadPrn(); renderPrn(); openPrinter(uid, `Registrato: ${chosen.join(", ")} (${fmtDt(dt)}).`);
+  };
+  $("pHist").querySelectorAll("[data-d]").forEach(b => b.onclick = async () => {
+    if (!confirm("Eliminare questo cambio toner dal telefono?")) return;
+    await del("toner", b.dataset.d); await loadPrn(); renderPrn(); openPrinter(uid, "Cambio toner eliminato dal telefono.");
+  });
+}
+function tonRows() {
+  const ed = $("tEd").value, pr = $("tPr").value, col = $("tCol").value, dal = $("tDal").value, al = $("tAl").value;
+  return tonerAll.map(t => { const p = stampanti.find(s => s.uid === t.stampante_uid) || {}; const e = edifici.find(x => x.uid === p.edificio_uid) || {}; return { t, p, e }; })
+    .filter(r => (!ed || r.e.uid === ed) && (!pr || r.p.uid === pr) && (!col || r.t.colore === col) && (!dal || r.t.data_ora.slice(0, 10) >= dal) && (!al || r.t.data_ora.slice(0, 10) <= al))
+    .sort((a, b) => (b.t.data_ora + b.t.modificato).localeCompare(a.t.data_ora + a.t.modificato));
+}
+function renderTonLog() {
+  const edSel = $("tEd"), curEd = edSel.value;
+  edSel.innerHTML = `<option value="">(Tutti)</option>` + edifici.map(e => `<option value="${esc(e.uid)}">${esc(e.nome)}</option>`).join("");
+  edSel.value = edifici.some(e => e.uid === curEd) ? curEd : "";
+  const prSel = $("tPr"), curPr = prSel.value;
+  const pl = stampanti.filter(s => !edSel.value || s.edificio_uid === edSel.value).sort((a, b) => prnLabel(a).localeCompare(prnLabel(b), "it"));
+  prSel.innerHTML = `<option value="">(Tutte)</option>` + pl.map(s => `<option value="${esc(s.uid)}">${esc(prnLabel(s))}</option>`).join("");
+  prSel.value = pl.some(s => s.uid === curPr) ? curPr : "";
+  const colSel = $("tCol"); if (!colSel.options.length) colSel.innerHTML = `<option value="">(Tutti)</option>` + COLORI.map(c => `<option>${c[0]}</option>`).join("");
+  tonFiltered = tonRows();
+  const tAct = ["tEd", "tPr", "tCol", "tDal", "tAl"].some(id => $(id).value);
+  $("tFltSum").textContent = tAct ? "Filtri attivi" : "Filtri (tocca per aprire)";
+  const cnt = {}; tonFiltered.forEach(r => cnt[r.t.colore] = (cnt[r.t.colore] || 0) + 1);
+  $("tCount").textContent = `Cambi toner trovati: ${tonFiltered.length} su ${tonerAll.length}` + (tonFiltered.length ? " · " + COLORI.filter(c => cnt[c[0]]).map(c => `${c[0]} ${cnt[c[0]]}`).join(" · ") : "");
+  $("tList").innerHTML = tonFiltered.map(r => `<div class="card" data-u="${esc(r.p.uid || "")}"><h3><span class="sw" style="background:${colHex(r.t.colore)}"></span>${esc(r.t.colore)} · ${fmtDt(r.t.data_ora)}</h3><div class="meta">${esc(r.p.uid ? prnLabel(r.p) : "Stampante non più presente")}${r.t.note ? " · " + esc(r.t.note) : ""}</div></div>`).join("") || `<div class="hint">Nessun cambio toner.</div>`;
+  $("tList").querySelectorAll(".card").forEach(c => c.onclick = () => c.dataset.u && openPrinter(c.dataset.u));
+}
+["tEd", "tPr", "tCol", "tDal", "tAl"].forEach(id => { $(id).addEventListener("change", renderTonLog); $(id).addEventListener("input", renderTonLog); });
+$("tReset").onclick = () => { ["tEd", "tPr", "tCol", "tDal", "tAl"].forEach(id => $(id).value = ""); renderTonLog(); };
+$("tExport").onclick = () => openExport("ton");
+
+/* ================== Esporta PDF / Excel ================== */
+const USER_COLS = [["nome", "Utente", 55, 26, true], ["sede", "Sede", 30, 16, true], ["telefono", "Telefono", 35, 18, true], ["seriale_pc", "Seriale PC", 45, 22, true], ["imei", "IMEI cellulare", 45, 20, true], ["n", "N. interventi", 22, 14, false], ["ultimo", "Ultimo intervento", 32, 18, false]];
+const tally = arr => { const m = new Map(); arr.forEach(x => m.set(x, (m.get(x) || 0) + 1)); return [...m].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(b[0], "it")); };
+function dsInt() {
+  const f = regFilter(), items = regFiltered;
+  return {
+    file: "interventi", title: "Registro interventi", sheet: "Interventi", filtri: regFilterText(f),
+    headers: ["Data e ora", "Utente", "Sede", "N. ticket", "Per cosa mi hanno chiamato", "Come ho risolto", "Note"],
+    rows: items.map(i => [fmtDt(i.data_ora), i.utente, i.sede || "", i.ticket || "", i.richiesta || "", i.soluzione || "", i.note || ""]),
+    widths: [26, 32, 20, 22, 80, 70, 40], xw: [17, 24, 14, 14, 50, 50, 35], totalLabel: "Totale interventi", total: items.length,
+    summary: [{ title: "Interventi per utente", headers: ["Utente", "Interventi"], rows: tally(items.map(i => i.utente)).map(([k, v]) => [k, v]) },
+              { title: "Interventi per sede", headers: ["Sede", "Interventi"], rows: tally(items.map(i => i.sede || "(non indicata)")).map(([k, v]) => [k, v]) }]
+  };
+}
+function dsTon() {
+  const rows = tonFiltered, per = new Map();
+  rows.forEach(r => { const k = r.p.uid ? prnLabel(r.p) : "(stampante non più presente)"; if (!per.has(k)) per.set(k, {}); per.get(k)[r.t.colore] = (per.get(k)[r.t.colore] || 0) + 1; });
+  const ps = [];
+  if ($("tEd").value) ps.push("Edificio: " + ($("tEd").selectedOptions[0] || {}).textContent);
+  if ($("tPr").value) ps.push("Stampante: " + ($("tPr").selectedOptions[0] || {}).textContent);
+  if ($("tCol").value) ps.push("Colore: " + $("tCol").value);
+  if ($("tDal").value || $("tAl").value) ps.push(`Periodo: ${$("tDal").value ? fmtDate($("tDal").value) : "..."} - ${$("tAl").value ? fmtDate($("tAl").value) : "..."}`);
+  return {
+    file: "cambi_toner", title: "Cambi toner", sheet: "Cambi toner", filtri: ps.join("; ") || "nessuno",
+    headers: ["Data e ora", "Sede", "Edificio", "Piano", "Stampante", "Modello", "Colore", "Note"],
+    rows: rows.map(r => [fmtDt(r.t.data_ora), r.e.sede || "", r.e.nome || "", r.p.uid ? floorLabel(r.p.piano) : "", r.p.uid ? printerName(r.p) : "", r.p.modello || "", { v: r.t.colore, c: colText(r.t.colore) }, r.t.note || ""]),
+    widths: [26, 18, 40, 20, 34, 24, 18, 40], xw: [17, 14, 34, 14, 28, 16, 12, 40], totalLabel: "Totale cambi toner", total: rows.length,
+    summary: [{ title: "Cambi toner per stampante", headers: ["Stampante", ...COLORI.map(c => c[0]), "Totale"], weights: [3, 1, 1, 1, 1, 1],
+      rows: [...per].sort((a, b) => a[0].localeCompare(b[0], "it")).map(([k, v]) => [k, ...COLORI.map(c => v[c[0]] || 0), COLORI.reduce((s, c) => s + (v[c[0]] || 0), 0)]) }]
+  };
+}
+function dsUsr(keys) {
+  const cols = USER_COLS.filter(c => keys.includes(c[0])), items = usrFiltered;
+  const cell = (u, k) => k === "ultimo" ? (u.ultimo ? fmtDt(u.ultimo) : "") : k === "n" ? u.n : (u[k] || "");
+  const ps = []; if ($("uSearch").value.trim()) ps.push("Cerca: " + $("uSearch").value.trim()); if ($("uSede").value) ps.push("Sede: " + $("uSede").value);
+  return { file: "utenti", title: "Dati utenti", sheet: "Utenti", filtri: ps.join("; ") || "nessuno", headers: cols.map(c => c[1]), rows: items.map(u => cols.map(c => cell(u, c[0]))),
+    widths: cols.map(c => c[2]), xw: cols.map(c => c[3]), totalLabel: "Utenti esportati", total: items.length, summary: [] };
+}
+function summarySheet(ds) {
+  const rows = [[{ v: ds.title, s: 3 }], ["Generato il " + fmtDt(localInput().replace("T", " "))], ["Filtri: " + ds.filtri], [{ v: ds.totalLabel, s: 4 }, { v: ds.total, s: 4 }], []];
+  ds.summary.forEach(t => { rows.push(t.headers.map(h => ({ v: h, s: 1 }))); t.rows.forEach(r => rows.push(r)); rows.push([]); });
+  return { name: "Riepilogo", rows, widths: [44, 14, 14, 14, 14, 14] };
+}
+async function deliver(file, msgEl) {
+  try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: file.name }); return true; } }
+  catch (e) { if (e && e.name === "AbortError") { show(msgEl, "Invio annullato.", true); return false; } }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = file.name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000); return true;
+}
+function openExport(kind) {
+  const count = kind === "int" ? regFiltered.length : kind === "ton" ? tonFiltered.length : usrFiltered.length;
+  const name = kind === "int" ? "interventi" : kind === "ton" ? "cambi toner" : "dati utenti";
+  const m = $("modal"); let fmt = "pdf";
+  m.innerHTML = `<div class="card"><h3>Esporta ${name}</h3><div class="meta">${count} righe, con i filtri attuali.</div>
+    ${kind === "usr" ? `<label>Quali dati vuoi nel file?</label>` + USER_COLS.map(c => `<label class="chk"><input type="checkbox" data-k="${c[0]}" ${c[4] ? "checked" : ""}> ${esc(c[1])}</label>`).join("") : ""}
+    <label>Formato</label><div class="seg" id="xFmt"><button type="button" data-f="pdf" class="on">PDF</button><button type="button" data-f="xlsx">Excel</button></div>
+    <button class="btn green" id="xGo" type="button">Crea file</button><button class="btn" id="xClose" type="button">Chiudi</button><div id="xMsg"></div></div>`;
+  m.classList.remove("hidden");
+  $("xClose").onclick = () => m.classList.add("hidden");
+  $("xFmt").querySelectorAll("button").forEach(b => b.onclick = () => { fmt = b.dataset.f; $("xFmt").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); });
+  $("xGo").onclick = async () => {
+    const keys = [...m.querySelectorAll("input[data-k]:checked")].map(c => c.dataset.k);
+    if (kind === "usr" && !keys.length) return show($("xMsg"), "Spunta almeno un dato.", true);
+    const ds = kind === "int" ? dsInt() : kind === "ton" ? dsTon() : dsUsr(keys);
+    if (!ds.rows.length) return show($("xMsg"), "Non c'è nessuna riga da esportare con questi filtri.", true);
+    show($("xMsg"), "Creo il file…");
+    try {
+      const stamp = localInput().replace(/[-:T]/g, "").slice(0, 12);
+      let bytes, mime;
+      if (fmt === "pdf") { bytes = HDExport.makePdf({ title: ds.title, info: ["Filtri: " + ds.filtri], headers: ds.headers, rows: ds.rows, widths: ds.widths, logo: await HDExport.loadLogo(), total: ds.total, totalLabel: ds.totalLabel, summary: ds.summary }); mime = "application/pdf"; }
+      else { bytes = HDExport.makeXlsx([{ name: ds.sheet, headers: ds.headers, rows: ds.rows.map(r => r.map(c => (c && typeof c === "object") ? c.v : c)), widths: ds.xw }, summarySheet(ds)]); mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"; }
+      const file = new File([bytes], `${ds.file}_${stamp}.${fmt}`, { type: mime });
+      if (await deliver(file, $("xMsg"))) show($("xMsg"), `File creato: ${file.name}`);
+    } catch (err) { show($("xMsg"), "Non sono riuscito a creare il file: " + err.message, true); }
+  };
+}
+
 /* ================== Scambio ================== */
 /* da inviare = modificato dopo l'ultimo invio e non ancora toccato dopo l'arrivo dal PC */
 const isNew = (i, last) => (!last || i.modificato > last) && i.modificato !== i.daPC;
+const isNewT = (t, last) => (!last || t.modificato > last) && !t.daPC;
 async function renderEx() {
-  const last = await getMeta("lastSent"), all = await getAll("interventi");
-  const n = all.filter(i => isNew(i, last)).length;
-  $("exInfo").textContent = last ? `Ultimo invio: ${fmtDt(last.replace("T", " ").slice(0, 16))} (ora locale può differire di 1-2 ore). Interventi da inviare: ${n}.` : `Non hai ancora creato nessun file. Interventi da inviare: ${n}.`;
+  const last = await getMeta("lastSent"), all = await getAll("interventi"), ton = await getAll("toner");
+  const n = all.filter(i => isNew(i, last)).length, nt = ton.filter(t => isNewT(t, last)).length;
+  $("exInfo").textContent = (last ? `Ultimo invio: ${fmtDt(last.replace("T", " ").slice(0, 16))} (ora locale può differire di 1-2 ore). ` : `Non hai ancora creato nessun file. `) + `Interventi da inviare: ${n}. Cambi toner da inviare: ${nt}.`;
   if (navigator.storage && navigator.storage.estimate) {
     const e = await navigator.storage.estimate(), p = navigator.storage.persisted ? await navigator.storage.persisted() : false;
     $("storInfo").textContent = `Spazio usato dall'app: ${((e.usage || 0) / 1048576).toFixed(1)} MB. Archivio protetto: ${p ? "sì" : "non garantito"}.`;
   }
 }
 async function buildExport(mode) {
-  const last = await getMeta("lastSent"), all = await getAll("interventi");
+  const last = await getMeta("lastSent"), all = await getAll("interventi"), ton = await getAll("toner");
   const items = mode === "all" ? all : all.filter(i => isNew(i, last));
+  const tons = mode === "all" ? ton : ton.filter(t => isNewT(t, last));
   const us = mode === "all" ? users : users.filter(u => !last || (u.modificato || "") > last);
   const needed = new Set(items.map(i => keyOf(i.utente)));
   const usersOut = [...us, ...users.filter(u => needed.has(u.key) && !us.includes(u))];
   return {
-    tipo: "helpdesk-telefono", versione: 1, creato: nowIso(),
+    tipo: "helpdesk-telefono", versione: 2, creato: nowIso(),
     utenti: usersOut.map(u => ({ nome: u.nome, sede: u.sede || "", telefono: u.telefono || "", seriale_pc: u.seriale_pc || "", imei: u.imei || "", modificato: u.modificato || nowIso() })),
-    interventi: items.map(i => ({ uid: i.uid, data_ora: i.data_ora, utente: i.utente, sede: i.sede || "", richiesta: i.richiesta, soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", modificato: i.modificato, foto: (i.foto || []).map(f => ({ nome: f.nome, data: f.data })) }))
+    interventi: items.map(i => ({ uid: i.uid, data_ora: i.data_ora, utente: i.utente, sede: i.sede || "", richiesta: i.richiesta, soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", modificato: i.modificato, foto: (i.foto || []).map(f => ({ nome: f.nome, data: f.data })) })),
+    toner: tons.map(t => ({ uid: t.uid, stampante_uid: t.stampante_uid, colore: t.colore, data_ora: t.data_ora, note: t.note || "", modificato: t.modificato })),
+    edifici: mode === "all" ? edifici : [], stampanti: mode === "all" ? stampanti : []
   };
 }
 $("btnExport").onclick = async () => {
   const mode = $("exMode").value, data = await buildExport(mode);
-  if (!data.interventi.length && !data.utenti.length) return show($("exMsg"), "Non c'è niente di nuovo da inviare.", true);
+  if (!data.interventi.length && !data.utenti.length && !data.toner.length) return show($("exMsg"), "Non c'è niente di nuovo da inviare.", true);
   const name = `dati_telefono_${localInput().replace(/[-:T]/g, "").slice(0, 12)}.json`;
   const file = new File([JSON.stringify(data)], name, { type: "application/json" });
-  const done = async () => { if (mode === "new") await setMeta("lastSent", data.creato); show($("exMsg"), `File creato: ${data.interventi.length} interventi, ${data.utenti.length} utenti.\nNel PC: File › Importa dati dal telefono.`); renderEx(); };
+  const done = async () => { if (mode === "new") await setMeta("lastSent", data.creato); show($("exMsg"), `File creato: ${data.interventi.length} interventi, ${data.toner.length} cambi toner, ${data.utenti.length} utenti.\nNel PC: File › Importa dati dal telefono.`); renderEx(); };
   try {
     if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: "Dati Help Desk" }); return done(); }
   } catch (e) { if (e && e.name === "AbortError") return show($("exMsg"), "Invio annullato: niente è stato segnato come inviato.", true); }
@@ -410,11 +711,13 @@ $("btnExport").onclick = async () => {
   setTimeout(() => URL.revokeObjectURL(a.href), 4000); done();
 };
 
+const toInt = v => { const n = parseInt(v, 10); return Number.isNaN(n) ? 0 : n; };
 async function mergeFile(file, restore) {
   const data = JSON.parse(await file.text());
   if (!data || !["helpdesk-pc", "helpdesk-telefono"].includes(data.tipo)) throw new Error("Questo non è un file dell'app Help Desk.");
-  if (restore && data.tipo !== "helpdesk-telefono") throw new Error("Per ripristinare serve un file creato da questa app (non quello degli utenti dal PC).");
-  let nu = 0, au = 0, ni = 0, ai = 0, sk = 0;
+  if (restore && data.tipo !== "helpdesk-telefono") throw new Error("Per ripristinare serve un file creato da questa app (non quello che arriva dal PC).");
+  const fromPc = data.tipo === "helpdesk-pc";
+  let nu = 0, au = 0, ni = 0, ai = 0, sk = 0, ne = 0, ns = 0, nt = 0, pt = 0, skt = 0;
   for (const u of data.utenti || []) {
     const nome = normName(u.nome || ""); if (!nome) continue;
     const k = keyOf(nome), cur = users.find(x => x.key === k), mod = u.modificato || "";
@@ -423,7 +726,6 @@ async function mergeFile(file, restore) {
     else if (mod && mod > (cur.modificato || "")) { await put("utenti", rec); au++; }
     users = (await getAll("utenti"));
   }
-  const fromPc = data.tipo === "helpdesk-pc";
   for (const i of data.interventi || []) {
     if (!i.uid || !i.utente || !/^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(i.data_ora || "")) { sk++; continue; }
     const cur = await getKey("interventi", i.uid);
@@ -433,14 +735,38 @@ async function mergeFile(file, restore) {
     await put("interventi", rec);
     cur ? ai++ : ni++;
   }
+  /* edificio, stampanti e cambi toner */
+  for (const e of data.edifici || []) {
+    if (!e.uid || !e.nome) continue;
+    const cur = await getKey("edifici", e.uid); if (cur && !fromPc) continue;
+    await put("edifici", { uid: String(e.uid), nome: String(e.nome), sede: String(e.sede || ""), piano_min: toInt(e.piano_min), piano_max: toInt(e.piano_max) });
+    if (!cur) ne++;
+  }
+  for (const s of data.stampanti || []) {
+    if (!s.uid || !s.edificio_uid) continue;
+    const cur = await getKey("stampanti", s.uid); if (cur && !fromPc) continue;
+    await put("stampanti", { uid: String(s.uid), edificio_uid: String(s.edificio_uid), piano: toInt(s.piano), nome: String(s.nome || ""), modello: String(s.modello || ""), ip: String(s.ip || ""), note: String(s.note || "") });
+    if (!cur) ns++;
+  }
+  for (const t of data.toner || []) {
+    if (!t.uid || !t.stampante_uid || !COLORI.some(c => c[0] === t.colore) || !/^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(t.data_ora || "")) { skt++; continue; }
+    if (await getKey("toner", t.uid)) { pt++; continue; }
+    const rec = { uid: String(t.uid), stampante_uid: String(t.stampante_uid), colore: t.colore, data_ora: t.data_ora, note: String(t.note || ""), modificato: t.modificato || nowIso() };
+    if (fromPc) rec.daPC = true;
+    await put("toner", rec); nt++;
+  }
   const verb = restore ? "ripristinati" : "ricevuti dal PC";
-  return `Utenti nuovi: ${nu}, aggiornati: ${au}` + ((data.interventi || []).length ? `\nInterventi ${verb}: ${ni}, aggiornati: ${ai}, già presenti: ${sk}` : "");
+  let msg = `Utenti nuovi: ${nu}, aggiornati: ${au}`;
+  if ((data.interventi || []).length) msg += `\nInterventi ${verb}: ${ni}, aggiornati: ${ai}, già presenti: ${sk}`;
+  if ((data.toner || []).length) msg += `\nCambi toner ${verb}: ${nt}, già presenti: ${pt}` + (skt ? `, ignorati: ${skt}` : "");
+  if (ne || ns) msg += `\nEdifici nuovi: ${ne}, stampanti nuove: ${ns}`;
+  return msg;
 }
 function wire(btn, inp, restore) {
   $(btn).onclick = () => $(inp).click();
   $(inp).onchange = async e => {
     const f = e.target.files[0]; e.target.value = ""; if (!f) return;
-    try { const t = await mergeFile(f, restore); await loadUsers(); await stats(); show($("exMsg"), t); }
+    try { const t = await mergeFile(f, restore); await loadUsers(); await loadPrn(); await stats(); show($("exMsg"), t); renderEx(); }
     catch (err) { show($("exMsg"), "Non riesco a leggere il file: " + err.message, true); }
   };
 }
@@ -450,7 +776,7 @@ wire("btnImport", "imFile", false); wire("btnRestore", "rsFile", true);
 (async () => {
   try { await openDb(); } catch (e) { document.body.innerHTML = "<p style='padding:20px'>Impossibile aprire l'archivio del telefono. Esci dalla navigazione privata e riprova.</p>"; return; }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-  await loadUsers(); await stats(); clearForm();
+  await loadPrn(); await loadUsers(); await stats(); clearForm();
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 })();
 </script>

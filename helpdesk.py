@@ -341,6 +341,11 @@ class Database:
                 self.conn.execute(
                     "ALTER TABLE interventi ADD COLUMN %s TEXT NOT NULL DEFAULT ''" % col)
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_int_uid ON interventi(uid)")
+        for table in ("edifici", "stampanti", "toner"):
+            if "uid" not in self._columns(table):
+                self.conn.execute("ALTER TABLE %s ADD COLUMN uid TEXT NOT NULL DEFAULT ''" % table)
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_stampanti_uid ON stampanti(uid)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_toner_uid ON toner(uid)")
         self.conn.commit()
 
     def _seed(self):
@@ -486,6 +491,31 @@ class Database:
                 "ticket, uid, modificato) VALUES (?,?,?,?,?,?,?,?,?)",
                 (data_ora, user_id, sede, richiesta, soluzione, note, ticket, uid, modificato))
             return cur.lastrowid
+
+    def ensure_sync_ids(self):
+        """Dà un identificativo (uid) a tutto ciò che nasce sul PC, così il telefono e il PC
+        si riconoscono a vicenda e non creano doppioni."""
+        now = now_utc_iso()
+        with self.conn:
+            self.conn.execute("UPDATE interventi SET modificato = ? WHERE modificato = ''", (now,))
+            for table, prefix in (("interventi", "pc-"), ("edifici", "ed-"),
+                                  ("stampanti", "st-"), ("toner", "to-")):
+                for r in self.conn.execute("SELECT id FROM %s WHERE uid = ''" % table).fetchall():
+                    self.conn.execute("UPDATE %s SET uid = ? WHERE id = ?" % table,
+                                      (prefix + uuid.uuid4().hex, r["id"]))
+
+    def find_stampante_by_uid(self, uid):
+        row = self.conn.execute("SELECT id FROM stampanti WHERE uid = ?", (uid,)).fetchone()
+        return row["id"] if row else None
+
+    def toner_uid_exists(self, uid):
+        return self.conn.execute("SELECT 1 FROM toner WHERE uid = ?", (uid,)).fetchone() is not None
+
+    def add_toner_from_phone(self, stampante_id, uid, colore, data_ora, note):
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO toner(stampante_id, colore, data_ora, note, uid) VALUES (?,?,?,?,?)",
+                (stampante_id, colore, data_ora, note, uid))
 
     # --- foto allegate agli interventi ---
     def allegati_of(self, iid):
@@ -790,6 +820,31 @@ def safe_photo_name(name):
     return name
 
 
+def import_phone_toner(db, items, res):
+    """Cambi toner registrati sul telefono. Quelli già presenti (stesso uid) non si duplicano;
+    se la stampante non esiste più sul PC il cambio viene saltato."""
+    for t in items:
+        uid = _clean(t.get("uid"))
+        colore = _clean(t.get("colore"))
+        data_ora = _clean(t.get("data_ora"))
+        try:
+            datetime.strptime(data_ora, "%Y-%m-%d %H:%M")
+        except ValueError:
+            uid = ""
+        if not uid or colore not in TONER_NOMI:
+            res["toner_saltati"] += 1
+            continue
+        if db.toner_uid_exists(uid):
+            res["toner_gia_presenti"] += 1
+            continue
+        sid = db.find_stampante_by_uid(_clean(t.get("stampante_uid")))
+        if not sid:
+            res["toner_saltati"] += 1
+            continue
+        db.add_toner_from_phone(sid, uid, colore, data_ora, _clean(t.get("note")))
+        res["toner_nuovi"] += 1
+
+
 def import_phone_data(db, data):
     """Unisce nel database i dati ricevuti dal telefono (o da un backup del telefono).
     Utenti: vince la modifica più recente. Interventi: quelli già presenti non si duplicano
@@ -797,7 +852,8 @@ def import_phone_data(db, data):
     if not isinstance(data, dict) or data.get("tipo") not in ("helpdesk-telefono", "helpdesk-pc"):
         raise ValueError("Questo non è un file dati dell'app Help Desk.")
     res = {"utenti_nuovi": 0, "utenti_aggiornati": 0, "interventi_nuovi": 0,
-           "interventi_aggiornati": 0, "interventi_gia_presenti": 0, "foto": 0, "saltati": 0}
+           "interventi_aggiornati": 0, "interventi_gia_presenti": 0, "foto": 0, "saltati": 0,
+           "toner_nuovi": 0, "toner_gia_presenti": 0, "toner_saltati": 0}
 
     for u in data.get("utenti") or []:
         nome = normalize_name(_clean(u.get("nome")))
@@ -817,6 +873,7 @@ def import_phone_data(db, data):
 
     if data.get("tipo") != "helpdesk-telefono":
         return res
+    import_phone_toner(db, data.get("toner") or [], res)
     for it in data.get("interventi") or []:
         uid = _clean(it.get("uid"))
         utente = normalize_name(_clean(it.get("utente")))
@@ -898,11 +955,7 @@ def build_phone_export(db, with_photos=False):
     Gli interventi nati sul PC ricevono un identificativo (uid), così quando il telefono li
     rimanda indietro il programma li riconosce e non li duplica."""
     now = now_utc_iso()
-    with db.conn:
-        db.conn.execute("UPDATE interventi SET modificato = ? WHERE modificato = ''", (now,))
-        for r in db.conn.execute("SELECT id FROM interventi WHERE uid = ''").fetchall():
-            db.conn.execute("UPDATE interventi SET uid = ? WHERE id = ?",
-                            ("pc-" + uuid.uuid4().hex, r["id"]))
+    db.ensure_sync_ids()
     users = [{k: u[k] for k in ("nome", "sede", "telefono", "seriale_pc", "imei", "modificato")}
              for u in db.users_with_counts()]
     rows = db.conn.execute(
@@ -922,8 +975,20 @@ def build_phone_export(db, with_photos=False):
                     item["foto"].append({"nome": a["nome"], "data": data})
         n_foto += len(item["foto"])
         items.append(item)
-    return ({"tipo": "helpdesk-pc", "versione": 2, "creato": now, "utenti": users,
-             "interventi": items}, n_foto)
+    edifici = [{k: r[k] for k in ("uid", "nome", "sede", "piano_min", "piano_max")}
+               for r in db.conn.execute("SELECT * FROM edifici ORDER BY id").fetchall()]
+    stampanti = [{k: r[k] for k in ("uid", "edificio_uid", "piano", "nome", "modello", "ip", "note")}
+                 for r in db.conn.execute(
+                     "SELECT s.uid, e.uid AS edificio_uid, s.piano, s.nome, s.modello, s.ip, "
+                     "s.note FROM stampanti s JOIN edifici e ON e.id = s.edificio_id "
+                     "ORDER BY s.id").fetchall()]
+    toner = [{k: r[k] for k in ("uid", "stampante_uid", "colore", "data_ora", "note")}
+             for r in db.conn.execute(
+                 "SELECT t.uid, s.uid AS stampante_uid, t.colore, t.data_ora, t.note "
+                 "FROM toner t JOIN stampanti s ON s.id = t.stampante_id ORDER BY t.id").fetchall()]
+    return ({"tipo": "helpdesk-pc", "versione": 3, "creato": now, "utenti": users,
+             "interventi": items, "edifici": edifici, "stampanti": stampanti,
+             "toner": toner}, n_foto)
 
 
 def user_cell(u, key):
@@ -3074,10 +3139,12 @@ class App(tk.Tk):
         except (OSError, sqlite3.Error) as e:
             messagebox.showerror(APP_NAME, "Non sono riuscito a creare il file:\n%s" % e)
             return
-        messagebox.showinfo(APP_NAME, "File creato con %d utenti, %d interventi e %d foto:\n%s\n\n"
+        messagebox.showinfo(APP_NAME, "File creato con %d utenti, %d interventi, %d foto, "
+                            "%d stampanti e %d cambi toner:\n%s\n\n"
                             "Mandalo al telefono (AirDrop, email o iCloud) e nell'app tocca "
                             "Scambio > Ricevi dal PC."
-                            % (len(data["utenti"]), len(data["interventi"]), n_foto, path))
+                            % (len(data["utenti"]), len(data["interventi"]), n_foto,
+                               len(data["stampanti"]), len(data["toner"]), path))
 
     def import_from_phone(self):
         path = filedialog.askopenfilename(
@@ -3100,8 +3167,15 @@ class App(tk.Tk):
                  "Già presenti (saltati): %d" % res["interventi_gia_presenti"],
                  "Foto importate: %d" % res["foto"],
                  "Utenti nuovi: %d, aggiornati: %d" % (res["utenti_nuovi"], res["utenti_aggiornati"])]
+        if res["toner_nuovi"] or res["toner_gia_presenti"] or res["toner_saltati"]:
+            lines.append("Cambi toner nuovi: %d (già presenti: %d)"
+                         % (res["toner_nuovi"], res["toner_gia_presenti"]))
+        if res["toner_saltati"]:
+            lines.append("Cambi toner ignorati (stampante non trovata): %d" % res["toner_saltati"])
         if res["saltati"]:
             lines.append("Righe non valide ignorate: %d" % res["saltati"])
+        if res["toner_nuovi"]:
+            self.after_toner_change()
         messagebox.showinfo(APP_NAME, "Importazione completata.\n\n" + "\n".join(lines))
 
     def open_data_folder(self):
