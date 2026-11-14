@@ -13,6 +13,7 @@ import re
 import shutil
 import sqlite3
 import sys
+import uuid
 import zipfile
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
@@ -866,6 +867,65 @@ def import_phone_data(db, data):
     return res
 
 
+PHONE_PHOTO_PX = 1400   # lato lungo massimo delle foto mandate al telefono
+
+
+def photo_data_url(path):
+    """Foto -> testo (data URL) per il file del telefono, ridotta per non appesantirlo."""
+    try:
+        from PIL import Image, ImageOps
+        with Image.open(path) as im:
+            im = ImageOps.exif_transpose(im)
+            im.thumbnail((PHONE_PHOTO_PX, PHONE_PHOTO_PX))
+            buf = io.BytesIO()
+            im.convert("RGB").save(buf, "JPEG", quality=78)
+        return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        pass
+    mime = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+            ".gif": "image/gif", ".webp": "image/webp"}.get(os.path.splitext(path)[1].lower())
+    if not mime:
+        return None
+    try:
+        with open(path, "rb") as fh:
+            return "data:%s;base64,%s" % (mime, base64.b64encode(fh.read()).decode("ascii"))
+    except OSError:
+        return None
+
+
+def build_phone_export(db, with_photos=False):
+    """Dati del PC per il telefono: utenti e interventi (con le foto, se richiesto).
+    Gli interventi nati sul PC ricevono un identificativo (uid), così quando il telefono li
+    rimanda indietro il programma li riconosce e non li duplica."""
+    now = now_utc_iso()
+    with db.conn:
+        db.conn.execute("UPDATE interventi SET modificato = ? WHERE modificato = ''", (now,))
+        for r in db.conn.execute("SELECT id FROM interventi WHERE uid = ''").fetchall():
+            db.conn.execute("UPDATE interventi SET uid = ? WHERE id = ?",
+                            ("pc-" + uuid.uuid4().hex, r["id"]))
+    users = [{k: u[k] for k in ("nome", "sede", "telefono", "seriale_pc", "imei", "modificato")}
+             for u in db.users_with_counts()]
+    rows = db.conn.execute(
+        "SELECT i.id, i.uid, i.data_ora, u.nome AS utente, i.sede, i.richiesta, i.soluzione, "
+        "i.note, i.ticket, i.modificato FROM interventi i JOIN utenti u ON u.id = i.utente_id "
+        "ORDER BY i.data_ora, i.id").fetchall()
+    items, n_foto = [], 0
+    for r in rows:
+        item = {k: r[k] for k in ("uid", "data_ora", "utente", "sede", "richiesta", "soluzione",
+                                  "note", "ticket", "modificato")}
+        item["foto"] = []
+        if with_photos:
+            for a in db.allegati_of(r["id"]):
+                p = os.path.join(attachments_root(), a["file"])
+                data = photo_data_url(p) if os.path.isfile(p) else None
+                if data:
+                    item["foto"].append({"nome": a["nome"], "data": data})
+        n_foto += len(item["foto"])
+        items.append(item)
+    return ({"tipo": "helpdesk-pc", "versione": 2, "creato": now, "utenti": users,
+             "interventi": items}, n_foto)
+
+
 def user_cell(u, key):
     if key == "n":
         return u["n"]
@@ -1528,7 +1588,7 @@ class App(tk.Tk):
         menubar = tk.Menu(self)
         m = tk.Menu(menubar, tearoff=0)
         m.add_command(label="Importa dati dal telefono…", command=self.import_from_phone)
-        m.add_command(label="Esporta utenti per il telefono…", command=self.export_for_phone)
+        m.add_command(label="Esporta dati per il telefono…", command=self.export_for_phone)
         m.add_separator()
         m.add_command(label="Salva una copia di backup (dati e foto)…", command=self.backup)
         m.add_command(label="Apri la cartella dei dati", command=self.open_data_folder)
@@ -2997,24 +3057,27 @@ class App(tk.Tk):
                             "(File > Apri la cartella dei dati)." % path)
 
     def export_for_phone(self):
+        foto = messagebox.askyesno(
+            APP_NAME, "Vuoi mandare al telefono anche le FOTO degli interventi?\n\n"
+            "Sì = ci sono tutti i dati con le foto (il file è più pesante).\n"
+            "No = utenti e interventi senza foto (file leggero).")
         path = filedialog.asksaveasfilename(
-            title="Esporta utenti per il telefono", defaultextension=".json",
-            initialfile="utenti_per_telefono_%s.json" % datetime.now().strftime("%Y%m%d_%H%M"),
+            title="Esporta dati per il telefono", defaultextension=".json",
+            initialfile="dati_per_telefono_%s.json" % datetime.now().strftime("%Y%m%d_%H%M"),
             filetypes=[("File dati", "*.json")])
         if not path:
             return
-        users = [{k: u[k] for k in ("nome", "sede", "telefono", "seriale_pc", "imei", "modificato")}
-                 for u in self.db.users_with_counts()]
-        data = {"tipo": "helpdesk-pc", "versione": 1, "creato": now_utc_iso(), "utenti": users}
         try:
+            data, n_foto = build_phone_export(self.db, with_photos=foto)
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=1)
-        except OSError as e:
-            messagebox.showerror(APP_NAME, "Non sono riuscito a salvare il file:\n%s" % e)
+                json.dump(data, f, ensure_ascii=False)
+        except (OSError, sqlite3.Error) as e:
+            messagebox.showerror(APP_NAME, "Non sono riuscito a creare il file:\n%s" % e)
             return
-        messagebox.showinfo(APP_NAME, "File creato con %d utenti:\n%s\n\nMandalo al telefono "
-                            "(AirDrop, email o iCloud) e nell'app tocca Dati > Importa dal PC."
-                            % (len(users), path))
+        messagebox.showinfo(APP_NAME, "File creato con %d utenti, %d interventi e %d foto:\n%s\n\n"
+                            "Mandalo al telefono (AirDrop, email o iCloud) e nell'app tocca "
+                            "Scambio > Ricevi dal PC."
+                            % (len(data["utenti"]), len(data["interventi"]), n_foto, path))
 
     def import_from_phone(self):
         path = filedialog.askopenfilename(

@@ -111,7 +111,7 @@ h2{font-size:19px;color:var(--navy);margin:4px 0 8px}
   </div>
   <div class="card">
    <h3>Dal PC al telefono</h3>
-   <div class="hint">Nel programma del PC usa File › Esporta utenti per il telefono, poi scegli qui quel file. Gli utenti del PC si aggiungono; se c'è una modifica più recente vince quella.</div>
+   <div class="hint">Nel programma del PC usa File › Esporta dati per il telefono, poi scegli qui quel file. Arrivano gli utenti e gli interventi del PC (con le foto, se le hai incluse). Quello che c'è già sul telefono non viene duplicato; se c'è una modifica più recente vince quella.</div>
    <input id="imFile" type="file" accept=".json,application/json" class="hidden">
    <button class="btn navy" type="button" id="btnImport">Ricevi dal PC</button>
   </div>
@@ -374,9 +374,11 @@ function editUser(k) {
 }
 
 /* ================== Scambio ================== */
+/* da inviare = modificato dopo l'ultimo invio e non ancora toccato dopo l'arrivo dal PC */
+const isNew = (i, last) => (!last || i.modificato > last) && i.modificato !== i.daPC;
 async function renderEx() {
   const last = await getMeta("lastSent"), all = await getAll("interventi");
-  const n = all.filter(i => !last || i.modificato > last).length;
+  const n = all.filter(i => isNew(i, last)).length;
   $("exInfo").textContent = last ? `Ultimo invio: ${fmtDt(last.replace("T", " ").slice(0, 16))} (ora locale può differire di 1-2 ore). Interventi da inviare: ${n}.` : `Non hai ancora creato nessun file. Interventi da inviare: ${n}.`;
   if (navigator.storage && navigator.storage.estimate) {
     const e = await navigator.storage.estimate(), p = navigator.storage.persisted ? await navigator.storage.persisted() : false;
@@ -385,7 +387,7 @@ async function renderEx() {
 }
 async function buildExport(mode) {
   const last = await getMeta("lastSent"), all = await getAll("interventi");
-  const items = mode === "all" ? all : all.filter(i => !last || i.modificato > last);
+  const items = mode === "all" ? all : all.filter(i => isNew(i, last));
   const us = mode === "all" ? users : users.filter(u => !last || (u.modificato || "") > last);
   const needed = new Set(items.map(i => keyOf(i.utente)));
   const usersOut = [...us, ...users.filter(u => needed.has(u.key) && !us.includes(u))];
@@ -421,14 +423,18 @@ async function mergeFile(file, restore) {
     else if (mod && mod > (cur.modificato || "")) { await put("utenti", rec); au++; }
     users = (await getAll("utenti"));
   }
-  if (restore) for (const i of data.interventi || []) {
+  const fromPc = data.tipo === "helpdesk-pc";
+  for (const i of data.interventi || []) {
     if (!i.uid || !i.utente || !/^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(i.data_ora || "")) { sk++; continue; }
     const cur = await getKey("interventi", i.uid);
     if (cur && !(i.modificato > cur.modificato)) { sk++; continue; }
-    await put("interventi", { uid: i.uid, data_ora: i.data_ora, utente: normName(i.utente), sede: i.sede || "", richiesta: i.richiesta || "", soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", foto: i.foto || [], creato: i.modificato, modificato: i.modificato || nowIso() });
+    const rec = { uid: i.uid, data_ora: i.data_ora, utente: normName(i.utente), sede: i.sede || "", richiesta: i.richiesta || "", soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", foto: i.foto || [], creato: i.modificato, modificato: i.modificato || nowIso() };
+    if (fromPc) rec.daPC = rec.modificato;   /* arrivato dal PC: non va rimandato indietro finché non lo modifichi */
+    await put("interventi", rec);
     cur ? ai++ : ni++;
   }
-  return `Utenti nuovi: ${nu}, aggiornati: ${au}` + (restore ? `\nInterventi ripristinati: ${ni}, aggiornati: ${ai}, già presenti: ${sk}` : "");
+  const verb = restore ? "ripristinati" : "ricevuti dal PC";
+  return `Utenti nuovi: ${nu}, aggiornati: ${au}` + ((data.interventi || []).length ? `\nInterventi ${verb}: ${ni}, aggiornati: ${ai}, già presenti: ${sk}` : "");
 }
 function wire(btn, inp, restore) {
   $(btn).onclick = () => $(inp).click();
