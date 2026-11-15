@@ -60,6 +60,11 @@ details.flt{background:var(--white);border:1px solid var(--border);border-radius
 .pr{width:92px;text-align:center;background:rgba(255,255,255,.6);border:1px solid #d8cdb0;border-radius:10px;padding:6px 3px;font-size:12px}.pr img{height:60px;width:auto;max-width:100%;object-fit:contain}.pr b{display:block;color:var(--navy);line-height:1.15;word-break:break-word}.pr span{color:var(--grey);font-size:11px}
 .sw{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:6px;vertical-align:-1px;border:1px solid rgba(0,0,0,.25)}
 label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;color:var(--text)}label.chk input{width:22px;height:22px;flex:none}
+.tag.st-Aperto,.tag.st-Richiesto,.tag.st-Finito{background:#fde8ea;color:#a91b29}
+.tag.st-In-attesa,.tag.st-In-esaurimento{background:#fff1d6;color:#8a5200}
+.tag.st-Risolto,.tag.st-Eseguito,.tag.st-OK{background:#e6f4ea;color:#14532d}
+.stats div.link{cursor:pointer}.stats b.red{color:var(--red)}
+.pr span.alert{display:block;color:var(--red);font-weight:700}
 </style>
 </head>
 <body>
@@ -69,9 +74,9 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
  <!-- NUOVO INTERVENTO -->
  <section id="p-new">
   <h2 id="newTitle">Nuovo intervento</h2>
-  <div class="stats"><div><b id="sOggi">0</b><span>Oggi</span></div><div><b id="sMese">0</b><span>Mese</span></div><div><b id="sTot">0</b><span>Totale</span></div></div>
+  <div class="stats"><div class="link" id="sOpenBox"><b id="sOpen">0</b><span>Da seguire</span></div><div><b id="sOggi">0</b><span>Oggi</span></div><div><b id="sMese">0</b><span>Mese</span></div><div><b id="sTot">0</b><span>Totale</span></div></div>
   <label for="fDt">Data e ora</label><input id="fDt" type="datetime-local">
-  <label for="fUser">Utente *</label><input id="fUser" list="dlUsers" autocomplete="off" autocapitalize="words" placeholder="Nome e cognome">
+  <div class="row"><div style="flex:2"><label for="fUser">Utente *</label><input id="fUser" list="dlUsers" autocomplete="off" autocapitalize="words" placeholder="Nome e cognome"></div><div><label for="fMat">Matricola</label><input id="fMat" autocapitalize="characters" autocomplete="off"></div></div>
   <datalist id="dlUsers"></datalist>
   <div class="hint" id="userHint"></div>
   <label for="fSede">Sede</label><input id="fSede" list="dlSedi" autocomplete="off" autocapitalize="words" placeholder="Firenze, Livorno, DR Toscana…">
@@ -79,7 +84,8 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
   <div class="row"><div><label for="fTel">Telefono</label><input id="fTel" inputmode="tel"></div><div><label for="fImei">IMEI cellulare</label><input id="fImei" inputmode="numeric"></div></div>
   <label for="fSn">Seriale del PC</label><input id="fSn" autocapitalize="characters">
   <button class="btn" type="button" id="btnCopy">📋 Copia dati utente</button>
-  <label for="fTicket">N. ticket (facoltativo)</label><input id="fTicket" autocapitalize="characters">
+  <div class="row"><div><label for="fTicket">N. ticket (facoltativo)</label><input id="fTicket" autocapitalize="characters"></div><div><label for="fStato">Stato</label><select id="fStato"><option>Risolto</option><option>In attesa</option><option>Aperto</option></select></div></div>
+  <div class="hint">Aperto o In attesa = lo ritrovi in «Da seguire» (in alto).</div>
   <label for="fReq">Per cosa mi hanno chiamato *</label><textarea id="fReq"></textarea>
   <label for="fSol">Come ho risolto</label><textarea id="fSol"></textarea>
   <label for="fNote">Note</label><textarea id="fNote" style="min-height:56px"></textarea>
@@ -97,9 +103,10 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
   <h2>Registro</h2>
   <details class="flt" id="rFlt">
    <summary id="rFltSum">Filtri</summary>
-   <label for="rUser">Utente (nome o cognome)</label><input id="rUser" list="dlUsers" autocomplete="off" placeholder="Tutti">
+   <label for="rUser">Utente (nome, cognome o matricola)</label><input id="rUser" list="dlUsers" autocomplete="off" placeholder="Tutti">
    <div class="row"><div><label for="rSede">Sede</label><select id="rSede"></select></div><div><label for="rTicket">Ticket</label><select id="rTicket"><option value="">Tutti</option><option value="con">Con ticket</option><option value="senza">Senza ticket</option></select></div></div>
    <label for="rTicketNo">N. ticket</label><input id="rTicketNo" autocapitalize="characters" autocomplete="off">
+   <label for="rStato">Stato</label><select id="rStato"><option value="">Tutti</option><option value="aperti">Da richiamare (aperti e in attesa)</option><option>Aperto</option><option>In attesa</option><option>Risolto</option></select>
    <div class="row"><div><label for="rDal">Dal</label><input id="rDal" type="date"></div><div><label for="rAl">Al</label><input id="rAl" type="date"></div></div>
    <div class="chips" id="rQuick"><button type="button" data-q="oggi">Oggi</button><button type="button" data-q="7">7 giorni</button><button type="button" data-q="mese">Questo mese</button><button type="button" data-q="anno">Quest'anno</button><button type="button" data-q="tutto">Tutto</button></div>
    <label for="rSearch">Cerca nel testo</label><input id="rSearch" type="search" placeholder="Per cosa, come, note…">
@@ -114,7 +121,7 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
  <section id="p-usr" class="hidden">
   <h2>Utenti</h2>
   <div class="row"><div><button class="btn green" type="button" id="uNew">＋ Nuovo utente</button></div><div><button class="btn navy" type="button" id="uExport">⬇ Esporta dati</button></div></div>
-  <label for="uSearch">Cerca</label><input id="uSearch" type="search" placeholder="Nome, telefono, seriale, IMEI…">
+  <label for="uSearch">Cerca</label><input id="uSearch" type="search" placeholder="Nome, matricola, telefono, seriale, IMEI…">
   <label for="uSede">Sede</label><select id="uSede"></select>
   <div class="hint" id="uCount"></div>
   <div id="uList"></div>
@@ -123,11 +130,11 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
  <!-- STAMPANTI -->
  <section id="p-prn" class="hidden">
   <h2>Stampanti</h2>
-  <div class="seg" id="prnSeg"><button type="button" data-t="a" class="on">Edificio e stampanti</button><button type="button" data-t="b">Cambi toner</button></div>
+  <div class="seg" id="prnSeg"><button type="button" data-t="a" class="on">Edificio</button><button type="button" data-t="b">Cambi toner</button><button type="button" data-t="c">Tecnico</button><button type="button" data-t="d">Scorta</button></div>
   <div id="prnA">
    <select id="bSel"></select>
    <div id="bld"></div>
-   <div class="hint">Tocca una stampante per registrare il cambio toner e vedere lo storico.</div>
+   <div class="hint">Tocca una stampante per registrare il cambio toner o vaschetta, vedere lo storico e gli interventi del tecnico.</div>
   </div>
   <div id="prnB" class="hidden">
    <details class="flt" id="tFlt">
@@ -141,6 +148,26 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
    <button class="btn" type="button" id="tExport">⬇ Esporta PDF / Excel</button>
    <div id="tList"></div>
   </div>
+  <div id="prnC" class="hidden">
+   <button class="btn green" type="button" id="mNew">＋ Nuovo intervento del tecnico</button>
+   <details class="flt" id="mFlt">
+    <summary id="mFltSum">Filtri</summary>
+    <div class="row"><div><label for="mEd">Edificio</label><select id="mEd"></select></div><div><label for="mSt">Stato</label><select id="mSt"><option value="">(Tutti)</option><option>Richiesto</option><option>Eseguito</option></select></div></div>
+    <label for="mPr">Stampante</label><select id="mPr"></select>
+    <div class="row"><div><label for="mDal">Dal</label><input id="mDal" type="date"></div><div><label for="mAl">Al</label><input id="mAl" type="date"></div></div>
+    <label for="mQ">Cerca nel testo</label><input id="mQ" type="search" placeholder="Problema, tecnico, ticket…">
+    <button class="btn navy" type="button" id="mReset">Azzera filtri</button>
+   </details>
+   <div class="hint" id="mCount"></div>
+   <button class="btn" type="button" id="mExport">⬇ Esporta PDF / Excel</button>
+   <div id="mList"></div>
+  </div>
+  <div id="prnD" class="hidden">
+   <div id="scAlert"></div>
+   <div id="scList"></div>
+   <div class="hint" id="scInfo"></div>
+   <div class="hint">La scorta si imposta dal programma del PC (Stampanti › Scorta toner): qui la vedi, con i cambi che registri sul telefono già tolti.</div>
+  </div>
  </section>
 
  <!-- SCAMBIO -->
@@ -148,7 +175,7 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
   <h2>Scambio con il PC</h2>
   <div class="card">
    <h3>Dal telefono al PC</h3>
-   <div class="hint">Crea un file con gli interventi, le foto, i cambi toner e gli utenti nuovi o modificati. Mandalo al PC (posta aziendale, AirDrop…) e nel programma usa File › Importa dati dal telefono.</div>
+   <div class="hint">Crea un file con gli interventi, le foto, i cambi toner, gli interventi del tecnico e gli utenti nuovi o modificati. Mandalo al PC (posta aziendale, AirDrop…) e nel programma usa File › Importa dati dal telefono.</div>
    <label for="exMode">Cosa invio</label>
    <select id="exMode"><option value="new">Solo le novità dall'ultimo invio</option><option value="all">Tutto (anche come copia di sicurezza)</option></select>
    <div class="hint" id="exInfo"></div>
@@ -156,7 +183,7 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
   </div>
   <div class="card">
    <h3>Dal PC al telefono</h3>
-   <div class="hint">Nel programma del PC usa File › Esporta dati per il telefono, poi scegli qui quel file. Arrivano utenti, interventi, edificio, stampanti e cambi toner del PC (con le foto, se le hai incluse). Quello che c'è già sul telefono non viene duplicato; se c'è una modifica più recente vince quella.</div>
+   <div class="hint">Nel programma del PC usa File › Esporta dati per il telefono, poi scegli qui quel file. Arrivano utenti (con la matricola), interventi, edificio, stampanti, cambi toner, interventi del tecnico e scorta toner del PC (con le foto, se le hai incluse). Quello che c'è già sul telefono non viene duplicato; se c'è una modifica più recente vince quella.</div>
    <input id="imFile" type="file" accept=".json,application/json" class="hidden">
    <button class="btn navy" type="button" id="btnImport">Ricevi dal PC</button>
   </div>
@@ -184,14 +211,14 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
 <script>
 "use strict";
 /* ================== Database (IndexedDB) ================== */
-const DB_NAME = "helpdesk-inail", DB_VER = 2;
+const DB_NAME = "helpdesk-inail", DB_VER = 3;
 let db;
 function openDb() {
   return new Promise((res, rej) => {
     const rq = indexedDB.open(DB_NAME, DB_VER);
     rq.onupgradeneeded = () => {
       const d = rq.result, mk = (n, k) => { if (!d.objectStoreNames.contains(n)) d.createObjectStore(n, { keyPath: k }); };
-      mk("utenti", "key"); mk("interventi", "uid"); mk("meta", "k"); mk("edifici", "uid"); mk("stampanti", "uid"); mk("toner", "uid");
+      mk("utenti", "key"); mk("interventi", "uid"); mk("meta", "k"); mk("edifici", "uid"); mk("stampanti", "uid"); mk("toner", "uid"); mk("manut", "uid"); mk("scorta", "k");
     };
     rq.onsuccess = () => { db = rq.result; db.onversionchange = () => db.close(); res(); };
     rq.onerror = () => rej(rq.error);
@@ -223,6 +250,11 @@ function normName(n) {
 }
 const keyOf = n => normName(n).toLowerCase();
 const SEDI = ["Arezzo","Carrara","DR Toscana","Firenze","Grosseto","Livorno","Lucca","Massa","Pisa","Pistoia","Prato","Siena"];
+const STATI = ["Aperto", "In attesa", "Risolto"], STATI_T = ["Richiesto", "Eseguito"];
+const stOf = i => STATI.includes(i.stato) ? i.stato : "Risolto";
+const stTag = s => `<span class="tag st-${esc(s).replace(/ /g, "-")}">${esc(s)}</span>`;
+const stColor = s => ({ "Aperto": "#d12233", "In attesa": "#b36b00", "Richiesto": "#d12233", "Eseguito": "#237a3c", "Risolto": "#237a3c" })[s];
+const matOf = name => { const u = users.find(x => x.key === keyOf(name)); return (u && u.matricola) || ""; };
 function show(el, text, err) { el.innerHTML = text ? `<div class="msg${err ? " err" : ""}">${esc(text)}</div>` : ""; }
 
 /* riduce le foto (lato lungo max 1800 px) per risparmiare spazio */
@@ -265,7 +297,10 @@ async function stats() {
   $("sOggi").textContent = all.filter(i => i.data_ora.startsWith(today)).length;
   $("sMese").textContent = all.filter(i => i.data_ora.startsWith(today.slice(0, 7))).length;
   $("sTot").textContent = all.length;
+  const open = all.filter(i => stOf(i) !== "Risolto").length;
+  $("sOpen").textContent = open; $("sOpen").classList.toggle("red", open > 0);
 }
+$("sOpenBox").onclick = () => { ["rUser", "rSede", "rTicket", "rTicketNo", "rDal", "rAl", "rSearch"].forEach(id => $(id).value = ""); $("rStato").value = "aperti"; go("reg"); };
 
 /* ================== Navigazione ================== */
 function go(p) {
@@ -285,14 +320,23 @@ function userHint() {
   const m = t && users.find(u => u.key === k);
   if (m && autoFor !== k) {
     autoFor = k;
-    $("fSede").value = m.sede || ""; $("fTel").value = m.telefono || ""; $("fSn").value = m.seriale_pc || ""; $("fImei").value = m.imei || "";
+    $("fMat").value = m.matricola || ""; $("fSede").value = m.sede || ""; $("fTel").value = m.telefono || ""; $("fSn").value = m.seriale_pc || ""; $("fImei").value = m.imei || "";
   } else if (!m && autoFor !== null) {
-    autoFor = null; $("fSede").value = $("fTel").value = $("fSn").value = $("fImei").value = "";
+    autoFor = null; $("fMat").value = $("fSede").value = $("fTel").value = $("fSn").value = $("fImei").value = "";
   }
   $("userHint").textContent = !t ? "" : m ? "Utente già in lista: dati compilati." : "Nuovo utente: verrà aggiunto alla lista quando salvi.";
 }
 $("fUser").addEventListener("input", userHint);
 $("fUser").addEventListener("change", userHint);
+/* scrivi la matricola e (se il nome è vuoto) trovo io l'utente */
+function matHint() {
+  const v = $("fMat").value.trim().toLowerCase();
+  if (!v || $("fUser").value.trim()) return;
+  const u = users.find(x => (x.matricola || "").toLowerCase() === v);
+  if (u) { $("fUser").value = u.nome; userHint(); }
+}
+$("fMat").addEventListener("input", matHint);
+$("fMat").addEventListener("change", matHint);
 
 function renderThumbs() {
   $("thumbs").innerHTML = photos.map((p, i) => `<div><img src="${p.data}" alt=""><button class="x" data-i="${i}" type="button">×</button></div>`).join("");
@@ -310,7 +354,8 @@ $("fFoto").onchange = async e => {
 function clearForm() {
   editUid = null; autoFor = null; photos = [];
   $("fDt").value = localInput();
-  ["fUser", "fSede", "fTel", "fImei", "fSn", "fTicket", "fReq", "fSol", "fNote"].forEach(i => $(i).value = "");
+  ["fUser", "fMat", "fSede", "fTel", "fImei", "fSn", "fTicket", "fReq", "fSol", "fNote"].forEach(i => $(i).value = "");
+  $("fStato").value = "Risolto";
   $("newTitle").textContent = "Nuovo intervento"; $("btnSave").textContent = "Salva intervento"; $("btnCancelEdit").style.display = "none";
   userHint(); renderThumbs();
 }
@@ -323,16 +368,16 @@ $("btnSave").onclick = async () => {
   if (!req_) return show($("newMsg"), "Scrivi per cosa ti hanno chiamato.", true);
   const sede = normName($("fSede").value), mod = nowIso();
   const k = keyOf(nome), old = users.find(u => u.key === k);
-  const fields = { sede, telefono: $("fTel").value.trim(), seriale_pc: $("fSn").value.trim(), imei: $("fImei").value.trim() };
-  const changed = !old || ["sede", "telefono", "seriale_pc", "imei"].some(f => (old[f] || "") !== fields[f]);
+  const fields = { matricola: $("fMat").value.trim(), sede, telefono: $("fTel").value.trim(), seriale_pc: $("fSn").value.trim(), imei: $("fImei").value.trim() };
+  const changed = !old || ["matricola", "sede", "telefono", "seriale_pc", "imei"].some(f => (old[f] || "") !== fields[f]);
   if (changed) await put("utenti", { key: k, nome: old ? old.nome : nome, ...fields, modificato: mod });
   const prev = editUid ? await getKey("interventi", editUid) : null;
   await put("interventi", {
     uid: editUid || uuid(), data_ora: toDataOra($("fDt").value), utente: old ? old.nome : nome, sede,
     richiesta: req_, soluzione: $("fSol").value.trim(), note: $("fNote").value.trim(), ticket: $("fTicket").value.trim(),
-    foto: photos, creato: prev ? prev.creato : mod, modificato: mod
+    stato: $("fStato").value, foto: photos, creato: prev ? prev.creato : mod, modificato: mod
   });
-  const msg = (editUid ? "Modifiche salvate." : "Intervento salvato.") + (old ? "" : " Nuovo utente aggiunto: " + nome + ".") + (photos.length ? ` Foto: ${photos.length}.` : "");
+  const msg = (editUid ? "Modifiche salvate." : "Intervento salvato.") + (old ? "" : " Nuovo utente aggiunto: " + nome + ".") + (photos.length ? ` Foto: ${photos.length}.` : "") + ($("fStato").value !== "Risolto" ? ` Resta da seguire (${$("fStato").value}).` : "");
   clearForm(); await loadUsers(); await stats(); show($("newMsg"), msg);
 };
 
@@ -345,11 +390,11 @@ async function copyText(t) {
   }
 }
 function userLines(o) {
-  return [["Utente", o.nome], ["Sede", o.sede], ["Telefono", o.tel], ["Seriale PC", o.sn], ["IMEI cellulare", o.imei]]
+  return [["Utente", o.nome], ["Matricola", o.mat], ["Sede", o.sede], ["Telefono", o.tel], ["Seriale PC", o.sn], ["IMEI cellulare", o.imei]]
     .filter(([k, v]) => v && String(v).trim()).map(([k, v]) => `${k}: ${String(v).trim()}`).join("\n");
 }
 $("btnCopy").onclick = async () => {
-  const t = userLines({ nome: normName($("fUser").value), sede: normName($("fSede").value), tel: $("fTel").value, sn: $("fSn").value, imei: $("fImei").value });
+  const t = userLines({ nome: normName($("fUser").value), mat: $("fMat").value, sede: normName($("fSede").value), tel: $("fTel").value, sn: $("fSn").value, imei: $("fImei").value });
   if (!t) return show($("newMsg"), "Non c'è ancora nessun dato da copiare.", true);
   const ok = await copyText(t);
   show($("newMsg"), ok ? "Dati dell'utente copiati: ora puoi incollarli nel ticket." : "Non sono riuscito a copiare: tieni premuto sul testo per copiarlo a mano.", !ok);
@@ -361,7 +406,7 @@ const fmtDate = v => { const m = /^(\d{4})-(\d\d)-(\d\d)/.exec(v || ""); return 
 const isoDay = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const words = v => (v || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
 function regFilter() {
-  return { user: words($("rUser").value), sede: $("rSede").value, tk: $("rTicket").value, tno: $("rTicketNo").value.trim().toLowerCase(), dal: $("rDal").value, al: $("rAl").value, q: words($("rSearch").value) };
+  return { user: words($("rUser").value), sede: $("rSede").value, tk: $("rTicket").value, tno: $("rTicketNo").value.trim().toLowerCase(), dal: $("rDal").value, al: $("rAl").value, q: words($("rSearch").value), st: $("rStato").value };
 }
 function regFilterText(f) {
   const p = [];
@@ -371,6 +416,7 @@ function regFilterText(f) {
   if (f.tno) p.push("N. ticket: " + f.tno);
   if (f.dal || f.al) p.push(`Periodo: ${f.dal ? fmtDate(f.dal) : "..."} - ${f.al ? fmtDate(f.al) : "..."}`);
   if (f.q.length) p.push("Testo: " + f.q.join(" "));
+  if (f.st) p.push(f.st === "aperti" ? "Solo da richiamare (aperti e in attesa)" : "Stato: " + f.st);
   return p.join("; ") || "nessuno";
 }
 function quick(kind) {
@@ -392,23 +438,25 @@ async function renderReg() {
     if (f.tk === "con" && !i.ticket) return false;
     if (f.tk === "senza" && i.ticket) return false;
     if (f.tno && !(i.ticket || "").toLowerCase().includes(f.tno)) return false;
-    const ul = (i.utente || "").toLowerCase();
+    const st = stOf(i);
+    if (f.st === "aperti" ? st === "Risolto" : (f.st && st !== f.st)) return false;
+    const ul = ((i.utente || "") + " " + matOf(i.utente)).toLowerCase();
     if (!f.user.every(t => ul.includes(t))) return false;
-    const hay = [i.utente, i.sede, i.ticket, i.richiesta, i.soluzione, i.note].join(" ").toLowerCase();
+    const hay = [i.utente, matOf(i.utente), i.sede, i.ticket, i.richiesta, i.soluzione, i.note].join(" ").toLowerCase();
     return f.q.every(t => hay.includes(t));
   });
   const nu = new Set(regFiltered.map(i => keyOf(i.utente))).size;
   $("rFltSum").textContent = regFilterText(f) === "nessuno" ? "Filtri (tocca per aprire)" : "Filtri attivi: " + regFilterText(f);
   $("rCount").textContent = `Interventi trovati: ${regFiltered.length} su ${regCache.length} · Utenti diversi: ${nu}`;
-  $("rList").innerHTML = regFiltered.map(i => `<div class="card" data-u="${esc(i.uid)}"><h3>${esc(i.utente)}</h3>
+  $("rList").innerHTML = regFiltered.map(i => `<div class="card" data-u="${esc(i.uid)}"><h3>${esc(i.utente)}${matOf(i.utente) ? ` <span class="tag">${esc(matOf(i.utente))}</span>` : ""}</h3>
     <div class="meta">${fmtDt(i.data_ora)}${i.sede ? " · " + esc(i.sede) : ""}</div>
-    <div style="margin:4px 0">${i.ticket ? `<span class="tag">Ticket ${esc(i.ticket)}</span>` : ""}${i.foto && i.foto.length ? `<span class="tag">📷 ${i.foto.length}</span>` : ""}</div>
+    <div style="margin:4px 0">${stTag(stOf(i))}${i.ticket ? `<span class="tag">Ticket ${esc(i.ticket)}</span>` : ""}${i.foto && i.foto.length ? `<span class="tag">📷 ${i.foto.length}</span>` : ""}</div>
     <div>${esc(i.richiesta).slice(0, 140)}${i.richiesta.length > 140 ? "…" : ""}</div></div>`).join("") || `<div class="hint">Nessun intervento.</div>`;
   $("rList").querySelectorAll(".card").forEach(c => c.onclick = () => openDetail(c.dataset.u));
 }
-["rUser", "rSede", "rTicket", "rTicketNo", "rDal", "rAl", "rSearch"].forEach(id => { $(id).addEventListener("input", renderReg); $(id).addEventListener("change", renderReg); });
+["rUser", "rSede", "rTicket", "rTicketNo", "rDal", "rAl", "rSearch", "rStato"].forEach(id => { $(id).addEventListener("input", renderReg); $(id).addEventListener("change", renderReg); });
 $("rQuick").querySelectorAll("button").forEach(b => b.onclick = () => quick(b.dataset.q));
-$("rReset").onclick = () => { ["rUser", "rSede", "rTicket", "rTicketNo", "rDal", "rAl", "rSearch"].forEach(id => $(id).value = ""); renderReg(); };
+$("rReset").onclick = () => { ["rUser", "rSede", "rTicket", "rTicketNo", "rDal", "rAl", "rSearch", "rStato"].forEach(id => $(id).value = ""); renderReg(); };
 $("rExport").onclick = () => openExport("int");
 
 async function openDetail(uid) {
@@ -416,23 +464,26 @@ async function openDetail(uid) {
   const u = users.find(x => x.key === keyOf(i.utente)) || {};
   const m = $("modal");
   m.innerHTML = `<div class="card full"><h3>${esc(i.utente)}</h3><div class="meta">${fmtDt(i.data_ora)}${i.sede ? " · " + esc(i.sede) : ""}${i.ticket ? " · Ticket " + esc(i.ticket) : ""}</div>
-    ${u.telefono || u.seriale_pc || u.imei ? `<div class="meta" style="margin-top:6px">${u.telefono ? "Tel " + esc(u.telefono) + " · " : ""}${u.seriale_pc ? "SN " + esc(u.seriale_pc) + " · " : ""}${u.imei ? "IMEI " + esc(u.imei) : ""}</div>` : ""}
+    <div style="margin:6px 0">${stTag(stOf(i))}</div>
+    ${u.matricola || u.telefono || u.seriale_pc || u.imei ? `<div class="meta" style="margin-top:6px">${u.matricola ? "Matr. " + esc(u.matricola) + " · " : ""}${u.telefono ? "Tel " + esc(u.telefono) + " · " : ""}${u.seriale_pc ? "SN " + esc(u.seriale_pc) + " · " : ""}${u.imei ? "IMEI " + esc(u.imei) : ""}</div>` : ""}
     <label>Per cosa mi hanno chiamato</label><div style="white-space:pre-wrap">${esc(i.richiesta)}</div>
     ${i.soluzione ? `<label>Come ho risolto</label><div style="white-space:pre-wrap">${esc(i.soluzione)}</div>` : ""}
     ${i.note ? `<label>Note</label><div style="white-space:pre-wrap">${esc(i.note)}</div>` : ""}
     ${(i.foto || []).map(f => `<img src="${f.data}" alt="">`).join("")}
     <button class="btn" id="dCopy" type="button">📋 Copia dati utente</button><div id="dMsg"></div>
+    ${stOf(i) !== "Risolto" ? `<button class="btn green" id="dDone" type="button">✔ Segna come risolto</button>` : ""}
     <button class="btn navy" id="dEdit" type="button">Modifica</button>
     <button class="btn red" id="dDel" type="button">Elimina dal telefono</button>
     <button class="btn" id="dClose" type="button">Chiudi</button>
     <div class="hint">L'eliminazione vale solo qui: se l'intervento è già stato importato nel PC, nel PC resta.</div></div>`;
   m.classList.remove("hidden");
   $("dClose").onclick = () => m.classList.add("hidden");
-  $("dCopy").onclick = async () => { const ok = await copyText(userLines({ nome: i.utente, sede: i.sede, tel: u.telefono, sn: u.seriale_pc, imei: u.imei })); show($("dMsg"), ok ? "Dati dell'utente copiati: ora puoi incollarli nel ticket." : "Copia non riuscita.", !ok); };
+  if ($("dDone")) $("dDone").onclick = async () => { i.stato = "Risolto"; i.modificato = nowIso(); await put("interventi", i); m.classList.add("hidden"); await stats(); renderReg(); };
+  $("dCopy").onclick = async () => { const ok = await copyText(userLines({ nome: i.utente, mat: u.matricola, sede: i.sede, tel: u.telefono, sn: u.seriale_pc, imei: u.imei })); show($("dMsg"), ok ? "Dati dell'utente copiati: ora puoi incollarli nel ticket." : "Copia non riuscita.", !ok); };
   $("dDel").onclick = async () => { if (confirm("Eliminare questo intervento dal telefono?")) { await del("interventi", uid); m.classList.add("hidden"); await stats(); renderReg(); } };
   $("dEdit").onclick = () => {
     m.classList.add("hidden"); editUid = i.uid; autoFor = keyOf(i.utente); photos = (i.foto || []).map(f => ({ ...f }));
-    $("fDt").value = fromDataOra(i.data_ora); $("fUser").value = i.utente; $("fSede").value = i.sede || "";
+    $("fDt").value = fromDataOra(i.data_ora); $("fUser").value = i.utente; $("fMat").value = u.matricola || ""; $("fStato").value = stOf(i); $("fSede").value = i.sede || "";
     $("fTel").value = u.telefono || ""; $("fSn").value = u.seriale_pc || ""; $("fImei").value = u.imei || "";
     $("fTicket").value = i.ticket || ""; $("fReq").value = i.richiesta; $("fSol").value = i.soluzione || ""; $("fNote").value = i.note || "";
     $("newTitle").textContent = "Modifica intervento"; $("btnSave").textContent = "Salva modifiche"; $("btnCancelEdit").style.display = "block";
@@ -446,11 +497,11 @@ async function renderUsers() {
   const all = await getAll("interventi"), count = {}, last = {};
   all.forEach(i => { const k = keyOf(i.utente); count[k] = (count[k] || 0) + 1; if (!last[k] || i.data_ora > last[k]) last[k] = i.data_ora; });
   const q = words($("uSearch").value), sede = $("uSede").value;
-  usrFiltered = users.filter(u => { const h = [u.nome, u.sede, u.telefono, u.seriale_pc, u.imei].join(" ").toLowerCase(); return (!sede || u.sede === sede) && q.every(t => h.includes(t)); })
+  usrFiltered = users.filter(u => { const h = [u.nome, u.matricola, u.sede, u.telefono, u.seriale_pc, u.imei].join(" ").toLowerCase(); return (!sede || u.sede === sede) && q.every(t => h.includes(t)); })
     .map(u => ({ ...u, n: count[u.key] || 0, ultimo: last[u.key] || "" }));
   $("uCount").textContent = `Utenti: ${usrFiltered.length} su ${users.length}`;
   $("uList").innerHTML = usrFiltered.map(u => `<div class="card" data-k="${esc(u.key)}"><h3>${esc(u.nome)}</h3>
-    <div class="meta">${esc(u.sede || "sede non indicata")} · ${u.n} interventi</div>
+    <div class="meta">${u.matricola ? "Matricola " + esc(u.matricola) + " · " : ""}${esc(u.sede || "sede non indicata")} · ${u.n} interventi</div>
     <div class="meta">${u.telefono ? "Tel " + esc(u.telefono) + " · " : ""}${u.seriale_pc ? "SN " + esc(u.seriale_pc) + " · " : ""}${u.imei ? "IMEI " + esc(u.imei) : ""}</div></div>`).join("") || `<div class="hint">Nessun utente. Si aggiungono da soli quando salvi un intervento.</div>`;
   $("uList").querySelectorAll(".card").forEach(c => c.onclick = () => editUser(c.dataset.k));
 }
@@ -460,11 +511,12 @@ $("uNew").onclick = () => editUser(null);
 $("uExport").onclick = () => openExport("usr");
 function editUser(k) {
   const isNew = !k;
-  const u = isNew ? { key: "", nome: "", sede: "", telefono: "", seriale_pc: "", imei: "" } : users.find(x => x.key === k);
+  const u = isNew ? { key: "", nome: "", matricola: "", sede: "", telefono: "", seriale_pc: "", imei: "" } : users.find(x => x.key === k);
   if (!u) return;
   const m = $("modal");
   m.innerHTML = `<div class="card"><h3>${isNew ? "Nuovo utente" : "Scheda utente"}</h3>
     <label>Nome e cognome</label><input id="eNome" autocapitalize="words" value="${esc(u.nome)}">
+    <label>Matricola aziendale</label><input id="eMat" autocapitalize="characters" value="${esc(u.matricola)}">
     <label>Sede</label><input id="eSede" list="dlSedi" value="${esc(u.sede)}">
     <label>Telefono</label><input id="eTel" inputmode="tel" value="${esc(u.telefono)}">
     <label>Seriale PC</label><input id="eSn" value="${esc(u.seriale_pc)}">
@@ -475,8 +527,8 @@ function editUser(k) {
   m.classList.remove("hidden");
   $("eClose").onclick = () => m.classList.add("hidden");
   if (!isNew) {
-    $("eCopy").onclick = async () => { const ok = await copyText(userLines({ nome: u.nome, sede: $("eSede").value, tel: $("eTel").value, sn: $("eSn").value, imei: $("eImei").value })); show($("eMsg"), ok ? "Dati dell'utente copiati." : "Copia non riuscita.", !ok); };
-    $("eSee").onclick = () => { m.classList.add("hidden"); $("rUser").value = u.nome; ["rSede", "rTicket", "rTicketNo", "rDal", "rAl", "rSearch"].forEach(id => $(id).value = ""); go("reg"); };
+    $("eCopy").onclick = async () => { const ok = await copyText(userLines({ nome: u.nome, mat: $("eMat").value, sede: $("eSede").value, tel: $("eTel").value, sn: $("eSn").value, imei: $("eImei").value })); show($("eMsg"), ok ? "Dati dell'utente copiati." : "Copia non riuscita.", !ok); };
+    $("eSee").onclick = () => { m.classList.add("hidden"); $("rUser").value = u.nome; ["rSede", "rTicket", "rTicketNo", "rDal", "rAl", "rSearch", "rStato"].forEach(id => $(id).value = ""); go("reg"); };
     $("eDel").onclick = async () => {
       const n = (await getAll("interventi")).filter(i => keyOf(i.utente) === u.key).length;
       if (n) return show($("eMsg"), `Questo utente ha ${n} interventi: non si può eliminare.`, true);
@@ -487,7 +539,7 @@ function editUser(k) {
     const nome = normName($("eNome").value); if (!nome) return show($("eMsg"), "Scrivi il nome.", true);
     const nk = keyOf(nome);
     if (nk !== u.key && users.some(x => x.key === nk)) return show($("eMsg"), "Esiste già un utente con questo nome.", true);
-    const nu = { key: nk, nome, sede: normName($("eSede").value), telefono: $("eTel").value.trim(), seriale_pc: $("eSn").value.trim(), imei: $("eImei").value.trim(), modificato: nowIso() };
+    const nu = { key: nk, nome, matricola: $("eMat").value.trim(), sede: normName($("eSede").value), telefono: $("eTel").value.trim(), seriale_pc: $("eSn").value.trim(), imei: $("eImei").value.trim(), modificato: nowIso() };
     if (!isNew && nk !== u.key) {
       await del("utenti", u.key);
       for (const i of await getAll("interventi")) if (keyOf(i.utente) === u.key) { i.utente = nome; i.modificato = nowIso(); await put("interventi", i); }
@@ -497,8 +549,8 @@ function editUser(k) {
 }
 
 /* ================== Stampanti e cambi toner ================== */
-let edifici = [], stampanti = [], tonerAll = [], bSel = null, prnTab = "a", tonFiltered = [];
-const COLORI = [["Nero", "#1c1c1c", "#1c1c1c"], ["Azzurro", "#1fa3dc", "#0d7fb0"], ["Magenta", "#d6247f", "#c0176c"], ["Giallo", "#f2c500", "#a67c00"]];
+let edifici = [], stampanti = [], tonerAll = [], bSel = null, prnTab = "a", tonFiltered = [], manutAll = [], scortaAll = [], scortaAgg = "", manFiltered = [];
+const COLORI = [["Nero", "#1c1c1c", "#1c1c1c"], ["Azzurro", "#1fa3dc", "#0d7fb0"], ["Magenta", "#d6247f", "#c0176c"], ["Giallo", "#f2c500", "#a67c00"], ["Vaschetta", "#8a96a3", "#4f5d6b"]];
 const colHex = n => (COLORI.find(c => c[0] === n) || [])[1] || "#888";
 const colText = n => (COLORI.find(c => c[0] === n) || [])[2] || "#444";
 const floorLabel = n => n === 0 ? "Piano terra" : n === -1 ? "Seminterrato" : n < -1 ? `Interrato ${-n}` : `${n}° piano`;
@@ -507,12 +559,25 @@ const printerImg = s => /3351|3350|3320/i.test(s.modello || "") ? "stampante-c33
 async function loadPrn() {
   edifici = (await getAll("edifici")).sort((a, b) => a.nome.localeCompare(b.nome, "it"));
   stampanti = await getAll("stampanti"); tonerAll = await getAll("toner");
+  manutAll = await getAll("manut"); scortaAll = await getAll("scorta"); scortaAgg = (await getMeta("scortaAgg")) || "";
+}
+/* scorta toner: i numeri arrivano dal PC; qui tolgo i cambi registrati sul telefono dopo l'ultimo scambio */
+const scKey = (modello, colore) => (modello || "").trim().toLowerCase() + "|" + colore;
+const scStatus = (q, s) => q <= 0 ? "Finito" : q <= s ? "In esaurimento" : "OK";
+function scorteNow() {
+  const used = {};
+  tonerAll.forEach(t => {
+    if (t.daPC || !((t.modificato || "") > scortaAgg)) return;
+    const s = stampanti.find(x => x.uid === t.stampante_uid); if (!s) return;
+    const k = scKey(s.modello, t.colore); used[k] = (used[k] || 0) + 1;
+  });
+  return scortaAll.map(r => ({ ...r, ora: Math.max(0, toInt(r.quantita) - (used[r.k] || 0)) }));
 }
 function prnLabel(s) { const e = edifici.find(x => x.uid === s.edificio_uid); return `${e ? e.nome : "?"} · ${floorLabel(s.piano)} · ${printerName(s)}`; }
 function renderPrn() {
-  $("prnA").classList.toggle("hidden", prnTab !== "a"); $("prnB").classList.toggle("hidden", prnTab !== "b");
+  ["a", "b", "c", "d"].forEach(t => $("prn" + t.toUpperCase()).classList.toggle("hidden", prnTab !== t));
   document.querySelectorAll("#prnSeg button").forEach(b => b.classList.toggle("on", b.dataset.t === prnTab));
-  prnTab === "a" ? renderBld() : renderTonLog();
+  ({ a: renderBld, b: renderTonLog, c: renderMan, d: renderScorta })[prnTab]();
 }
 document.querySelectorAll("#prnSeg button").forEach(b => b.onclick = () => { prnTab = b.dataset.t; renderPrn(); });
 $("bSel").addEventListener("change", e => { bSel = e.target.value; renderBld(); });
@@ -528,12 +593,12 @@ function renderBld() {
   const list = [...floors].sort((a, c) => c - a);
   $("bld").innerHTML = `<div class="bld"><div class="roof">${esc(b.nome)}${b.sede ? " · " + esc(b.sede) : ""}</div>` + list.map(f => {
     const here = ps.filter(s => s.piano === f);
-    return `<div class="floor"><div class="fl">${floorLabel(f)}</div><div class="ps">${here.map(s => `<div class="pr" data-u="${esc(s.uid)}"><img src="${printerImg(s)}" alt=""><b>${esc(printerName(s))}</b><span>${esc(s.modello || "")}</span></div>`).join("") || `<span class="meta" style="align-self:center">nessuna stampante</span>`}</div></div>`;
+    return `<div class="floor"><div class="fl">${floorLabel(f)}</div><div class="ps">${here.map(s => `<div class="pr" data-u="${esc(s.uid)}"><img src="${printerImg(s)}" alt=""><b>${esc(printerName(s))}</b><span>${esc(s.modello || "")}</span>${manutAll.some(x => x.stampante_uid === s.uid && x.stato === "Richiesto") ? `<span class="alert">tecnico richiesto</span>` : ""}</div>`).join("") || `<span class="meta" style="align-self:center">nessuna stampante</span>`}</div></div>`;
   }).join("") + `</div>`;
   $("bld").querySelectorAll(".pr").forEach(c => c.onclick = () => openPrinter(c.dataset.u));
 }
 function lastToner(suid) { const m = {}; tonerAll.filter(t => t.stampante_uid === suid).forEach(t => { if (!m[t.colore] || t.data_ora > m[t.colore]) m[t.colore] = t.data_ora; }); return m; }
-function openPrinter(uid, msg) {
+function openPrinter(uid, msg, err) {
   const s = stampanti.find(x => x.uid === uid); if (!s) return;
   const e = edifici.find(x => x.uid === s.edificio_uid) || {}, m = $("modal"), picked = new Set(), last = lastToner(uid);
   const hist = tonerAll.filter(t => t.stampante_uid === uid).sort((a, b) => (b.data_ora + b.modificato).localeCompare(a.data_ora + a.modificato));
@@ -542,24 +607,31 @@ function openPrinter(uid, msg) {
     ${s.ip ? `<div class="meta">IP: ${esc(s.ip)}</div>` : ""}${s.note ? `<div class="meta">Note: ${esc(s.note)}</div>` : ""}
     <label>Ultimo cambio</label>
     <div>${COLORI.map(c => `<div class="meta"><span class="sw" style="background:${c[1]}"></span>${c[0]}: ${last[c[0]] ? fmtDt(last[c[0]]) : "mai registrato"}</div>`).join("")}</div>
-    <label>Registra cambio toner</label>
+    <label>Registra cambio toner o vaschetta</label>
     <div class="chips" id="pCols">${COLORI.map(c => `<button type="button" data-c="${c[0]}"><span class="sw" style="background:${c[1]}"></span>${c[0]}</button>`).join("")}</div>
     <label for="pDt">Data e ora</label><input id="pDt" type="datetime-local" value="${localInput()}">
     <label for="pNote">Note</label><input id="pNote">
-    <button class="btn green" id="pSave" type="button">Registra cambio toner</button><div id="pMsg"></div>
-    <label>Storico</label>
+    <button class="btn green" id="pSave" type="button">Registra il cambio</button><div id="pMsg"></div>
+    <label>Interventi del tecnico Konica</label>
+    <div id="pMan">${manutAll.filter(x => x.stampante_uid === uid).sort((a, b) => b.data_ora.localeCompare(a.data_ora)).slice(0, 5).map(x => `<div class="card" data-m="${esc(x.uid)}">${stTag(x.stato)}<b>${fmtDt(x.data_ora)}</b>${x.ticket ? " · " + esc(x.ticket) : ""}<div class="meta">${esc((x.problema || "").slice(0, 90))}</div></div>`).join("") || `<div class="hint">Nessun intervento del tecnico registrato.</div>`}</div>
+    <button class="btn navy" id="pManNew" type="button">＋ Nuovo intervento del tecnico</button>
+    <label>Storico cambi</label>
     <div id="pHist">${hist.map(t => `<div class="card"><div><span class="sw" style="background:${colHex(t.colore)}"></span><b>${esc(t.colore)}</b> · ${fmtDt(t.data_ora)}</div>${t.note ? `<div class="meta">${esc(t.note)}</div>` : ""}<button class="btn red sm" data-d="${esc(t.uid)}" type="button" style="margin-top:6px">Elimina</button></div>`).join("") || `<div class="hint">Nessun cambio registrato.</div>`}</div>
     <button class="btn" id="pClose" type="button">Chiudi</button></div>`;
   m.classList.remove("hidden");
-  if (msg) show($("pMsg"), msg);
+  if (msg) show($("pMsg"), msg, err);
   $("pClose").onclick = () => m.classList.add("hidden");
+  $("pMan").querySelectorAll("[data-m]").forEach(c => c.onclick = () => openManut(c.dataset.m, uid));
+  $("pManNew").onclick = () => openManut(null, uid);
   $("pCols").querySelectorAll("button").forEach(b => b.onclick = () => { const c = b.dataset.c; picked.has(c) ? picked.delete(c) : picked.add(c); b.classList.toggle("on", picked.has(c)); });
   $("pSave").onclick = async () => {
-    if (!picked.size) return show($("pMsg"), "Tocca almeno un colore di toner.", true);
+    if (!picked.size) return show($("pMsg"), "Tocca almeno un colore di toner o la vaschetta.", true);
     if (!$("pDt").value) return show($("pMsg"), "Controlla data e ora.", true);
     const dt = toDataOra($("pDt").value), note = $("pNote").value.trim(), chosen = COLORI.map(c => c[0]).filter(c => picked.has(c));
     for (const c of chosen) await put("toner", { uid: uuid(), stampante_uid: uid, colore: c, data_ora: dt, note, modificato: nowIso() });
-    await loadPrn(); renderPrn(); openPrinter(uid, `Registrato: ${chosen.join(", ")} (${fmtDt(dt)}).`);
+    await loadPrn(); renderPrn();
+    const low = scorteNow().filter(r => r.k.endsWith("|" + r.colore) && r.k === scKey(s.modello, r.colore) && chosen.includes(r.colore) && scStatus(r.ora, toInt(r.soglia)) !== "OK");
+    openPrinter(uid, `Registrato: ${chosen.join(", ")} (${fmtDt(dt)}).` + (low.length ? `\nATTENZIONE, scorta in esaurimento: ${low.map(r => `${r.colore} (ne restano ${r.ora})`).join(", ")}. Ricordati di ordinarlo.` : ""), low.length > 0);
   };
   $("pHist").querySelectorAll("[data-d]").forEach(b => b.onclick = async () => {
     if (!confirm("Eliminare questo cambio toner dal telefono?")) return;
@@ -593,17 +665,96 @@ function renderTonLog() {
 $("tReset").onclick = () => { ["tEd", "tPr", "tCol", "tDal", "tAl"].forEach(id => $(id).value = ""); renderTonLog(); };
 $("tExport").onclick = () => openExport("ton");
 
+/* ================== Interventi del tecnico Konica ================== */
+function manRows() {
+  const ed = $("mEd").value, pr = $("mPr").value, st = $("mSt").value, dal = $("mDal").value, al = $("mAl").value, q = words($("mQ").value);
+  return manutAll.map(x => { const p = stampanti.find(s => s.uid === x.stampante_uid) || {}; const e = edifici.find(z => z.uid === p.edificio_uid) || {}; return { x, p, e }; })
+    .filter(r => (!ed || r.e.uid === ed) && (!pr || r.p.uid === pr) && (!st || r.x.stato === st) && (!dal || r.x.data_ora.slice(0, 10) >= dal) && (!al || r.x.data_ora.slice(0, 10) <= al)
+      && q.every(t => [r.x.problema, r.x.intervento, r.x.tecnico, r.x.ticket, printerName(r.p), r.p.modello].join(" ").toLowerCase().includes(t)))
+    .sort((a, b) => (b.x.data_ora + b.x.modificato).localeCompare(a.x.data_ora + a.x.modificato));
+}
+function renderMan() {
+  const edSel = $("mEd"), curEd = edSel.value;
+  edSel.innerHTML = `<option value="">(Tutti)</option>` + edifici.map(e => `<option value="${esc(e.uid)}">${esc(e.nome)}</option>`).join("");
+  edSel.value = edifici.some(e => e.uid === curEd) ? curEd : "";
+  const prSel = $("mPr"), curPr = prSel.value;
+  const pl = stampanti.filter(s => !edSel.value || s.edificio_uid === edSel.value).sort((a, b) => prnLabel(a).localeCompare(prnLabel(b), "it"));
+  prSel.innerHTML = `<option value="">(Tutte)</option>` + pl.map(s => `<option value="${esc(s.uid)}">${esc(prnLabel(s))}</option>`).join("");
+  prSel.value = pl.some(s => s.uid === curPr) ? curPr : "";
+  manFiltered = manRows();
+  const act = ["mEd", "mPr", "mSt", "mDal", "mAl", "mQ"].some(id => $(id).value);
+  $("mFltSum").textContent = act ? "Filtri attivi" : "Filtri (tocca per aprire)";
+  const open = manFiltered.filter(r => r.x.stato === "Richiesto").length;
+  $("mCount").textContent = `Interventi trovati: ${manFiltered.length} su ${manutAll.length}` + (open ? ` · Da eseguire: ${open}` : "");
+  $("mList").innerHTML = manFiltered.map(r => `<div class="card" data-m="${esc(r.x.uid)}"><h3>${esc(r.p.uid ? printerName(r.p) : "Stampante non più presente")}</h3>
+    <div class="meta">${esc(r.p.uid ? prnLabel(r.p) : "")}</div>
+    <div style="margin:4px 0">${stTag(r.x.stato)}<span class="tag">${fmtDt(r.x.data_ora)}</span>${r.x.ticket ? `<span class="tag">Ticket ${esc(r.x.ticket)}</span>` : ""}</div>
+    <div>${esc((r.x.problema || "").slice(0, 140))}${(r.x.problema || "").length > 140 ? "…" : ""}</div>
+    ${r.x.data_tecnico || r.x.tecnico ? `<div class="meta">Tecnico${r.x.data_tecnico ? " il " + fmtDate(r.x.data_tecnico) : ""}${r.x.tecnico ? ": " + esc(r.x.tecnico) : ""}</div>` : ""}</div>`).join("") || `<div class="hint">Nessun intervento del tecnico.</div>`;
+  $("mList").querySelectorAll(".card").forEach(c => c.onclick = () => openManut(c.dataset.m, null));
+}
+["mEd", "mPr", "mSt", "mDal", "mAl", "mQ"].forEach(id => { $(id).addEventListener("change", renderMan); $(id).addEventListener("input", renderMan); });
+$("mReset").onclick = () => { ["mEd", "mPr", "mSt", "mDal", "mAl", "mQ"].forEach(id => $(id).value = ""); renderMan(); };
+$("mExport").onclick = () => openExport("man");
+$("mNew").onclick = () => openManut(null, null);
+
+function openManut(uid, pUid) {
+  const cur = uid ? manutAll.find(x => x.uid === uid) : null;
+  if (uid && !cur) return;
+  const locked = !!pUid, m = $("modal");
+  const opts = stampanti.slice().sort((a, b) => prnLabel(a).localeCompare(prnLabel(b), "it"));
+  if (!opts.length) { alert("Non ci sono ancora stampanti sul telefono: riceverle dal PC (Scambio › Ricevi dal PC)."); return; }
+  m.innerHTML = `<div class="card"><h3>${cur ? "Intervento del tecnico" : "Nuovo intervento del tecnico"}</h3>
+    <label for="xPr">Stampante *</label><select id="xPr" ${locked ? "disabled" : ""}>${locked ? "" : `<option value="">Scegli…</option>`}${opts.map(s => `<option value="${esc(s.uid)}">${esc(prnLabel(s))}</option>`).join("")}</select>
+    <label for="xDt">Data richiesta</label><input id="xDt" type="datetime-local" value="${cur ? fromDataOra(cur.data_ora) : localInput()}">
+    <div class="row"><div><label for="xTk">N. ticket</label><input id="xTk" autocapitalize="characters" value="${esc(cur ? cur.ticket : "")}"></div><div><label for="xSt">Stato</label><select id="xSt">${STATI_T.map(s => `<option ${(cur ? cur.stato : "Richiesto") === s ? "selected" : ""}>${s}</option>`).join("")}</select></div></div>
+    <div class="row"><div><label for="xDtec">Tecnico venuto il</label><input id="xDtec" type="date" value="${esc(cur ? cur.data_tecnico || "" : "")}"></div><div><label for="xTec">Nome del tecnico</label><input id="xTec" value="${esc(cur ? cur.tecnico || "" : "")}"></div></div>
+    <label for="xPb">Problema segnalato *</label><textarea id="xPb">${esc(cur ? cur.problema : "")}</textarea>
+    <label for="xIn">Cosa ha fatto il tecnico</label><textarea id="xIn">${esc(cur ? cur.intervento || "" : "")}</textarea>
+    <button class="btn green" id="xSave" type="button">Salva</button>
+    ${cur ? `<button class="btn red" id="xDel" type="button">Elimina dal telefono</button>` : ""}
+    <button class="btn" id="xClose" type="button">Chiudi</button><div id="xMsg"></div></div>`;
+  $("xPr").value = cur ? cur.stampante_uid : (pUid || "");
+  m.classList.remove("hidden");
+  const back = msg => { loadPrn().then(() => { renderPrn(); if (pUid) openPrinter(pUid, msg); else m.classList.add("hidden"); }); };
+  $("xClose").onclick = () => pUid ? openPrinter(pUid) : m.classList.add("hidden");
+  $("xSt").onchange = () => { if ($("xSt").value === "Eseguito" && !$("xDtec").value) $("xDtec").value = isoDay(new Date()); };
+  $("xSave").onclick = async () => {
+    if (!$("xPr").value) return show($("xMsg"), "Scegli la stampante.", true);
+    if (!$("xDt").value) return show($("xMsg"), "Controlla la data della richiesta.", true);
+    if (!$("xPb").value.trim()) return show($("xMsg"), "Scrivi qual è il problema segnalato.", true);
+    await put("manut", {
+      uid: cur ? cur.uid : uuid(), stampante_uid: $("xPr").value, data_ora: toDataOra($("xDt").value), data_tecnico: $("xDtec").value || "",
+      ticket: $("xTk").value.trim(), tecnico: $("xTec").value.trim(), problema: $("xPb").value.trim(), intervento: $("xIn").value.trim(),
+      stato: $("xSt").value, modificato: nowIso()
+    });
+    back("Intervento del tecnico salvato.");
+  };
+  if (cur) $("xDel").onclick = async () => { if (confirm("Eliminare questo intervento del tecnico dal telefono?")) { await del("manut", cur.uid); back("Intervento del tecnico eliminato dal telefono."); } };
+}
+
+/* ================== Scorta toner ================== */
+function renderScorta() {
+  const rows = scorteNow().sort((a, b) => a.modello.localeCompare(b.modello, "it") || COLORI.findIndex(c => c[0] === a.colore) - COLORI.findIndex(c => c[0] === b.colore));
+  const low = rows.filter(r => scStatus(r.ora, toInt(r.soglia)) !== "OK");
+  $("scAlert").innerHTML = !rows.length ? `<div class="hint">Non ho ancora i dati della scorta. Nel PC imposta i toner in Stampanti › Scorta toner, poi manda i dati al telefono (File › Esporta dati per il telefono).</div>`
+    : low.length ? `<div class="msg err">Attenzione, da ordinare:\n${low.map(r => `${esc(r.colore)} ${esc(r.modello)}: ne restano ${r.ora}`).join("\n")}</div>` : `<div class="msg">Scorta toner: tutto a posto.</div>`;
+  $("scList").innerHTML = rows.map(r => `<div class="card"><h3><span class="sw" style="background:${colHex(r.colore)}"></span>${esc(r.colore)} · ${esc(r.modello)}</h3><div class="meta">In magazzino: <b>${r.ora}</b> · avviso a ${toInt(r.soglia)} ${stTag(scStatus(r.ora, toInt(r.soglia)))}</div></div>`).join("");
+  $("scInfo").textContent = scortaAgg ? `Numeri del PC aggiornati al ${fmtDt(scortaAgg.replace("T", " ").slice(0, 16))} (ora locale può differire di 1-2 ore).` : "";
+}
+
 /* ================== Esporta PDF / Excel ================== */
-const USER_COLS = [["nome", "Utente", 55, 26, true], ["sede", "Sede", 30, 16, true], ["telefono", "Telefono", 35, 18, true], ["seriale_pc", "Seriale PC", 45, 22, true], ["imei", "IMEI cellulare", 45, 20, true], ["n", "N. interventi", 22, 14, false], ["ultimo", "Ultimo intervento", 32, 18, false]];
+const USER_COLS = [["nome", "Utente", 55, 26, true], ["matricola", "Matricola", 28, 14, true], ["sede", "Sede", 30, 16, true], ["telefono", "Telefono", 35, 18, true], ["seriale_pc", "Seriale PC", 45, 22, true], ["imei", "IMEI cellulare", 45, 20, true], ["n", "N. interventi", 22, 14, false], ["ultimo", "Ultimo intervento", 32, 18, false]];
 const tally = arr => { const m = new Map(); arr.forEach(x => m.set(x, (m.get(x) || 0) + 1)); return [...m].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(b[0], "it")); };
 function dsInt() {
   const f = regFilter(), items = regFiltered;
   return {
     file: "interventi", title: "Registro interventi", sheet: "Interventi", filtri: regFilterText(f),
-    headers: ["Data e ora", "Utente", "Sede", "N. ticket", "Per cosa mi hanno chiamato", "Come ho risolto", "Note"],
-    rows: items.map(i => [fmtDt(i.data_ora), i.utente, i.sede || "", i.ticket || "", i.richiesta || "", i.soluzione || "", i.note || ""]),
-    widths: [26, 32, 20, 22, 80, 70, 40], xw: [17, 24, 14, 14, 50, 50, 35], totalLabel: "Totale interventi", total: items.length,
-    summary: [{ title: "Interventi per utente", headers: ["Utente", "Interventi"], rows: tally(items.map(i => i.utente)).map(([k, v]) => [k, v]) },
+    headers: ["Data e ora", "Utente", "Matricola", "Sede", "N. ticket", "Stato", "Per cosa mi hanno chiamato", "Come ho risolto", "Note"],
+    rows: items.map(i => [fmtDt(i.data_ora), i.utente, matOf(i.utente), i.sede || "", i.ticket || "", { v: stOf(i), c: stColor(stOf(i)) }, i.richiesta || "", i.soluzione || "", i.note || ""]),
+    widths: [24, 30, 20, 20, 20, 18, 66, 58, 34], xw: [17, 24, 12, 14, 14, 11, 50, 50, 35], totalLabel: "Totale interventi", total: items.length,
+    summary: [{ title: "Interventi per stato", headers: ["Stato", "Interventi"], rows: STATI.map(s => [s, items.filter(i => stOf(i) === s).length]) },
+              { title: "Interventi per utente", headers: ["Utente", "Interventi"], rows: tally(items.map(i => i.utente)).map(([k, v]) => [k, v]) },
               { title: "Interventi per sede", headers: ["Sede", "Interventi"], rows: tally(items.map(i => i.sede || "(non indicata)")).map(([k, v]) => [k, v]) }]
   };
 }
@@ -620,8 +771,26 @@ function dsTon() {
     headers: ["Data e ora", "Sede", "Edificio", "Piano", "Stampante", "Modello", "Colore", "Note"],
     rows: rows.map(r => [fmtDt(r.t.data_ora), r.e.sede || "", r.e.nome || "", r.p.uid ? floorLabel(r.p.piano) : "", r.p.uid ? printerName(r.p) : "", r.p.modello || "", { v: r.t.colore, c: colText(r.t.colore) }, r.t.note || ""]),
     widths: [26, 18, 40, 20, 34, 24, 18, 40], xw: [17, 14, 34, 14, 28, 16, 12, 40], totalLabel: "Totale cambi toner", total: rows.length,
-    summary: [{ title: "Cambi toner per stampante", headers: ["Stampante", ...COLORI.map(c => c[0]), "Totale"], weights: [3, 1, 1, 1, 1, 1],
+    summary: [{ title: "Cambi toner per stampante", headers: ["Stampante", ...COLORI.map(c => c[0]), "Totale"], weights: [3, ...COLORI.map(() => 1), 1],
       rows: [...per].sort((a, b) => a[0].localeCompare(b[0], "it")).map(([k, v]) => [k, ...COLORI.map(c => v[c[0]] || 0), COLORI.reduce((s, c) => s + (v[c[0]] || 0), 0)]) }]
+  };
+}
+function dsMan() {
+  const rows = manFiltered, per = new Map();
+  rows.forEach(r => { const k = r.p.uid ? prnLabel(r.p) : "(stampante non più presente)"; if (!per.has(k)) per.set(k, {}); per.get(k)[r.x.stato] = (per.get(k)[r.x.stato] || 0) + 1; });
+  const ps = [];
+  if ($("mEd").value) ps.push("Edificio: " + ($("mEd").selectedOptions[0] || {}).textContent);
+  if ($("mPr").value) ps.push("Stampante: " + ($("mPr").selectedOptions[0] || {}).textContent);
+  if ($("mSt").value) ps.push("Stato: " + $("mSt").value);
+  if ($("mDal").value || $("mAl").value) ps.push(`Periodo: ${$("mDal").value ? fmtDate($("mDal").value) : "..."} - ${$("mAl").value ? fmtDate($("mAl").value) : "..."}`);
+  if ($("mQ").value.trim()) ps.push("Testo: " + $("mQ").value.trim());
+  return {
+    file: "interventi_tecnico", title: "Interventi del tecnico sulle stampanti", sheet: "Interventi tecnico", filtri: ps.join("; ") || "nessuno",
+    headers: ["Richiesta del", "Edificio", "Piano", "Stampante", "Ticket", "Stato", "Tecnico venuto il", "Tecnico", "Problema segnalato", "Intervento svolto"],
+    rows: rows.map(r => [fmtDt(r.x.data_ora), r.e.nome || "", r.p.uid ? floorLabel(r.p.piano) : "", r.p.uid ? printerName(r.p) : "", r.x.ticket || "", { v: r.x.stato, c: stColor(r.x.stato) }, r.x.data_tecnico ? fmtDate(r.x.data_tecnico) : "", r.x.tecnico || "", r.x.problema || "", r.x.intervento || ""]),
+    widths: [22, 34, 18, 28, 16, 18, 20, 22, 50, 50], xw: [17, 30, 14, 26, 14, 11, 16, 20, 45, 45], totalLabel: "Totale interventi", total: rows.length,
+    summary: [{ title: "Interventi per stampante", headers: ["Stampante", ...STATI_T, "Totale"], weights: [3, 1, 1, 1],
+      rows: [...per].sort((a, b) => a[0].localeCompare(b[0], "it")).map(([k, v]) => [k, ...STATI_T.map(s => v[s] || 0), STATI_T.reduce((t, s) => t + (v[s] || 0), 0)]) }]
   };
 }
 function dsUsr(keys) {
@@ -643,8 +812,8 @@ async function deliver(file, msgEl) {
   setTimeout(() => URL.revokeObjectURL(a.href), 4000); return true;
 }
 function openExport(kind) {
-  const count = kind === "int" ? regFiltered.length : kind === "ton" ? tonFiltered.length : usrFiltered.length;
-  const name = kind === "int" ? "interventi" : kind === "ton" ? "cambi toner" : "dati utenti";
+  const count = kind === "int" ? regFiltered.length : kind === "ton" ? tonFiltered.length : kind === "man" ? manFiltered.length : usrFiltered.length;
+  const name = kind === "int" ? "interventi" : kind === "ton" ? "cambi toner" : kind === "man" ? "interventi del tecnico" : "dati utenti";
   const m = $("modal"); let fmt = "pdf";
   m.innerHTML = `<div class="card"><h3>Esporta ${name}</h3><div class="meta">${count} righe, con i filtri attuali.</div>
     ${kind === "usr" ? `<label>Quali dati vuoi nel file?</label>` + USER_COLS.map(c => `<label class="chk"><input type="checkbox" data-k="${c[0]}" ${c[4] ? "checked" : ""}> ${esc(c[1])}</label>`).join("") : ""}
@@ -656,7 +825,7 @@ function openExport(kind) {
   $("xGo").onclick = async () => {
     const keys = [...m.querySelectorAll("input[data-k]:checked")].map(c => c.dataset.k);
     if (kind === "usr" && !keys.length) return show($("xMsg"), "Spunta almeno un dato.", true);
-    const ds = kind === "int" ? dsInt() : kind === "ton" ? dsTon() : dsUsr(keys);
+    const ds = kind === "int" ? dsInt() : kind === "ton" ? dsTon() : kind === "man" ? dsMan() : dsUsr(keys);
     if (!ds.rows.length) return show($("xMsg"), "Non c'è nessuna riga da esportare con questi filtri.", true);
     show($("xMsg"), "Creo il file…");
     try {
@@ -674,36 +843,40 @@ function openExport(kind) {
 /* da inviare = modificato dopo l'ultimo invio e non ancora toccato dopo l'arrivo dal PC */
 const isNew = (i, last) => (!last || i.modificato > last) && i.modificato !== i.daPC;
 const isNewT = (t, last) => (!last || t.modificato > last) && !t.daPC;
+const isNewM = (m, last) => (!last || m.modificato > last) && m.modificato !== m.daPC;
 async function renderEx() {
-  const last = await getMeta("lastSent"), all = await getAll("interventi"), ton = await getAll("toner");
-  const n = all.filter(i => isNew(i, last)).length, nt = ton.filter(t => isNewT(t, last)).length;
-  $("exInfo").textContent = (last ? `Ultimo invio: ${fmtDt(last.replace("T", " ").slice(0, 16))} (ora locale può differire di 1-2 ore). ` : `Non hai ancora creato nessun file. `) + `Interventi da inviare: ${n}. Cambi toner da inviare: ${nt}.`;
+  const last = await getMeta("lastSent"), all = await getAll("interventi"), ton = await getAll("toner"), man = await getAll("manut");
+  const n = all.filter(i => isNew(i, last)).length, nt = ton.filter(t => isNewT(t, last)).length, nm = man.filter(m => isNewM(m, last)).length;
+  $("exInfo").textContent = (last ? `Ultimo invio: ${fmtDt(last.replace("T", " ").slice(0, 16))} (ora locale può differire di 1-2 ore). ` : `Non hai ancora creato nessun file. `) + `Interventi da inviare: ${n}. Cambi toner da inviare: ${nt}. Interventi del tecnico da inviare: ${nm}.`;
   if (navigator.storage && navigator.storage.estimate) {
     const e = await navigator.storage.estimate(), p = navigator.storage.persisted ? await navigator.storage.persisted() : false;
     $("storInfo").textContent = `Spazio usato dall'app: ${((e.usage || 0) / 1048576).toFixed(1)} MB. Archivio protetto: ${p ? "sì" : "non garantito"}.`;
   }
 }
 async function buildExport(mode) {
-  const last = await getMeta("lastSent"), all = await getAll("interventi"), ton = await getAll("toner");
+  const last = await getMeta("lastSent"), all = await getAll("interventi"), ton = await getAll("toner"), man = await getAll("manut");
   const items = mode === "all" ? all : all.filter(i => isNew(i, last));
   const tons = mode === "all" ? ton : ton.filter(t => isNewT(t, last));
+  const mans = mode === "all" ? man : man.filter(m => isNewM(m, last));
   const us = mode === "all" ? users : users.filter(u => !last || (u.modificato || "") > last);
   const needed = new Set(items.map(i => keyOf(i.utente)));
   const usersOut = [...us, ...users.filter(u => needed.has(u.key) && !us.includes(u))];
   return {
-    tipo: "helpdesk-telefono", versione: 2, creato: nowIso(),
-    utenti: usersOut.map(u => ({ nome: u.nome, sede: u.sede || "", telefono: u.telefono || "", seriale_pc: u.seriale_pc || "", imei: u.imei || "", modificato: u.modificato || nowIso() })),
-    interventi: items.map(i => ({ uid: i.uid, data_ora: i.data_ora, utente: i.utente, sede: i.sede || "", richiesta: i.richiesta, soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", modificato: i.modificato, foto: (i.foto || []).map(f => ({ nome: f.nome, data: f.data })) })),
+    tipo: "helpdesk-telefono", versione: 3, creato: nowIso(),
+    utenti: usersOut.map(u => ({ nome: u.nome, matricola: u.matricola || "", sede: u.sede || "", telefono: u.telefono || "", seriale_pc: u.seriale_pc || "", imei: u.imei || "", modificato: u.modificato || nowIso() })),
+    interventi: items.map(i => ({ uid: i.uid, data_ora: i.data_ora, utente: i.utente, sede: i.sede || "", richiesta: i.richiesta, soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", stato: stOf(i), modificato: i.modificato, foto: (i.foto || []).map(f => ({ nome: f.nome, data: f.data })) })),
     toner: tons.map(t => ({ uid: t.uid, stampante_uid: t.stampante_uid, colore: t.colore, data_ora: t.data_ora, note: t.note || "", modificato: t.modificato })),
-    edifici: mode === "all" ? edifici : [], stampanti: mode === "all" ? stampanti : []
+    manutenzioni: mans.map(m => ({ uid: m.uid, stampante_uid: m.stampante_uid, data_ora: m.data_ora, data_tecnico: m.data_tecnico || "", ticket: m.ticket || "", tecnico: m.tecnico || "", problema: m.problema || "", intervento: m.intervento || "", stato: m.stato, modificato: m.modificato })),
+    edifici: mode === "all" ? edifici : [], stampanti: mode === "all" ? stampanti : [],
+    ...(mode === "all" && scortaAll.length ? { scorta: scortaAll.map(r => ({ modello: r.modello, colore: r.colore, quantita: r.quantita, soglia: r.soglia })), scorta_aggiornata: scortaAgg } : {})
   };
 }
 $("btnExport").onclick = async () => {
   const mode = $("exMode").value, data = await buildExport(mode);
-  if (!data.interventi.length && !data.utenti.length && !data.toner.length) return show($("exMsg"), "Non c'è niente di nuovo da inviare.", true);
+  if (!data.interventi.length && !data.utenti.length && !data.toner.length && !data.manutenzioni.length) return show($("exMsg"), "Non c'è niente di nuovo da inviare.", true);
   const name = `dati_telefono_${localInput().replace(/[-:T]/g, "").slice(0, 12)}.json`;
   const file = new File([JSON.stringify(data)], name, { type: "application/json" });
-  const done = async () => { if (mode === "new") await setMeta("lastSent", data.creato); show($("exMsg"), `File creato: ${data.interventi.length} interventi, ${data.toner.length} cambi toner, ${data.utenti.length} utenti.\nNel PC: File › Importa dati dal telefono.`); renderEx(); };
+  const done = async () => { if (mode === "new") await setMeta("lastSent", data.creato); show($("exMsg"), `File creato: ${data.interventi.length} interventi, ${data.toner.length} cambi toner, ${data.manutenzioni.length} interventi del tecnico, ${data.utenti.length} utenti.\nNel PC: File › Importa dati dal telefono.`); renderEx(); };
   try {
     if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: "Dati Help Desk" }); return done(); }
   } catch (e) { if (e && e.name === "AbortError") return show($("exMsg"), "Invio annullato: niente è stato segnato come inviato.", true); }
@@ -717,11 +890,11 @@ async function mergeFile(file, restore) {
   if (!data || !["helpdesk-pc", "helpdesk-telefono"].includes(data.tipo)) throw new Error("Questo non è un file dell'app Help Desk.");
   if (restore && data.tipo !== "helpdesk-telefono") throw new Error("Per ripristinare serve un file creato da questa app (non quello che arriva dal PC).");
   const fromPc = data.tipo === "helpdesk-pc";
-  let nu = 0, au = 0, ni = 0, ai = 0, sk = 0, ne = 0, ns = 0, nt = 0, pt = 0, skt = 0;
+  let nu = 0, au = 0, ni = 0, ai = 0, sk = 0, ne = 0, ns = 0, nt = 0, pt = 0, skt = 0, nm = 0, am = 0, pm = 0, skm = 0, nsc = 0;
   for (const u of data.utenti || []) {
     const nome = normName(u.nome || ""); if (!nome) continue;
     const k = keyOf(nome), cur = users.find(x => x.key === k), mod = u.modificato || "";
-    const rec = { key: k, nome: cur ? cur.nome : nome, sede: normName(u.sede || ""), telefono: String(u.telefono || "").trim(), seriale_pc: String(u.seriale_pc || "").trim(), imei: String(u.imei || "").trim(), modificato: mod || nowIso() };
+    const rec = { key: k, nome: cur ? cur.nome : nome, matricola: "matricola" in u ? String(u.matricola || "").trim() : (cur ? cur.matricola || "" : ""), sede: normName(u.sede || ""), telefono: String(u.telefono || "").trim(), seriale_pc: String(u.seriale_pc || "").trim(), imei: String(u.imei || "").trim(), modificato: mod || nowIso() };
     if (!cur) { await put("utenti", rec); nu++; }
     else if (mod && mod > (cur.modificato || "")) { await put("utenti", rec); au++; }
     users = (await getAll("utenti"));
@@ -730,7 +903,7 @@ async function mergeFile(file, restore) {
     if (!i.uid || !i.utente || !/^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(i.data_ora || "")) { sk++; continue; }
     const cur = await getKey("interventi", i.uid);
     if (cur && !(i.modificato > cur.modificato)) { sk++; continue; }
-    const rec = { uid: i.uid, data_ora: i.data_ora, utente: normName(i.utente), sede: i.sede || "", richiesta: i.richiesta || "", soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", foto: i.foto || [], creato: i.modificato, modificato: i.modificato || nowIso() };
+    const rec = { uid: i.uid, data_ora: i.data_ora, utente: normName(i.utente), sede: i.sede || "", richiesta: i.richiesta || "", soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", stato: STATI.includes(i.stato) ? i.stato : (cur ? stOf(cur) : "Risolto"), foto: i.foto || [], creato: i.modificato, modificato: i.modificato || nowIso() };
     if (fromPc) rec.daPC = rec.modificato;   /* arrivato dal PC: non va rimandato indietro finché non lo modifichi */
     await put("interventi", rec);
     cur ? ai++ : ni++;
@@ -755,10 +928,31 @@ async function mergeFile(file, restore) {
     if (fromPc) rec.daPC = true;
     await put("toner", rec); nt++;
   }
+  for (const x of data.manutenzioni || []) {
+    if (!x.uid || !x.stampante_uid || !/^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(x.data_ora || "")) { skm++; continue; }
+    const cur = await getKey("manut", x.uid);
+    if (cur && !((x.modificato || "") > (cur.modificato || ""))) { pm++; continue; }
+    const dt = /^\d{4}-\d\d-\d\d$/.test(x.data_tecnico || "") ? x.data_tecnico : "";
+    const rec = { uid: String(x.uid), stampante_uid: String(x.stampante_uid), data_ora: x.data_ora, data_tecnico: dt, ticket: String(x.ticket || ""), tecnico: String(x.tecnico || ""), problema: String(x.problema || ""), intervento: String(x.intervento || ""), stato: STATI_T.includes(x.stato) ? x.stato : (dt ? "Eseguito" : "Richiesto"), modificato: x.modificato || nowIso() };
+    if (fromPc) rec.daPC = rec.modificato;
+    await put("manut", rec);
+    cur ? am++ : nm++;
+  }
+  /* scorta toner: il PC è l'archivio principale, quindi sostituisce i numeri che ho (solo se più recenti) */
+  if (Array.isArray(data.scorta) && (data.scorta_aggiornata || data.creato || "") >= ((await getMeta("scortaAgg")) || "")) {
+    for (const r of await getAll("scorta")) await del("scorta", r.k);
+    for (const r of data.scorta) {
+      if (!r.modello || !COLORI.some(c => c[0] === r.colore)) continue;
+      await put("scorta", { k: scKey(r.modello, r.colore), modello: String(r.modello).trim(), colore: r.colore, quantita: toInt(r.quantita), soglia: toInt(r.soglia) }); nsc++;
+    }
+    await setMeta("scortaAgg", data.scorta_aggiornata || data.creato || nowIso());
+  }
   const verb = restore ? "ripristinati" : "ricevuti dal PC";
   let msg = `Utenti nuovi: ${nu}, aggiornati: ${au}`;
   if ((data.interventi || []).length) msg += `\nInterventi ${verb}: ${ni}, aggiornati: ${ai}, già presenti: ${sk}`;
   if ((data.toner || []).length) msg += `\nCambi toner ${verb}: ${nt}, già presenti: ${pt}` + (skt ? `, ignorati: ${skt}` : "");
+  if ((data.manutenzioni || []).length) msg += `\nInterventi del tecnico ${verb}: ${nm}, aggiornati: ${am}, già presenti: ${pm}` + (skm ? `, ignorati: ${skm}` : "");
+  if (Array.isArray(data.scorta)) msg += `\nScorta toner: ${nsc} voci aggiornate`;
   if (ne || ns) msg += `\nEdifici nuovi: ${ne}, stampanti nuove: ${ns}`;
   return msg;
 }

@@ -48,11 +48,20 @@ SEDI_TOSCANA = ["Arezzo", "Carrara", "DR Toscana", "Firenze", "Grosseto", "Livor
 
 # (nome, colore a schermo, colore leggibile su carta bianca)
 COLORI_TONER = [("Nero", "#1c1c1c", "#1c1c1c"), ("Azzurro", "#1fa3dc", "#0d7fb0"),
-                ("Magenta", "#d6247f", "#c0176c"), ("Giallo", "#f2c500", "#a67c00")]
+                ("Magenta", "#d6247f", "#c0176c"), ("Giallo", "#f2c500", "#a67c00"),
+                ("Vaschetta", "#8a96a3", "#4f5d6b")]
 TONER_NOMI = [c[0] for c in COLORI_TONER]
 TONER_TESTO = {c[0]: c[2] for c in COLORI_TONER}
 
 MODELLI_STAMPANTI = ["bizhub C360i", "bizhub C3351i"]
+
+# stato di un intervento dell'utente e di una richiesta al tecnico Konica
+STATI_INTERVENTO = ["Aperto", "In attesa", "Risolto"]
+STATI_APERTI = ("Aperto", "In attesa")
+STATO_COLORI = {"Aperto": RED, "In attesa": "#b36b00"}
+FILTRO_STATO = ["Tutti", "Da richiamare (aperti e in attesa)", "Aperto", "In attesa", "Risolto"]
+STATI_TECNICO = ["Richiesto", "Eseguito"]
+SOGLIA_SCORTA = 1   # avviso quando di un toner ne resta questo numero (o meno)
 
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tif", ".tiff", ".heic")
 MAX_IMG_PX = 2200   # le foto JPEG più grandi vengono ridotte a questa misura
@@ -60,7 +69,8 @@ THUMB_PX = 72
 
 # (chiave, titolo, acceso all'inizio, larghezza PDF in mm, larghezza Excel)
 USER_COLUMNS = [
-    ("nome", "Utente", True, 55, 26), ("sede", "Sede", True, 30, 16),
+    ("nome", "Utente", True, 55, 26), ("matricola", "Matricola", True, 28, 14),
+    ("sede", "Sede", True, 30, 16),
     ("telefono", "Telefono", True, 35, 18), ("seriale_pc", "Seriale PC", True, 45, 22),
     ("imei", "IMEI cellulare", True, 45, 20), ("n", "N. interventi", False, 22, 14),
     ("ultimo", "Ultimo intervento", False, 32, 18),
@@ -75,6 +85,24 @@ def floor_label(n):
     if n < -1:
         return "Interrato %d" % (-n)
     return "%d° piano" % n
+
+
+def scorta_status(quantita, soglia):
+    if quantita <= 0:
+        return "Finito"
+    if quantita <= soglia:
+        return "In esaurimento"
+    return "OK"
+
+
+def tec_date(m):
+    """Data in cui è venuto il tecnico, già scritta gg/mm/aaaa (vuota se non è ancora venuto)."""
+    if not m.get("data_tecnico"):
+        return ""
+    try:
+        return fmt_date(datetime.strptime(m["data_tecnico"], "%Y-%m-%d"))
+    except ValueError:
+        return m["data_tecnico"]
 
 
 def printer_image_key(model):
@@ -293,11 +321,36 @@ CREATE TABLE IF NOT EXISTS allegati (
     file          TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_all_int ON allegati(intervento_id);
+
+CREATE TABLE IF NOT EXISTS manutenzioni (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    stampante_id INTEGER NOT NULL REFERENCES stampanti(id) ON DELETE CASCADE,
+    data_ora     TEXT NOT NULL,
+    data_tecnico TEXT NOT NULL DEFAULT '',
+    ticket       TEXT NOT NULL DEFAULT '',
+    tecnico      TEXT NOT NULL DEFAULT '',
+    problema     TEXT NOT NULL DEFAULT '',
+    intervento   TEXT NOT NULL DEFAULT '',
+    stato        TEXT NOT NULL DEFAULT 'Eseguito',
+    uid          TEXT NOT NULL DEFAULT '',
+    modificato   TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_man_stampante ON manutenzioni(stampante_id);
+CREATE INDEX IF NOT EXISTS idx_man_data      ON manutenzioni(data_ora);
+
+CREATE TABLE IF NOT EXISTS scorta (
+    modello    TEXT NOT NULL COLLATE NOCASE,
+    colore     TEXT NOT NULL,
+    quantita   INTEGER NOT NULL DEFAULT 0,
+    soglia     INTEGER NOT NULL DEFAULT 1,
+    modificato TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (modello, colore)
+);
 """
 
 SELECT_INTERVENTI = (
     "SELECT i.id, i.data_ora, u.nome AS utente, i.sede, i.richiesta, i.soluzione, "
-    "i.note, i.ticket, u.telefono, u.seriale_pc, u.imei, "
+    "i.note, i.ticket, i.stato, u.telefono, u.seriale_pc, u.imei, u.matricola, "
     "(SELECT COUNT(*) FROM allegati a WHERE a.intervento_id = i.id) AS n_foto "
     "FROM interventi i JOIN utenti u ON u.id = i.utente_id"
 )
@@ -306,6 +359,14 @@ SELECT_TONER = (
     "SELECT t.id, t.data_ora, t.colore, t.note, s.id AS stampante_id, s.nome AS stampante, "
     "s.modello, s.piano, e.id AS edificio_id, e.nome AS edificio, e.sede "
     "FROM toner t JOIN stampanti s ON s.id = t.stampante_id "
+    "JOIN edifici e ON e.id = s.edificio_id"
+)
+
+SELECT_MANUT = (
+    "SELECT m.id, m.uid, m.data_ora, m.data_tecnico, m.ticket, m.tecnico, m.problema, "
+    "m.intervento, m.stato, m.modificato, s.id AS stampante_id, s.nome AS stampante, s.modello, "
+    "s.piano, e.id AS edificio_id, e.nome AS edificio, e.sede "
+    "FROM manutenzioni m JOIN stampanti s ON s.id = m.stampante_id "
     "JOIN edifici e ON e.id = s.edificio_id"
 )
 
@@ -328,7 +389,7 @@ class Database:
 
     def _migrate(self):
         """Aggiunge le colonne nuove ai database creati dalle versioni precedenti."""
-        for col in ("sede", "telefono", "seriale_pc", "imei"):
+        for col in ("sede", "telefono", "seriale_pc", "imei", "matricola"):
             if col not in self._columns("utenti"):
                 self.conn.execute(
                     "ALTER TABLE utenti ADD COLUMN %s TEXT NOT NULL DEFAULT ''" % col)
@@ -346,6 +407,11 @@ class Database:
                 self.conn.execute("ALTER TABLE %s ADD COLUMN uid TEXT NOT NULL DEFAULT ''" % table)
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_stampanti_uid ON stampanti(uid)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_toner_uid ON toner(uid)")
+        if "stato" not in self._columns("interventi"):
+            # gli interventi già registrati sono tutti da considerare chiusi
+            self.conn.execute(
+                "ALTER TABLE interventi ADD COLUMN stato TEXT NOT NULL DEFAULT 'Risolto'")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_man_uid ON manutenzioni(uid)")
         self.conn.commit()
 
     def _seed(self):
@@ -367,7 +433,8 @@ class Database:
 
     def users_with_counts(self):
         rows = self.conn.execute(
-            "SELECT u.id, u.nome, u.sede, u.telefono, u.seriale_pc, u.imei, u.modificato, "
+            "SELECT u.id, u.nome, u.matricola, u.sede, u.telefono, u.seriale_pc, u.imei, "
+            "u.modificato, "
             "COUNT(i.id) AS n, "
             "MAX(i.data_ora) AS ultimo "
             "FROM utenti u LEFT JOIN interventi i ON i.utente_id = u.id "
@@ -377,9 +444,19 @@ class Database:
 
     def find_user(self, name):
         row = self.conn.execute(
-            "SELECT id, nome, sede, telefono, seriale_pc, imei, modificato FROM utenti "
-            "WHERE nome = ?",
+            "SELECT id, nome, matricola, sede, telefono, seriale_pc, imei, modificato "
+            "FROM utenti WHERE nome = ?",
             (normalize_name(name),)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def find_user_by_matricola(self, matricola):
+        m = (matricola or "").strip()
+        if not m:
+            return None
+        row = self.conn.execute(
+            "SELECT id, nome, matricola, sede, telefono, seriale_pc, imei, modificato "
+            "FROM utenti WHERE matricola = ? COLLATE NOCASE ORDER BY nome LIMIT 1", (m,)
         ).fetchone()
         return dict(row) if row else None
 
@@ -394,35 +471,37 @@ class Database:
         return sorted(unique.values(), key=str.casefold)
 
     def _get_or_create_user(self, name, sede="", telefono="", seriale_pc="", imei="",
-                            update=True, modificato=None):
+                            matricola="", update=True, modificato=None):
         name = normalize_name(name)
         row = self.conn.execute(
-            "SELECT id, sede, telefono, seriale_pc, imei FROM utenti WHERE nome = ?",
+            "SELECT id, sede, telefono, seriale_pc, imei, matricola FROM utenti WHERE nome = ?",
             (name,)).fetchone()
-        new = (sede, telefono, seriale_pc, imei)
+        new = (sede, telefono, seriale_pc, imei, matricola)
         if row:
-            if update and tuple(row[k] for k in ("sede", "telefono", "seriale_pc", "imei")) != new:
+            if update and tuple(row[k] for k in ("sede", "telefono", "seriale_pc", "imei",
+                                                 "matricola")) != new:
                 self.conn.execute(
-                    "UPDATE utenti SET sede=?, telefono=?, seriale_pc=?, imei=?, modificato=? "
-                    "WHERE id=?", new + (modificato or now_utc_iso(), row["id"]))
+                    "UPDATE utenti SET sede=?, telefono=?, seriale_pc=?, imei=?, matricola=?, "
+                    "modificato=? WHERE id=?", new + (modificato or now_utc_iso(), row["id"]))
             return row["id"], False
         cur = self.conn.execute(
-            "INSERT INTO utenti(nome, sede, telefono, seriale_pc, imei, modificato) "
-            "VALUES (?,?,?,?,?,?)", (name,) + new + (modificato or now_utc_iso(),))
+            "INSERT INTO utenti(nome, sede, telefono, seriale_pc, imei, matricola, modificato) "
+            "VALUES (?,?,?,?,?,?,?)", (name,) + new + (modificato or now_utc_iso(),))
         return cur.lastrowid, True
 
-    def add_user(self, name, sede="", telefono="", seriale_pc="", imei="", modificato=None):
+    def add_user(self, name, sede="", telefono="", seriale_pc="", imei="", matricola="",
+                 modificato=None):
         with self.conn:
-            return self._get_or_create_user(name, sede, telefono, seriale_pc, imei, update=False,
-                                            modificato=modificato)
+            return self._get_or_create_user(name, sede, telefono, seriale_pc, imei, matricola,
+                                            update=False, modificato=modificato)
 
     def update_user(self, user_id, name, sede="", telefono="", seriale_pc="", imei="",
-                    modificato=None):
+                    matricola="", modificato=None):
         with self.conn:
             self.conn.execute(
-                "UPDATE utenti SET nome=?, sede=?, telefono=?, seriale_pc=?, imei=?, modificato=? "
-                "WHERE id=?", (normalize_name(name), sede, telefono, seriale_pc, imei,
-                               modificato or now_utc_iso(), user_id))
+                "UPDATE utenti SET nome=?, sede=?, telefono=?, seriale_pc=?, imei=?, matricola=?, "
+                "modificato=? WHERE id=?", (normalize_name(name), sede, telefono, seriale_pc, imei,
+                                            matricola, modificato or now_utc_iso(), user_id))
 
     def merge_users(self, source_id, target_id):
         with self.conn:
@@ -443,26 +522,40 @@ class Database:
 
     # --- interventi ---
     def add_intervento(self, data_ora, utente, richiesta, soluzione, note, ticket,
-                       sede="", telefono="", seriale_pc="", imei=""):
+                       sede="", telefono="", seriale_pc="", imei="", matricola="",
+                       stato="Risolto"):
         with self.conn:
-            uid, created = self._get_or_create_user(utente, sede, telefono, seriale_pc, imei)
+            uid, created = self._get_or_create_user(utente, sede, telefono, seriale_pc, imei,
+                                                    matricola)
             cur = self.conn.execute(
                 "INSERT INTO interventi(data_ora, utente_id, sede, richiesta, soluzione, note, "
-                "ticket, modificato) VALUES (?,?,?,?,?,?,?,?)",
-                (data_ora, uid, sede, richiesta, soluzione, note, ticket, now_utc_iso()),
+                "ticket, stato, modificato) VALUES (?,?,?,?,?,?,?,?,?)",
+                (data_ora, uid, sede, richiesta, soluzione, note, ticket, stato, now_utc_iso()),
             )
         return cur.lastrowid, created
 
     def update_intervento(self, iid, data_ora, utente, richiesta, soluzione, note, ticket,
-                          sede="", telefono="", seriale_pc="", imei=""):
+                          sede="", telefono="", seriale_pc="", imei="", matricola="",
+                          stato="Risolto"):
         with self.conn:
-            uid, created = self._get_or_create_user(utente, sede, telefono, seriale_pc, imei)
+            uid, created = self._get_or_create_user(utente, sede, telefono, seriale_pc, imei,
+                                                    matricola)
             self.conn.execute(
                 "UPDATE interventi SET data_ora=?, utente_id=?, sede=?, richiesta=?, soluzione=?, "
-                "note=?, ticket=?, modificato=? WHERE id=?",
-                (data_ora, uid, sede, richiesta, soluzione, note, ticket, now_utc_iso(), iid),
+                "note=?, ticket=?, stato=?, modificato=? WHERE id=?",
+                (data_ora, uid, sede, richiesta, soluzione, note, ticket, stato, now_utc_iso(),
+                 iid),
             )
         return created
+
+    def set_stato(self, iid, stato):
+        with self.conn:
+            self.conn.execute("UPDATE interventi SET stato=?, modificato=? WHERE id=?",
+                              (stato, now_utc_iso(), iid))
+
+    def count_aperti(self):
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM interventi WHERE stato IN ('Aperto','In attesa')").fetchone()[0]
 
     def delete_intervento(self, iid):
         with self.conn:
@@ -471,25 +564,26 @@ class Database:
     # --- scambio con l'app del telefono ---
     def find_intervento_by_uid(self, uid):
         row = self.conn.execute(
-            "SELECT id, modificato FROM interventi WHERE uid = ?", (uid,)).fetchone()
+            "SELECT id, modificato, stato FROM interventi WHERE uid = ?", (uid,)).fetchone()
         return dict(row) if row else None
 
     def save_phone_intervento(self, existing_id, uid, data_ora, utente, sede, richiesta,
-                              soluzione, note, ticket, modificato):
+                              soluzione, note, ticket, modificato, stato="Risolto"):
         """Inserisce (o aggiorna) un intervento arrivato dal telefono. Restituisce l'id."""
         with self.conn:
             user_id, _ = self._get_or_create_user(utente, update=False)
             if existing_id:
                 self.conn.execute(
                     "UPDATE interventi SET data_ora=?, utente_id=?, sede=?, richiesta=?, "
-                    "soluzione=?, note=?, ticket=?, modificato=? WHERE id=?",
-                    (data_ora, user_id, sede, richiesta, soluzione, note, ticket, modificato,
-                     existing_id))
+                    "soluzione=?, note=?, ticket=?, stato=?, modificato=? WHERE id=?",
+                    (data_ora, user_id, sede, richiesta, soluzione, note, ticket, stato,
+                     modificato, existing_id))
                 return existing_id
             cur = self.conn.execute(
                 "INSERT INTO interventi(data_ora, utente_id, sede, richiesta, soluzione, note, "
-                "ticket, uid, modificato) VALUES (?,?,?,?,?,?,?,?,?)",
-                (data_ora, user_id, sede, richiesta, soluzione, note, ticket, uid, modificato))
+                "ticket, stato, uid, modificato) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (data_ora, user_id, sede, richiesta, soluzione, note, ticket, stato, uid,
+                 modificato))
             return cur.lastrowid
 
     def ensure_sync_ids(self):
@@ -498,8 +592,11 @@ class Database:
         now = now_utc_iso()
         with self.conn:
             self.conn.execute("UPDATE interventi SET modificato = ? WHERE modificato = ''", (now,))
+            self.conn.execute("UPDATE manutenzioni SET modificato = ? WHERE modificato = ''",
+                              (now,))
             for table, prefix in (("interventi", "pc-"), ("edifici", "ed-"),
-                                  ("stampanti", "st-"), ("toner", "to-")):
+                                  ("stampanti", "st-"), ("toner", "to-"),
+                                  ("manutenzioni", "mt-")):
                 for r in self.conn.execute("SELECT id FROM %s WHERE uid = ''" % table).fetchall():
                     self.conn.execute("UPDATE %s SET uid = ? WHERE id = ?" % table,
                                       (prefix + uuid.uuid4().hex, r["id"]))
@@ -512,10 +609,13 @@ class Database:
         return self.conn.execute("SELECT 1 FROM toner WHERE uid = ?", (uid,)).fetchone() is not None
 
     def add_toner_from_phone(self, stampante_id, uid, colore, data_ora, note):
+        """Registra un cambio toner del telefono; se la scorta è tracciata la scala di uno.
+        Restituisce la riga di scorta aggiornata (o None)."""
         with self.conn:
             self.conn.execute(
                 "INSERT INTO toner(stampante_id, colore, data_ora, note, uid) VALUES (?,?,?,?,?)",
                 (stampante_id, colore, data_ora, note, uid))
+            return self._scorta_scale(self._modello_of(stampante_id), colore, -1)
 
     # --- foto allegate agli interventi ---
     def allegati_of(self, iid):
@@ -533,7 +633,7 @@ class Database:
             self.conn.execute("DELETE FROM allegati WHERE id = ?", (aid,))
 
     def search(self, utente="", sede="", dal=None, al=None, ticket_mode="tutti", ticket="",
-               testo=""):
+               testo="", stato=""):
         sql = SELECT_INTERVENTI + " WHERE 1=1"
         params = []
         if dal:
@@ -546,12 +646,17 @@ class Database:
             sql += " AND i.ticket <> ''"
         elif ticket_mode == "senza":
             sql += " AND i.ticket = ''"
+        if stato == "aperti":
+            sql += " AND i.stato IN ('Aperto','In attesa')"
+        elif stato in STATI_INTERVENTO:
+            sql += " AND i.stato = ?"
+            params.append(stato)
         sql += " ORDER BY i.data_ora DESC, i.id DESC"
         rows = [dict(r) for r in self.conn.execute(sql, params)]
 
         terms = utente.casefold().split()
         if terms:
-            rows = [r for r in rows if matches_all(terms, r["utente"])]
+            rows = [r for r in rows if matches_all(terms, r["utente"] + " " + r["matricola"])]
         s = sede.strip().casefold()
         if s:
             rows = [r for r in rows if s in r["sede"].casefold()]
@@ -615,7 +720,9 @@ class Database:
         rows = self.conn.execute(
             "SELECT s.id, s.edificio_id, s.piano, s.nome, s.modello, s.ip, s.note, "
             "(SELECT t.colore || '|' || t.data_ora FROM toner t WHERE t.stampante_id = s.id "
-            " ORDER BY t.data_ora DESC, t.id DESC LIMIT 1) AS ultimo "
+            " ORDER BY t.data_ora DESC, t.id DESC LIMIT 1) AS ultimo, "
+            "(SELECT COUNT(*) FROM manutenzioni m WHERE m.stampante_id = s.id "
+            " AND m.stato = 'Richiesto') AS man_richieste "
             "FROM stampanti s WHERE s.edificio_id = ? ORDER BY s.piano DESC, s.id",
             (edificio_id,))
         return [dict(r) for r in rows]
@@ -656,17 +763,170 @@ class Database:
         with self.conn:
             self.conn.execute("DELETE FROM stampanti WHERE id=?", (sid,))
 
+    def _modello_of(self, stampante_id):
+        row = self.conn.execute("SELECT modello FROM stampanti WHERE id=?",
+                                (stampante_id,)).fetchone()
+        return row["modello"] if row else ""
+
     # --- cambi toner ---
     def add_toner(self, stampante_id, colori, data_ora, note=""):
+        """Registra i cambi toner e scala la scorta (se la tieni). Restituisce l'elenco dei toner
+        che, dopo questo cambio, sono in esaurimento o finiti."""
+        low = []
         with self.conn:
+            modello = self._modello_of(stampante_id)
             for colore in colori:
                 self.conn.execute(
                     "INSERT INTO toner(stampante_id, colore, data_ora, note) VALUES (?,?,?,?)",
                     (stampante_id, colore, data_ora, note))
+                row = self._scorta_scale(modello, colore, -1)
+                if row and scorta_status(row["quantita"], row["soglia"]) != "OK":
+                    low.append(row)
+        return low
 
     def delete_toner(self, tid):
+        """Elimina un cambio toner; se la scorta è tracciata, il pezzo torna in magazzino."""
         with self.conn:
+            r = self.conn.execute(
+                "SELECT t.colore, s.modello FROM toner t JOIN stampanti s ON s.id = t.stampante_id "
+                "WHERE t.id = ?", (tid,)).fetchone()
             self.conn.execute("DELETE FROM toner WHERE id=?", (tid,))
+            if r:
+                self._scorta_scale(r["modello"], r["colore"], +1)
+
+    # --- scorta toner (magazzino) ---
+    def scorta_all(self):
+        rows = self.conn.execute(
+            "SELECT modello, colore, quantita, soglia FROM scorta "
+            "ORDER BY modello COLLATE NOCASE, colore")
+        return [dict(r) for r in rows]
+
+    def scorta_get(self, modello, colore):
+        row = self.conn.execute(
+            "SELECT modello, colore, quantita, soglia FROM scorta WHERE modello = ? AND colore = ?",
+            (modello, colore)).fetchone()
+        return dict(row) if row else None
+
+    def set_scorta(self, modello, colore, quantita, soglia):
+        modello = " ".join((modello or "").split())
+        quantita, soglia = max(0, int(quantita)), max(0, int(soglia))
+        with self.conn:
+            if self.scorta_get(modello, colore):
+                self.conn.execute(
+                    "UPDATE scorta SET quantita=?, soglia=?, modificato=? "
+                    "WHERE modello = ? AND colore = ?",
+                    (quantita, soglia, now_utc_iso(), modello, colore))
+            else:
+                self.conn.execute(
+                    "INSERT INTO scorta(modello, colore, quantita, soglia, modificato) "
+                    "VALUES (?,?,?,?,?)", (modello, colore, quantita, soglia, now_utc_iso()))
+
+    def add_scorta(self, modello, colore, n):
+        """Toner ricevuti: li aggiunge al magazzino (se non era tracciato, comincia da qui)."""
+        modello = " ".join((modello or "").split())
+        row = self.scorta_get(modello, colore)
+        if row:
+            self.set_scorta(modello, colore, row["quantita"] + n, row["soglia"])
+        else:
+            self.set_scorta(modello, colore, n, SOGLIA_SCORTA)
+
+    def delete_scorta(self, modello, colore):
+        with self.conn:
+            self.conn.execute("DELETE FROM scorta WHERE modello = ? AND colore = ?",
+                              (modello, colore))
+
+    def _scorta_scale(self, modello, colore, delta):
+        """Cambia la quantità (mai sotto zero) solo se questo toner è tracciato."""
+        row = self.scorta_get(modello, colore)
+        if not row:
+            return None
+        row["quantita"] = max(0, row["quantita"] + delta)
+        self.conn.execute(
+            "UPDATE scorta SET quantita=?, modificato=? WHERE modello = ? AND colore = ?",
+            (row["quantita"], now_utc_iso(), modello, colore))
+        return row
+
+    def scorta_bassa(self):
+        return [r for r in self.scorta_all()
+                if scorta_status(r["quantita"], r["soglia"]) != "OK"]
+
+    # --- interventi del tecnico Konica sulle stampanti ---
+    def manutenzioni_search(self, edificio_id=None, stampante_id=None, stato="", dal=None, al=None,
+                            testo=""):
+        sql = SELECT_MANUT + " WHERE 1=1"
+        params = []
+        if edificio_id:
+            sql += " AND e.id = ?"
+            params.append(edificio_id)
+        if stampante_id:
+            sql += " AND s.id = ?"
+            params.append(stampante_id)
+        if stato in STATI_TECNICO:
+            sql += " AND m.stato = ?"
+            params.append(stato)
+        if dal:
+            sql += " AND substr(m.data_ora,1,10) >= ?"
+            params.append(dal.isoformat())
+        if al:
+            sql += " AND substr(m.data_ora,1,10) <= ?"
+            params.append(al.isoformat())
+        sql += " ORDER BY m.data_ora DESC, m.id DESC"
+        rows = [dict(r) for r in self.conn.execute(sql, params)]
+        terms = testo.casefold().split()
+        if terms:
+            rows = [r for r in rows if matches_all(terms, " ".join((
+                r["problema"], r["intervento"], r["tecnico"], r["ticket"], r["stampante"],
+                r["modello"])))]
+        return rows
+
+    def manutenzioni_of(self, stampante_id):
+        return self.manutenzioni_search(stampante_id=stampante_id)
+
+    def get_manutenzione(self, mid):
+        row = self.conn.execute(SELECT_MANUT + " WHERE m.id = ?", (mid,)).fetchone()
+        return dict(row) if row else None
+
+    def add_manutenzione(self, stampante_id, data_ora, data_tecnico, ticket, tecnico, problema,
+                         intervento, stato, uid="", modificato=None):
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO manutenzioni(stampante_id, data_ora, data_tecnico, ticket, tecnico, "
+                "problema, intervento, stato, uid, modificato) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (stampante_id, data_ora, data_tecnico, ticket, tecnico, problema, intervento,
+                 stato, uid, modificato or now_utc_iso()))
+        return cur.lastrowid
+
+    def update_manutenzione(self, mid, stampante_id, data_ora, data_tecnico, ticket, tecnico,
+                            problema, intervento, stato, modificato=None):
+        with self.conn:
+            self.conn.execute(
+                "UPDATE manutenzioni SET stampante_id=?, data_ora=?, data_tecnico=?, ticket=?, "
+                "tecnico=?, problema=?, intervento=?, stato=?, modificato=? WHERE id=?",
+                (stampante_id, data_ora, data_tecnico, ticket, tecnico, problema, intervento,
+                 stato, modificato or now_utc_iso(), mid))
+
+    def set_stato_manutenzione(self, mid, stato, data_tecnico=None):
+        with self.conn:
+            if data_tecnico is not None:
+                self.conn.execute(
+                    "UPDATE manutenzioni SET stato=?, data_tecnico=?, modificato=? WHERE id=?",
+                    (stato, data_tecnico, now_utc_iso(), mid))
+            else:
+                self.conn.execute("UPDATE manutenzioni SET stato=?, modificato=? WHERE id=?",
+                                  (stato, now_utc_iso(), mid))
+
+    def delete_manutenzione(self, mid):
+        with self.conn:
+            self.conn.execute("DELETE FROM manutenzioni WHERE id=?", (mid,))
+
+    def find_manutenzione_by_uid(self, uid):
+        row = self.conn.execute("SELECT id, modificato FROM manutenzioni WHERE uid = ?",
+                                (uid,)).fetchone()
+        return dict(row) if row else None
+
+    def count_manut_richieste(self):
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM manutenzioni WHERE stato = 'Richiesto'").fetchone()[0]
 
     def toner_of(self, stampante_id):
         rows = self.conn.execute(
@@ -767,16 +1027,19 @@ def export_excel(path, rows, filtri_desc):
     ws.title = "Interventi"
     _excel_sheet(
         ws,
-        ["Data e ora", "Utente", "Sede", "N. ticket", "Per cosa mi hanno chiamato",
-         "Come ho risolto", "Note"],
-        [[fmt_dt(r["data_ora"]), r["utente"], r["sede"], r["ticket"], r["richiesta"],
-          r["soluzione"], r["note"]] for r in rows],
-        [17, 24, 14, 14, 50, 50, 35], text_cols=(4,))
+        ["Data e ora", "Utente", "Matricola", "Sede", "N. ticket", "Stato",
+         "Per cosa mi hanno chiamato", "Come ho risolto", "Note"],
+        [[fmt_dt(r["data_ora"]), r["utente"], r["matricola"], r["sede"], r["ticket"], r["stato"],
+          r["richiesta"], r["soluzione"], r["note"]] for r in rows],
+        [17, 24, 12, 14, 14, 11, 50, 50, 35], text_cols=(3, 5))
     per_user = [[nome, cnt] for nome, cnt in Counter(r["utente"] for r in rows).most_common()]
     per_sede = [[(sede or "(non indicata)"), cnt]
                 for sede, cnt in Counter(r["sede"] for r in rows).most_common()]
+    cnt_stato = Counter(r["stato"] for r in rows)
+    per_stato = [[s, cnt_stato[s]] for s in STATI_INTERVENTO]
     _excel_summary(wb, "Riepilogo interventi", filtri_desc, "Totale interventi", len(rows),
-                   [(["Utente", "Interventi"], per_user), (["Sede", "Interventi"], per_sede)])
+                   [(["Stato", "Interventi"], per_stato), (["Utente", "Interventi"], per_user),
+                    (["Sede", "Interventi"], per_sede)])
     wb.save(path)
 
 
@@ -805,6 +1068,36 @@ def export_toner_excel(path, rows, filtri_desc):
         lines.append([names[key]] + per_color + [sum(per_color)])
     _excel_summary(wb, "Riepilogo cambi toner", filtri_desc, "Totale cambi toner", len(rows),
                    [(["Stampante"] + TONER_NOMI + ["Totale"], lines)])
+    wb.save(path)
+
+
+def export_manut_excel(path, rows, filtri_desc):
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Interventi tecnico"
+    _excel_sheet(
+        ws,
+        ["Richiesta del", "Sede", "Edificio", "Piano", "Stampante", "Modello", "N. ticket",
+         "Stato", "Intervento del tecnico", "Tecnico", "Problema segnalato",
+         "Intervento svolto"],
+        [[fmt_dt(r["data_ora"]), r["sede"], r["edificio"], floor_label(r["piano"]),
+          r["stampante"], r["modello"], r["ticket"], r["stato"],
+          fmt_date(datetime.strptime(r["data_tecnico"], "%Y-%m-%d")) if r["data_tecnico"] else "",
+          r["tecnico"], r["problema"], r["intervento"]] for r in rows],
+        [17, 14, 30, 14, 26, 16, 14, 11, 16, 20, 45, 45], text_cols=(7,))
+    names, counts = {}, Counter()
+    for r in rows:
+        names[r["stampante_id"]] = "%s - %s - %s" % (
+            r["edificio"], floor_label(r["piano"]), r["stampante"] or r["modello"] or "Stampante")
+        counts[(r["stampante_id"], r["stato"])] += 1
+    lines = []
+    for key in sorted(names, key=lambda k: names[k].casefold()):
+        per = [counts[(key, s)] for s in STATI_TECNICO]
+        lines.append([names[key]] + per + [sum(per)])
+    _excel_summary(wb, "Riepilogo interventi del tecnico", filtri_desc, "Totale interventi",
+                   len(rows), [(["Stampante"] + STATI_TECNICO + ["Totale"], lines)])
     wb.save(path)
 
 
@@ -841,8 +1134,50 @@ def import_phone_toner(db, items, res):
         if not sid:
             res["toner_saltati"] += 1
             continue
-        db.add_toner_from_phone(sid, uid, colore, data_ora, _clean(t.get("note")))
+        row = db.add_toner_from_phone(sid, uid, colore, data_ora, _clean(t.get("note")))
         res["toner_nuovi"] += 1
+        if row and scorta_status(row["quantita"], row["soglia"]) != "OK":
+            tag = "%s %s: ne restano %d" % (row["colore"], row["modello"], row["quantita"])
+            if tag not in res["scorta_bassa"]:
+                res["scorta_bassa"].append(tag)
+
+
+def import_phone_manutenzioni(db, items, res):
+    """Interventi del tecnico Konica registrati sul telefono (stessa regola degli interventi:
+    se ci sono già si aggiornano solo se sul telefono sono stati modificati dopo)."""
+    for m in items:
+        uid = _clean(m.get("uid"))
+        data_ora = _clean(m.get("data_ora"))
+        try:
+            datetime.strptime(data_ora, "%Y-%m-%d %H:%M")
+        except ValueError:
+            uid = ""
+        data_t = _clean(m.get("data_tecnico"))
+        if data_t:
+            try:
+                datetime.strptime(data_t, "%Y-%m-%d")
+            except ValueError:
+                data_t = ""
+        stato = _clean(m.get("stato"))
+        if stato not in STATI_TECNICO:
+            stato = "Eseguito" if data_t else "Richiesto"
+        sid = db.find_stampante_by_uid(_clean(m.get("stampante_uid")))
+        if not uid or not sid:
+            res["manut_saltate"] += 1
+            continue
+        mod = _clean(m.get("modificato")) or now_utc_iso()
+        existing = db.find_manutenzione_by_uid(uid)
+        if existing and not mod > existing["modificato"]:
+            res["manut_gia_presenti"] += 1
+            continue
+        args = (sid, data_ora, data_t, _clean(m.get("ticket")), _clean(m.get("tecnico")),
+                _clean(m.get("problema")), _clean(m.get("intervento")), stato)
+        if existing:
+            db.update_manutenzione(existing["id"], *args, modificato=mod)
+            res["manut_aggiornate"] += 1
+        else:
+            db.add_manutenzione(*args, uid=uid, modificato=mod)
+            res["manut_nuove"] += 1
 
 
 def import_phone_data(db, data):
@@ -853,27 +1188,34 @@ def import_phone_data(db, data):
         raise ValueError("Questo non è un file dati dell'app Help Desk.")
     res = {"utenti_nuovi": 0, "utenti_aggiornati": 0, "interventi_nuovi": 0,
            "interventi_aggiornati": 0, "interventi_gia_presenti": 0, "foto": 0, "saltati": 0,
-           "toner_nuovi": 0, "toner_gia_presenti": 0, "toner_saltati": 0}
+           "toner_nuovi": 0, "toner_gia_presenti": 0, "toner_saltati": 0, "scorta_bassa": [],
+           "manut_nuove": 0, "manut_aggiornate": 0, "manut_gia_presenti": 0, "manut_saltate": 0}
 
     for u in data.get("utenti") or []:
         nome = normalize_name(_clean(u.get("nome")))
         if not nome:
             continue
-        fields = (normalize_name(_clean(u.get("sede"))), _clean(u.get("telefono")),
-                  _clean(u.get("seriale_pc")), _clean(u.get("imei")))
-        mod = _clean(u.get("modificato"))
         cur = db.find_user(nome)
+        # un file di una versione vecchia dell'app non ha la matricola: in quel caso si tiene
+        # quella già salvata
+        matricola = _clean(u.get("matricola")) if "matricola" in u else (
+            cur["matricola"] if cur else "")
+        fields = (normalize_name(_clean(u.get("sede"))), _clean(u.get("telefono")),
+                  _clean(u.get("seriale_pc")), _clean(u.get("imei")), matricola)
+        mod = _clean(u.get("modificato"))
         if not cur:
             db.add_user(nome, *fields, modificato=mod or now_utc_iso())
             res["utenti_nuovi"] += 1
         elif mod and mod > (cur.get("modificato") or "") and \
-                fields != (cur["sede"], cur["telefono"], cur["seriale_pc"], cur["imei"]):
+                fields != (cur["sede"], cur["telefono"], cur["seriale_pc"], cur["imei"],
+                           cur["matricola"]):
             db.update_user(cur["id"], cur["nome"], *fields, modificato=mod)
             res["utenti_aggiornati"] += 1
 
     if data.get("tipo") != "helpdesk-telefono":
         return res
     import_phone_toner(db, data.get("toner") or [], res)
+    import_phone_manutenzioni(db, data.get("manutenzioni") or [], res)
     for it in data.get("interventi") or []:
         uid = _clean(it.get("uid"))
         utente = normalize_name(_clean(it.get("utente")))
@@ -889,10 +1231,14 @@ def import_phone_data(db, data):
         if existing and not mod > existing["modificato"]:
             res["interventi_gia_presenti"] += 1
             continue
+        stato = _clean(it.get("stato"))
+        if stato not in STATI_INTERVENTO:
+            stato = existing["stato"] if existing else "Risolto"
         iid = db.save_phone_intervento(
             existing["id"] if existing else None, uid, _clean(it.get("data_ora")), utente,
             normalize_name(_clean(it.get("sede"))), _clean(it.get("richiesta")),
-            _clean(it.get("soluzione")), _clean(it.get("note")), _clean(it.get("ticket")), mod)
+            _clean(it.get("soluzione")), _clean(it.get("note")), _clean(it.get("ticket")), mod,
+            stato)
         res["interventi_aggiornati" if existing else "interventi_nuovi"] += 1
 
         have = {a["nome"] for a in db.allegati_of(iid)}
@@ -956,16 +1302,17 @@ def build_phone_export(db, with_photos=False):
     rimanda indietro il programma li riconosce e non li duplica."""
     now = now_utc_iso()
     db.ensure_sync_ids()
-    users = [{k: u[k] for k in ("nome", "sede", "telefono", "seriale_pc", "imei", "modificato")}
+    users = [{k: u[k] for k in ("nome", "matricola", "sede", "telefono", "seriale_pc", "imei",
+                                "modificato")}
              for u in db.users_with_counts()]
     rows = db.conn.execute(
         "SELECT i.id, i.uid, i.data_ora, u.nome AS utente, i.sede, i.richiesta, i.soluzione, "
-        "i.note, i.ticket, i.modificato FROM interventi i JOIN utenti u ON u.id = i.utente_id "
-        "ORDER BY i.data_ora, i.id").fetchall()
+        "i.note, i.ticket, i.stato, i.modificato FROM interventi i "
+        "JOIN utenti u ON u.id = i.utente_id ORDER BY i.data_ora, i.id").fetchall()
     items, n_foto = [], 0
     for r in rows:
         item = {k: r[k] for k in ("uid", "data_ora", "utente", "sede", "richiesta", "soluzione",
-                                  "note", "ticket", "modificato")}
+                                  "note", "ticket", "stato", "modificato")}
         item["foto"] = []
         if with_photos:
             for a in db.allegati_of(r["id"]):
@@ -986,9 +1333,18 @@ def build_phone_export(db, with_photos=False):
              for r in db.conn.execute(
                  "SELECT t.uid, s.uid AS stampante_uid, t.colore, t.data_ora, t.note "
                  "FROM toner t JOIN stampanti s ON s.id = t.stampante_id ORDER BY t.id").fetchall()]
-    return ({"tipo": "helpdesk-pc", "versione": 3, "creato": now, "utenti": users,
+    manutenzioni = [{k: r[k] for k in ("uid", "stampante_uid", "data_ora", "data_tecnico",
+                                       "ticket", "tecnico", "problema", "intervento", "stato",
+                                       "modificato")}
+                    for r in db.conn.execute(
+                        "SELECT m.uid, s.uid AS stampante_uid, m.data_ora, m.data_tecnico, "
+                        "m.ticket, m.tecnico, m.problema, m.intervento, m.stato, m.modificato "
+                        "FROM manutenzioni m JOIN stampanti s ON s.id = m.stampante_id "
+                        "ORDER BY m.id").fetchall()]
+    return ({"tipo": "helpdesk-pc", "versione": 4, "creato": now, "utenti": users,
              "interventi": items, "edifici": edifici, "stampanti": stampanti,
-             "toner": toner}, n_foto)
+             "toner": toner, "manutenzioni": manutenzioni, "scorta": db.scorta_all(),
+             "scorta_aggiornata": now}, n_foto)
 
 
 def user_cell(u, key):
@@ -1113,14 +1469,50 @@ def build_pdf(path, titolo, filtri_desc, conteggio, headers, rows, col_widths_mm
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
 
 
+def stato_html(stato, colori):
+    from xml.sax.saxutils import escape
+    color = colori.get(stato)
+    if not color:
+        return stato
+    return ("html", '<font color="%s"><b>%s</b></font>' % (color, escape(stato)))
+
+
 def export_pdf(path, rows, filtri_desc):
     build_pdf(
         path, "Registro interventi Help Desk", filtri_desc, "Interventi",
-        ["Data e ora", "Utente", "Sede", "Ticket", "Per cosa mi hanno chiamato",
-         "Come ho risolto", "Note"],
-        [[fmt_dt(r["data_ora"]), r["utente"], r["sede"], r["ticket"], r["richiesta"],
-          r["soluzione"], r["note"]] for r in rows],
-        [22, 30, 22, 18, 62, 66, 47], "Nessun intervento per i filtri selezionati.")
+        ["Data e ora", "Utente", "Matricola", "Sede", "Ticket", "Stato",
+         "Per cosa mi hanno chiamato", "Come ho risolto", "Note"],
+        [[fmt_dt(r["data_ora"]), r["utente"], r["matricola"], r["sede"], r["ticket"],
+          stato_html(r["stato"], STATO_COLORI), r["richiesta"], r["soluzione"], r["note"]]
+         for r in rows],
+        [23, 28, 20, 18, 16, 18, 53, 53, 38], "Nessun intervento per i filtri selezionati.")
+
+
+def export_manut_pdf(path, rows, filtri_desc):
+    from xml.sax.saxutils import escape
+
+    cells = []
+    for r in rows:
+        dove = "%s\n%s - %s" % (r["stampante"] or r["modello"] or "Stampante", r["edificio"],
+                                floor_label(r["piano"]))
+        if r["stampante"] and r["modello"]:
+            dove = "%s (%s)\n%s - %s" % (r["stampante"], r["modello"], r["edificio"],
+                                         floor_label(r["piano"]))
+        tec = []
+        if r["data_tecnico"]:
+            tec.append(fmt_date(datetime.strptime(r["data_tecnico"], "%Y-%m-%d")))
+        if r["tecnico"]:
+            tec.append(r["tecnico"])
+        stato = ("html", '<font color="%s"><b>%s</b></font>'
+                 % (RED if r["stato"] == "Richiesto" else GREEN_DARK, escape(r["stato"])))
+        cells.append([fmt_dt(r["data_ora"]), dove, r["ticket"], stato, "\n".join(tec),
+                      r["problema"], r["intervento"]])
+    build_pdf(
+        path, "Interventi del tecnico sulle stampanti", filtri_desc, "Interventi",
+        ["Richiesta del", "Stampante", "Ticket", "Stato", "Tecnico",
+         "Problema segnalato", "Intervento svolto"],
+        cells, [24, 56, 20, 20, 32, 55, 60],
+        "Nessun intervento del tecnico per i filtri selezionati.")
 
 
 def export_toner_pdf(path, rows, filtri_desc):
@@ -1212,7 +1604,8 @@ class ModalDialog(tk.Toplevel):
 class UserDialog(ModalDialog):
     """Scheda di un utente: nome, sede e dati della postazione."""
 
-    FIELDS = (("Nome e cognome *", "nome"), ("Sede", "sede"), ("Telefono", "telefono"),
+    FIELDS = (("Nome e cognome *", "nome"), ("Matricola aziendale", "matricola"),
+              ("Sede", "sede"), ("Telefono", "telefono"),
               ("Seriale del PC", "seriale_pc"), ("IMEI cellulare aziendale", "imei"))
 
     def __init__(self, parent, user, sedi, on_save):
@@ -1393,16 +1786,18 @@ class PrinterDialog(ModalDialog):
         ttk.Button(bf, text="Modifica stampante…", command=self.edit).pack(side="left")
         ttk.Button(bf, text="Elimina stampante", style="Danger.TButton",
                    command=self.delete).pack(side="left", padx=(8, 0))
+        ttk.Button(info, text="Interventi del tecnico Konica…", style="Primary.TButton",
+                   command=self.open_manut).pack(anchor="w", pady=(8, 0))
 
-        form = ttk.LabelFrame(body, text="Registra un cambio toner", padding=10)
+        form = ttk.LabelFrame(body, text="Registra un cambio toner o vaschetta", padding=10)
         form.grid(row=1, column=0, sticky="ew", pady=(12, 0))
         r1 = ttk.Frame(form)
         r1.pack(fill="x")
-        ttk.Label(r1, text="Colori cambiati:").pack(side="left")
+        ttk.Label(r1, text="Cambiati:").pack(side="left")
         for nome, _, testo in COLORI_TONER:
             tk.Checkbutton(r1, text=nome, variable=self.colors[nome], bg=LIGHT, fg=testo,
                            activebackground=LIGHT, activeforeground=testo, selectcolor=WHITE,
-                           font=("Segoe UI", 11, "bold")).pack(side="left", padx=(14, 0))
+                           font=("Segoe UI", 11, "bold")).pack(side="left", padx=(12, 0))
         r2 = ttk.Frame(form)
         r2.pack(fill="x", pady=(10, 0))
         ttk.Label(r2, text="Data e ora").pack(side="left")
@@ -1413,7 +1808,7 @@ class PrinterDialog(ModalDialog):
                                                                  expand=True)
         r3 = ttk.Frame(form)
         r3.pack(fill="x", pady=(10, 0))
-        ttk.Button(r3, text="Registra cambio toner", style="Save.TButton",
+        ttk.Button(r3, text="Registra il cambio", style="Save.TButton",
                    command=self.register).pack(side="left")
         self.lbl_status = ttk.Label(r3, text="", foreground=GREEN, font=("Segoe UI", 10, "bold"))
         self.lbl_status.pack(side="left", padx=12)
@@ -1422,7 +1817,7 @@ class PrinterDialog(ModalDialog):
         hist.grid(row=2, column=0, sticky="nsew", pady=(12, 0))
         hist.columnconfigure(0, weight=1)
         hist.rowconfigure(1, weight=1)
-        ttk.Label(hist, text="Storico cambi toner di questa stampante",
+        ttk.Label(hist, text="Storico cambi toner e vaschetta di questa stampante",
                   font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 4))
         self.tree = ttk.Treeview(hist, columns=("data", "colore", "note"), show="headings",
                                  selectmode="browse", height=6)
@@ -1468,6 +1863,13 @@ class PrinterDialog(ModalDialog):
             lines.append("IP: %s" % p["ip"])
         if p["note"]:
             lines.append("Note: %s" % p["note"])
+        man = self.app.db.manutenzioni_of(self.printer_id)
+        if man:
+            richieste = sum(1 for m in man if m["stato"] == "Richiesto")
+            tec = "Tecnico Konica: %d interventi (ultimo %s)" % (len(man), fmt_dt(man[0]["data_ora"])[:10])
+            if richieste:
+                tec += " - %d da eseguire" % richieste
+            lines.append(tec)
         self.lbl_info.configure(text="\n".join(lines))
         self.tree.delete(*self.tree.get_children())
         for r in self.app.db.toner_of(self.printer_id):
@@ -1484,8 +1886,8 @@ class PrinterDialog(ModalDialog):
             messagebox.showwarning(APP_NAME, "La data non è valida.\nScrivila così: "
                                    "gg/mm/aaaa oo:mm (esempio 13/11/2026 14:30).", parent=self)
             return
-        self.app.db.add_toner(self.printer_id, colori, dt.strftime("%Y-%m-%d %H:%M"),
-                              self.var_note.get().strip())
+        low = self.app.db.add_toner(self.printer_id, colori, dt.strftime("%Y-%m-%d %H:%M"),
+                                    self.var_note.get().strip())
         for v in self.colors.values():
             v.set(False)
         self.var_note.set("")
@@ -1494,6 +1896,14 @@ class PrinterDialog(ModalDialog):
         self.set_now()
         self.refresh()
         self.app.after_toner_change()
+        if low:
+            messagebox.showwarning(
+                APP_NAME, "Attenzione: la scorta sta finendo.\n\n%s\n\nRicordati di ordinarne."
+                % "\n".join("- %s %s: ne restano %d" % (r["colore"], r["modello"], r["quantita"])
+                            for r in low), parent=self)
+
+    def open_manut(self):
+        PrinterManutenzioniDialog(self.app, self.printer_id, parent=self)
 
     def delete_toner_selected(self):
         sel = self.tree.selection()
@@ -1522,10 +1932,283 @@ class PrinterDialog(ModalDialog):
     def delete(self):
         n = len(self.app.db.toner_of(self.printer_id))
         extra = ("\nVerranno eliminati anche i %d cambi toner registrati." % n) if n else ""
+        n_m = len(self.app.db.manutenzioni_of(self.printer_id))
+        if n_m:
+            extra += "\nE i %d interventi del tecnico." % n_m
         if messagebox.askyesno(APP_NAME, "Eliminare questa stampante?%s" % extra,
                                icon="warning", parent=self):
             self.app.db.delete_stampante(self.printer_id)
             self.app.after_printers_change()
+            self.destroy()
+
+
+class ManutenzioneDialog(ModalDialog):
+    """Richiesta o intervento del tecnico Konica su una stampante."""
+
+    def __init__(self, parent, printers, current, on_save, lock_printer=False):
+        is_new = not current.get("id")
+        super().__init__(parent, "Nuovo intervento del tecnico" if is_new
+                         else "Modifica intervento del tecnico")
+        self.resizable(False, False)
+        self.on_save = on_save
+        self.printers = printers
+        c = current
+        label = next((l for l, i in printers.items() if i == c.get("stampante_id")), "")
+        self.v_pr = tk.StringVar(value=label)
+        self.v_dt = tk.StringVar(value=fmt_dt(c["data_ora"]) if c.get("data_ora")
+                                 else datetime.now().strftime("%d/%m/%Y %H:%M"))
+        self.v_dtec = tk.StringVar(
+            value=fmt_date(datetime.strptime(c["data_tecnico"], "%Y-%m-%d"))
+            if c.get("data_tecnico") else "")
+        self.v_ticket = tk.StringVar(value=c.get("ticket", ""))
+        self.v_tec = tk.StringVar(value=c.get("tecnico", ""))
+        self.v_stato = tk.StringVar(value=c.get("stato", "Richiesto"))
+        self.v_stato.trace_add("write", self._stato_changed)
+
+        body = ttk.Frame(self, padding=16)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(1, weight=1)
+        ttk.Label(body, text="Stampante *").grid(row=0, column=0, sticky="w", pady=5, padx=(0, 14))
+        ttk.Combobox(body, textvariable=self.v_pr, values=list(printers), width=62,
+                     state="disabled" if lock_printer else "readonly").grid(
+            row=0, column=1, sticky="ew", pady=5)
+        ttk.Label(body, text="Data richiesta *").grid(row=1, column=0, sticky="w", pady=5,
+                                                       padx=(0, 14))
+        r1 = ttk.Frame(body)
+        r1.grid(row=1, column=1, sticky="w", pady=5)
+        ttk.Entry(r1, textvariable=self.v_dt, width=18).pack(side="left")
+        ttk.Button(r1, text="Adesso", command=lambda: self.v_dt.set(
+            datetime.now().strftime("%d/%m/%Y %H:%M"))).pack(side="left", padx=(6, 0))
+        ttk.Label(r1, text="gg/mm/aaaa oo:mm", style="Hint.TLabel").pack(side="left", padx=(8, 0))
+        ttk.Label(body, text="N. ticket").grid(row=2, column=0, sticky="w", pady=5, padx=(0, 14))
+        r2 = ttk.Frame(body)
+        r2.grid(row=2, column=1, sticky="w", pady=5)
+        ttk.Entry(r2, textvariable=self.v_ticket, width=22).pack(side="left")
+        ttk.Label(r2, text="Stato").pack(side="left", padx=(24, 6))
+        ttk.Combobox(r2, textvariable=self.v_stato, values=STATI_TECNICO, state="readonly",
+                     width=12).pack(side="left")
+        ttk.Label(body, text="Il tecnico è venuto\nil giorno").grid(
+            row=3, column=0, sticky="w", pady=5, padx=(0, 14))
+        r3 = ttk.Frame(body)
+        r3.grid(row=3, column=1, sticky="w", pady=5)
+        ttk.Entry(r3, textvariable=self.v_dtec, width=14).pack(side="left")
+        ttk.Label(r3, text="gg/mm/aaaa. Lasciala vuota se non è ancora venuto.",
+                  style="Hint.TLabel").pack(side="left", padx=(8, 0))
+        ttk.Label(body, text="Nome del tecnico").grid(row=4, column=0, sticky="w", pady=5,
+                                                      padx=(0, 14))
+        ttk.Entry(body, textvariable=self.v_tec, width=34).grid(row=4, column=1, sticky="w",
+                                                                pady=5)
+        ttk.Label(body, text="Problema segnalato *").grid(row=5, column=0, sticky="nw", pady=5,
+                                                          padx=(0, 14))
+        self.t_prob = make_text(body, 3)
+        self.t_prob.grid(row=5, column=1, sticky="ew", pady=5)
+        self.t_prob.insert("1.0", c.get("problema", ""))
+        ttk.Label(body, text="Cosa ha fatto\nil tecnico").grid(row=6, column=0, sticky="nw",
+                                                              pady=5, padx=(0, 14))
+        self.t_int = make_text(body, 4)
+        self.t_int.grid(row=6, column=1, sticky="ew", pady=5)
+        self.t_int.insert("1.0", c.get("intervento", ""))
+        btns = ttk.Frame(body)
+        btns.grid(row=7, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(btns, text="Annulla", command=self.destroy).pack(side="right")
+        ttk.Button(btns, text="Salva", style="Save.TButton", command=self.save).pack(
+            side="right", padx=(0, 8))
+
+    def _stato_changed(self, *_):
+        if self.v_stato.get() == "Eseguito" and not self.v_dtec.get().strip():
+            self.v_dtec.set(fmt_date(date.today()))
+
+    def save(self):
+        dt = parse_datetime(self.v_dt.get())
+        if not dt:
+            messagebox.showwarning(APP_NAME, "La data della richiesta non è valida.\nScrivila "
+                                   "così: gg/mm/aaaa oo:mm (esempio 13/11/2026 14:30).",
+                                   parent=self)
+            return
+        dtec = ""
+        if self.v_dtec.get().strip():
+            d = parse_date(self.v_dtec.get())
+            if not d:
+                messagebox.showwarning(APP_NAME, "La data in cui è venuto il tecnico non è "
+                                       "valida.\nScrivila così: gg/mm/aaaa.", parent=self)
+                return
+            dtec = d.isoformat()
+        pid = self.printers.get(self.v_pr.get())
+        if not pid:
+            messagebox.showwarning(APP_NAME, "Scegli la stampante.", parent=self)
+            return
+        problema = self.t_prob.get("1.0", "end").strip()
+        if not problema:
+            messagebox.showwarning(APP_NAME, "Scrivi qual è il problema segnalato.", parent=self)
+            return
+        data = {"stampante_id": pid, "data_ora": dt.strftime("%Y-%m-%d %H:%M"),
+                "data_tecnico": dtec, "ticket": self.v_ticket.get(), "tecnico": self.v_tec.get(),
+                "problema": problema, "intervento": self.t_int.get("1.0", "end").strip(),
+                "stato": self.v_stato.get()}
+        if self.on_save(data):
+            self.destroy()
+
+
+class PrinterManutenzioniDialog(ModalDialog):
+    """Elenco degli interventi del tecnico Konica su una singola stampante."""
+
+    def __init__(self, app, printer_id, parent=None):
+        super().__init__(parent or app, "Interventi del tecnico", "1000x470")
+        self.minsize(820, 360)
+        self.app = app
+        self.printer_id = printer_id
+        self.rows = {}
+        body = ttk.Frame(self, padding=14)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+        self.lbl_title = ttk.Label(body, text="", font=("Segoe UI", 13, "bold"))
+        self.lbl_title.grid(row=0, column=0, sticky="w", pady=(0, 8))
+        cols = ("data", "ticket", "stato", "data_tec", "tecnico", "problema", "intervento")
+        self.tree = ttk.Treeview(body, columns=cols, show="headings", selectmode="browse")
+        for c, title, width, stretch in (
+                ("data", "Richiesta del", 125, False), ("ticket", "Ticket", 80, False),
+                ("stato", "Stato", 80, False), ("data_tec", "Tecnico venuto il", 110, False),
+                ("tecnico", "Tecnico", 120, False), ("problema", "Problema segnalato", 220, True),
+                ("intervento", "Intervento svolto", 220, True)):
+            self.tree.heading(c, text=title)
+            self.tree.column(c, width=width, anchor="w", stretch=stretch)
+        self.tree.tag_configure("Richiesto", foreground=RED)
+        self.tree.tag_configure("Eseguito", foreground=GREEN_DARK)
+        sb = ttk.Scrollbar(body, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=sb.set)
+        self.tree.grid(row=1, column=0, sticky="nsew")
+        sb.grid(row=1, column=1, sticky="ns")
+        self.tree.bind("<Double-1>", lambda e: self.edit())
+        bottom = ttk.Frame(body)
+        bottom.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        ttk.Button(bottom, text="Nuovo intervento del tecnico…", style="Save.TButton",
+                   command=self.new).pack(side="left")
+        ttk.Button(bottom, text="Modifica…", command=self.edit).pack(side="left", padx=(8, 0))
+        ttk.Button(bottom, text="Segna come eseguito", command=self.done).pack(
+            side="left", padx=(8, 0))
+        ttk.Button(bottom, text="Elimina", style="Danger.TButton", command=self.delete).pack(
+            side="left", padx=(8, 0))
+        ttk.Button(bottom, text="Chiudi", command=self.destroy).pack(side="right")
+        self.refresh()
+
+    def refresh(self):
+        p = self.app.db.get_stampante(self.printer_id)
+        if not p:
+            self.destroy()
+            return
+        self.lbl_title.configure(text="%s - %s, %s" % (
+            p["nome"] or p["modello"] or "Stampante", p["edificio"], floor_label(p["piano"])))
+        self.tree.delete(*self.tree.get_children())
+        self.rows = {}
+        for m in self.app.db.manutenzioni_of(self.printer_id):
+            self.rows[str(m["id"])] = m
+            self.tree.insert("", "end", iid=str(m["id"]), tags=(m["stato"],), values=(
+                fmt_dt(m["data_ora"]), m["ticket"], m["stato"], tec_date(m), m["tecnico"],
+                one_line(m["problema"], 60), one_line(m["intervento"], 60)))
+
+    def selected(self):
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showinfo(APP_NAME, "Seleziona prima un intervento dall'elenco.",
+                                parent=self)
+            return None
+        return self.rows.get(sel[0])
+
+    def new(self):
+        self.app.open_manut_editor(self.printer_id, None, after=self.refresh, lock=True,
+                                   parent=self)
+
+    def edit(self):
+        m = self.selected()
+        if m:
+            self.app.open_manut_editor(self.printer_id, m, after=self.refresh, lock=True,
+                                       parent=self)
+
+    def done(self):
+        m = self.selected()
+        if m:
+            if m["stato"] == "Eseguito":
+                messagebox.showinfo(APP_NAME, "Questo intervento è già segnato come eseguito.",
+                                    parent=self)
+                return
+            self.app.set_manut_done(m)
+            self.refresh()
+
+    def delete(self):
+        m = self.selected()
+        if m and messagebox.askyesno(
+                APP_NAME, "Eliminare questo intervento del tecnico?\n\n%s - %s" % (
+                    fmt_dt(m["data_ora"]), one_line(m["problema"], 70)), parent=self):
+            self.app.db.delete_manutenzione(m["id"])
+            self.app.after_manut_change()
+            self.refresh()
+
+
+class ScortaDialog(ModalDialog):
+    """Toner ricevuti (si aggiungono al magazzino) oppure correzione di quantità e soglia."""
+
+    def __init__(self, parent, models, mode, modello, colore, quantita, soglia, on_save):
+        super().__init__(parent, "Toner ricevuti" if mode == "add" else "Modifica scorta")
+        self.resizable(False, False)
+        self.on_save = on_save
+        self.mode = mode
+        self.v_mod = tk.StringVar(value=modello or (models[0] if models else ""))
+        self.v_col = tk.StringVar(value=colore or TONER_NOMI[0])
+        self.v_q = tk.StringVar(value=str(quantita))
+        self.v_s = tk.StringVar(value=str(soglia))
+        body = ttk.Frame(self, padding=16)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="Modello stampante").grid(row=0, column=0, sticky="w", pady=5,
+                                                       padx=(0, 14))
+        ttk.Combobox(body, textvariable=self.v_mod, values=models, width=30,
+                     state="readonly" if (mode == "set" and modello) else "normal").grid(
+            row=0, column=1, sticky="w", pady=5)
+        ttk.Label(body, text="Toner / vaschetta").grid(row=1, column=0, sticky="w", pady=5,
+                                                      padx=(0, 14))
+        ttk.Combobox(body, textvariable=self.v_col, values=TONER_NOMI, width=16,
+                     state="disabled" if (mode == "set" and colore) else "readonly").grid(
+            row=1, column=1, sticky="w", pady=5)
+        if mode == "add":
+            ttk.Label(body, text="Quantità ricevuta").grid(row=2, column=0, sticky="w", pady=5,
+                                                          padx=(0, 14))
+            ttk.Spinbox(body, from_=1, to=500, textvariable=self.v_q, width=6).grid(
+                row=2, column=1, sticky="w", pady=5)
+            hint = ("Li aggiungo a quelli che hai già in magazzino. Se è il primo inserimento "
+                    "per questo toner, parto da qui.")
+        else:
+            ttk.Label(body, text="Quantità in magazzino").grid(row=2, column=0, sticky="w", pady=5,
+                                                              padx=(0, 14))
+            ttk.Spinbox(body, from_=0, to=999, textvariable=self.v_q, width=6).grid(
+                row=2, column=1, sticky="w", pady=5)
+            ttk.Label(body, text="Avvisami quando\nne restano (o meno)").grid(
+                row=3, column=0, sticky="w", pady=5, padx=(0, 14))
+            ttk.Spinbox(body, from_=0, to=99, textvariable=self.v_s, width=6).grid(
+                row=3, column=1, sticky="w", pady=5)
+            hint = "Usalo per correggere la quantità dopo un conteggio in magazzino."
+        ttk.Label(body, style="Hint.TLabel", wraplength=380, justify="left", text=hint).grid(
+            row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        btns = ttk.Frame(body)
+        btns.grid(row=5, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        ttk.Button(btns, text="Annulla", command=self.destroy).pack(side="right")
+        ttk.Button(btns, text="Salva", style="Save.TButton", command=self.save).pack(
+            side="right", padx=(0, 8))
+
+    def save(self):
+        try:
+            q = int(self.v_q.get())
+            s = int(self.v_s.get())
+        except ValueError:
+            messagebox.showwarning(APP_NAME, "Le quantità devono essere numeri interi.",
+                                   parent=self)
+            return
+        if q < 0 or s < 0 or (self.mode == "add" and q < 1):
+            messagebox.showwarning(APP_NAME, "Controlla le quantità: non possono essere negative "
+                                   "(e i toner ricevuti sono almeno 1).", parent=self)
+            return
+        data = {"modello": self.v_mod.get(), "colore": self.v_col.get(), "quantita": q,
+                "soglia": s}
+        if self.on_save(self.mode, data):
             self.destroy()
 
 
@@ -1590,6 +2273,9 @@ class App(tk.Tk):
         self.toner_rows = []
         self.toner_rows_by_id = {}
         self.toner_printer_labels = {}
+        self.manut_rows = []
+        self.manut_rows_by_id = {}
+        self.scorta_keys = {}
         self.thumb_cache = {}
         self.att_items = []
         self.att_removed = []
@@ -1598,6 +2284,7 @@ class App(tk.Tk):
         self._status_job = None
         self._draw_job = None
         self._toner_job = None
+        self._manut_job = None
         self._autofilled_for = None
         self._loading_form = False
 
@@ -1678,17 +2365,26 @@ class App(tk.Tk):
                  fg=NAVY, bg=WHITE).pack(side="left", padx=(26, 0))
 
         self.stat_vars = {}
+        self.stat_labels = {}
         stats = tk.Frame(inner, bg=WHITE)
         stats.pack(side="right")
-        for key, label in (("oggi", "Oggi"), ("mese", "Questo mese"), ("tot", "Totale")):
-            box = tk.Frame(stats, bg=LIGHT, padx=16, pady=6, highlightthickness=1,
+        for key, label in (("aperti", "Da seguire"), ("oggi", "Oggi"),
+                           ("mese", "Questo mese"), ("tot", "Totale")):
+            box = tk.Frame(stats, bg=LIGHT, padx=14, pady=6, highlightthickness=1,
                            highlightbackground=BORDER)
             box.pack(side="left", padx=(8, 0))
             var = tk.StringVar(value="0")
             self.stat_vars[key] = var
-            tk.Label(box, textvariable=var, font=("Segoe UI", 18, "bold"), fg=NAVY,
-                     bg=LIGHT).pack()
-            tk.Label(box, text=label, font=("Segoe UI", 9), fg=GREY, bg=LIGHT).pack()
+            num = tk.Label(box, textvariable=var, font=("Segoe UI", 18, "bold"), fg=NAVY,
+                           bg=LIGHT)
+            num.pack()
+            cap = tk.Label(box, text=label, font=("Segoe UI", 9), fg=GREY, bg=LIGHT)
+            cap.pack()
+            self.stat_labels[key] = num
+            if key == "aperti":
+                for w in (box, num, cap):
+                    w.configure(cursor="hand2")
+                    w.bind("<Button-1>", lambda e: self.show_open_interventi())
 
         bar = tk.Frame(self, height=5, bg=LIGHT)
         bar.pack(fill="x")
@@ -1720,6 +2416,8 @@ class App(tk.Tk):
 
         self.var_dt = tk.StringVar()
         self.var_user = tk.StringVar()
+        self.var_matricola = tk.StringVar()
+        self.var_stato = tk.StringVar(value="Risolto")
         self.var_sede = tk.StringVar()
         self.var_tel = tk.StringVar()
         self.var_seriale = tk.StringVar()
@@ -1737,16 +2435,21 @@ class App(tk.Tk):
         ttk.Label(f, text="Utente *").grid(row=2, column=0, sticky="nw", pady=6, padx=(0, 14))
         uf = ttk.Frame(f)
         uf.grid(row=2, column=1, sticky="ew", pady=4)
-        self.cb_user = ttk.Combobox(uf, textvariable=self.var_user, width=34)
+        self.cb_user = ttk.Combobox(uf, textvariable=self.var_user, width=30)
         self.cb_user.grid(row=0, column=0, sticky="w")
         bind_autocomplete(self.cb_user, self.var_user, lambda: self.users_cache)
         self.cb_user.bind("<Return>", self.autocomplete_user)
-        ttk.Label(uf, text="Sede").grid(row=0, column=1, padx=(20, 6))
-        self.cb_sede = ttk.Combobox(uf, textvariable=self.var_sede, width=20)
-        self.cb_sede.grid(row=0, column=2, sticky="w")
+        ttk.Label(uf, text="Matricola").grid(row=0, column=1, padx=(20, 6))
+        self.ent_matricola = ttk.Entry(uf, textvariable=self.var_matricola, width=12)
+        self.ent_matricola.grid(row=0, column=2, sticky="w")
+        self.ent_matricola.bind("<Return>", self.autocomplete_matricola)
+        self.ent_matricola.bind("<FocusOut>", self.autocomplete_matricola)
+        ttk.Label(uf, text="Sede").grid(row=0, column=3, padx=(20, 6))
+        self.cb_sede = ttk.Combobox(uf, textvariable=self.var_sede, width=18)
+        self.cb_sede.grid(row=0, column=4, sticky="w")
         bind_autocomplete(self.cb_sede, self.var_sede, lambda: self.sedi_cache)
         self.lbl_hint = ttk.Label(uf, text="", style="Hint.TLabel", wraplength=760, justify="left")
-        self.lbl_hint.grid(row=1, column=0, columnspan=3, sticky="w", pady=(3, 0))
+        self.lbl_hint.grid(row=1, column=0, columnspan=5, sticky="w", pady=(3, 0))
         self.var_user.trace_add("write", self.update_user_hint)
 
         ttk.Label(f, text="Postazione\ndell'utente").grid(row=3, column=0, sticky="nw", pady=6,
@@ -1767,8 +2470,15 @@ class App(tk.Tk):
 
         ttk.Label(f, text="N. ticket\n(facoltativo)").grid(row=4, column=0, sticky="nw", pady=6,
                                                            padx=(0, 14))
-        ttk.Entry(f, textvariable=self.var_ticket, width=24).grid(row=4, column=1, sticky="w",
-                                                                  pady=4)
+        tk4 = ttk.Frame(f)
+        tk4.grid(row=4, column=1, sticky="w", pady=4)
+        ttk.Entry(tk4, textvariable=self.var_ticket, width=24).pack(side="left")
+        ttk.Label(tk4, text="Stato").pack(side="left", padx=(24, 6))
+        ttk.Combobox(tk4, textvariable=self.var_stato, values=STATI_INTERVENTO, width=12,
+                     state="readonly").pack(side="left")
+        ttk.Label(tk4, style="Hint.TLabel",
+                  text="Aperto o In attesa = lo ritrovi in «Da seguire» (in alto a destra)."
+                  ).pack(side="left", padx=(12, 0))
 
         ttk.Label(f, text="Per cosa mi hanno\nchiamato *").grid(row=5, column=0, sticky="nw",
                                                                pady=6, padx=(0, 14))
@@ -1821,11 +2531,12 @@ class App(tk.Tk):
             self.after_cancel(self._status_job)
         self._status_job = self.after(6000, lambda: self.lbl_status.configure(text=""))
 
-    def _set_station(self, sede="", tel="", seriale="", imei=""):
+    def _set_station(self, sede="", tel="", seriale="", imei="", matricola=""):
         self.var_sede.set(sede)
         self.var_tel.set(tel)
         self.var_seriale.set(seriale)
         self.var_imei.set(imei)
+        self.var_matricola.set(matricola)
 
     def update_user_hint(self, *_):
         typed = self.var_user.get().strip()
@@ -1835,7 +2546,7 @@ class App(tk.Tk):
             if match and self._autofilled_for != key:
                 self._autofilled_for = key
                 self._set_station(match["sede"], match["telefono"], match["seriale_pc"],
-                                  match["imei"])
+                                  match["imei"], match["matricola"])
             elif not match and self._autofilled_for is not None:
                 self._autofilled_for = None
                 self._set_station()
@@ -1864,9 +2575,20 @@ class App(tk.Tk):
             self.var_user.set(found[0])
             self.cb_user.icursor("end")
 
+    def autocomplete_matricola(self, event=None):
+        """Scrivi la matricola e (se il nome è vuoto) trovo io l'utente."""
+        m = self.var_matricola.get().strip()
+        if not m or self.var_user.get().strip():
+            return
+        found = self.db.find_user_by_matricola(m)
+        if found:
+            self.var_user.set(found["nome"])
+            self.cb_user.icursor("end")
+
     def copy_user_data(self):
         lines = []
-        for label, var in (("Utente", self.var_user), ("Sede", self.var_sede),
+        for label, var in (("Utente", self.var_user), ("Matricola", self.var_matricola),
+                           ("Sede", self.var_sede),
                            ("Telefono", self.var_tel), ("Seriale PC", self.var_seriale),
                            ("IMEI cellulare", self.var_imei)):
             if var.get().strip():
@@ -2028,6 +2750,7 @@ class App(tk.Tk):
         self.var_user.set("")
         self._set_station()
         self.var_ticket.set("")
+        self.var_stato.set("Risolto")
         for w in (self.t_richiesta, self.t_soluzione, self.t_note):
             w.delete("1.0", "end")
         self._loading_form = False
@@ -2047,6 +2770,8 @@ class App(tk.Tk):
         tel = self.var_tel.get().strip()
         seriale = self.var_seriale.get().strip()
         imei = self.var_imei.get().strip()
+        matricola = self.var_matricola.get().strip()
+        stato = self.var_stato.get() if self.var_stato.get() in STATI_INTERVENTO else "Risolto"
         richiesta = self.t_richiesta.get("1.0", "end").strip()
         soluzione = self.t_soluzione.get("1.0", "end").strip()
         note = self.t_note.get("1.0", "end").strip()
@@ -2070,13 +2795,13 @@ class App(tk.Tk):
             if self.edit_id:
                 created = self.db.update_intervento(self.edit_id, data_ora, utente, richiesta,
                                                     soluzione, note, ticket, sede, tel, seriale,
-                                                    imei)
+                                                    imei, matricola, stato)
                 msg = "Modifiche salvate."
                 saved_id = self.edit_id
             else:
                 saved_id, created = self.db.add_intervento(data_ora, utente, richiesta,
                                                            soluzione, note, ticket, sede, tel,
-                                                           seriale, imei)
+                                                           seriale, imei, matricola, stato)
                 msg = "Intervento salvato."
         except sqlite3.Error as e:
             messagebox.showerror(APP_NAME, "Non sono riuscito a salvare:\n%s" % e)
@@ -2086,6 +2811,8 @@ class App(tk.Tk):
             msg += " Foto allegate: %d." % n_new
         if created:
             msg += " Nuovo utente aggiunto alla lista: %s." % utente
+        if stato != "Risolto":
+            msg += " Resta da seguire (%s)." % stato
         self.clear_form()
         self.refresh_users()
         self.refresh_stats()
@@ -2106,6 +2833,7 @@ class App(tk.Tk):
         self.var_f_ticket_mode = tk.StringVar(value="Tutti")
         self.var_f_ticket = tk.StringVar()
         self.var_f_text = tk.StringVar()
+        self.var_f_stato = tk.StringVar(value=FILTRO_STATO[0])
 
         box = ttk.LabelFrame(t, text="Filtri", padding=10)
         box.grid(row=0, column=0, sticky="ew")
@@ -2153,8 +2881,19 @@ class App(tk.Tk):
         ttk.Button(r2, text="Azzera filtri", style="Primary.TButton",
                    command=self.reset_filters).pack(side="right")
 
+        r3 = ttk.Frame(box)
+        r3.pack(fill="x", pady=(10, 0))
+        ttk.Label(r3, text="Stato").pack(side="left")
+        ttk.Combobox(r3, textvariable=self.var_f_stato, width=32, state="readonly",
+                     values=FILTRO_STATO).pack(side="left", padx=(6, 14))
+        ttk.Button(r3, text="Mostra solo quelli da richiamare",
+                   command=lambda: self.var_f_stato.set(FILTRO_STATO[1])).pack(side="left")
+        ttk.Label(r3, style="Hint.TLabel",
+                  text="Aperto / In attesa = interventi ancora da seguire o da richiamare."
+                  ).pack(side="left", padx=(12, 0))
+
         for v in (self.var_f_user, self.var_f_sede, self.var_f_dal, self.var_f_al,
-                  self.var_f_ticket_mode, self.var_f_ticket, self.var_f_text):
+                  self.var_f_ticket_mode, self.var_f_ticket, self.var_f_text, self.var_f_stato):
             v.trace_add("write", self.schedule_filter)
 
         cnt = ttk.Frame(t)
@@ -2168,18 +2907,21 @@ class App(tk.Tk):
         tf.grid(row=2, column=0, sticky="nsew")
         tf.columnconfigure(0, weight=1)
         tf.rowconfigure(0, weight=1)
-        self.columns = ("data", "utente", "sede", "ticket", "foto", "richiesta", "soluzione")
-        self.col_titles = {"data": "Data e ora", "utente": "Utente", "sede": "Sede",
-                           "ticket": "Ticket", "foto": "Foto",
+        self.columns = ("data", "utente", "matricola", "sede", "ticket", "stato", "foto",
+                        "richiesta", "soluzione")
+        self.col_titles = {"data": "Data e ora", "utente": "Utente", "matricola": "Matricola",
+                           "sede": "Sede", "ticket": "Ticket", "stato": "Stato", "foto": "Foto",
                            "richiesta": "Per cosa mi hanno chiamato",
                            "soluzione": "Come ho risolto"}
         self.tree = ttk.Treeview(tf, columns=self.columns, show="headings", selectmode="browse")
-        widths = {"data": 125, "utente": 150, "sede": 95, "ticket": 80, "foto": 50,
-                  "richiesta": 310, "soluzione": 310}
+        widths = {"data": 120, "utente": 150, "matricola": 75, "sede": 85, "ticket": 70,
+                  "stato": 75, "foto": 45, "richiesta": 280, "soluzione": 280}
         for c in self.columns:
             self.tree.heading(c, text=self.col_titles[c], command=lambda c=c: self.sort_by(c))
             self.tree.column(c, width=widths[c], anchor="center" if c == "foto" else "w",
                              stretch=(c in ("richiesta", "soluzione")))
+        for stato, color in STATO_COLORI.items():
+            self.tree.tag_configure(stato, foreground=color)
         sb = ttk.Scrollbar(tf, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
@@ -2196,6 +2938,9 @@ class App(tk.Tk):
                               relief="flat", highlightthickness=1, highlightbackground=BORDER,
                               padx=8, pady=6, state="disabled")
         self.detail.tag_configure("h", font=("Segoe UI", 10, "bold"), foreground=NAVY)
+        for stato, color in STATO_COLORI.items():
+            self.detail.tag_configure("st_" + stato, font=("Segoe UI", 10, "bold"),
+                                      foreground=color)
         dsb = ttk.Scrollbar(df, orient="vertical", command=self.detail.yview)
         self.detail.configure(yscrollcommand=dsb.set)
         self.detail.grid(row=0, column=0, sticky="nsew")
@@ -2206,6 +2951,8 @@ class App(tk.Tk):
         bf = ttk.Frame(t)
         bf.grid(row=4, column=0, sticky="ew", pady=(10, 0))
         ttk.Button(bf, text="Modifica", command=self.edit_selected).pack(side="left")
+        ttk.Button(bf, text="Segna come risolto", style="Save.TButton",
+                   command=self.mark_resolved).pack(side="left", padx=(8, 0))
         ttk.Button(bf, text="Elimina", style="Danger.TButton",
                    command=self.delete_selected).pack(side="left", padx=(8, 0))
         ttk.Button(bf, text="Apri cartella foto", command=self.open_row_folder).pack(
@@ -2228,6 +2975,12 @@ class App(tk.Tk):
         self.var_f_ticket_mode.set("Tutti")
         self.var_f_ticket.set("")
         self.var_f_text.set("")
+        self.var_f_stato.set(FILTRO_STATO[0])
+
+    def show_open_interventi(self):
+        self.reset_filters()
+        self.var_f_stato.set(FILTRO_STATO[1])
+        self.nb.select(self.tab_reg)
 
     def schedule_filter(self, *_):
         if self._filter_job:
@@ -2249,8 +3002,11 @@ class App(tk.Tk):
         self.ent_al.configure(foreground=RED if al_txt and not al else TEXT)
         mode = {"Con ticket": "con", "Senza ticket": "senza"}.get(
             self.var_f_ticket_mode.get(), "tutti")
+        st = self.var_f_stato.get()
+        stato = "aperti" if st == FILTRO_STATO[1] else (st if st in STATI_INTERVENTO else "")
         return {"utente": user, "sede": sede, "dal": dal, "al": al, "ticket_mode": mode,
-                "ticket": self.var_f_ticket.get().strip(), "testo": self.var_f_text.get().strip()}
+                "ticket": self.var_f_ticket.get().strip(), "testo": self.var_f_text.get().strip(),
+                "stato": stato}
 
     @staticmethod
     def describe_filters(f):
@@ -2270,6 +3026,10 @@ class App(tk.Tk):
             parts.append("ticket \"%s\"" % f["ticket"])
         if f["testo"]:
             parts.append("testo \"%s\"" % f["testo"])
+        if f.get("stato") == "aperti":
+            parts.append("solo da richiamare (aperti e in attesa)")
+        elif f.get("stato"):
+            parts.append("stato %s" % f["stato"])
         return "; ".join(parts) if parts else "nessun filtro (tutti gli interventi)"
 
     def apply_filters(self):
@@ -2287,8 +3047,11 @@ class App(tk.Tk):
         keys = {
             "data": lambda r: r["data_ora"],
             "utente": lambda r: r["utente"].casefold(),
+            "matricola": lambda r: r["matricola"].casefold(),
             "sede": lambda r: r["sede"].casefold(),
             "ticket": lambda r: r["ticket"].casefold(),
+            "stato": lambda r: STATI_INTERVENTO.index(r["stato"]) if r["stato"] in
+                                STATI_INTERVENTO else 9,
             "foto": lambda r: r["n_foto"],
             "richiesta": lambda r: r["richiesta"].casefold(),
             "soluzione": lambda r: r["soluzione"].casefold(),
@@ -2299,9 +3062,10 @@ class App(tk.Tk):
         self.rows_by_id = {}
         for r in self.current_rows:
             self.rows_by_id[str(r["id"])] = r
-            self.tree.insert("", "end", iid=str(r["id"]), values=(
-                fmt_dt(r["data_ora"]), r["utente"], r["sede"], r["ticket"],
-                r["n_foto"] or "", one_line(r["richiesta"]), one_line(r["soluzione"])))
+            self.tree.insert("", "end", iid=str(r["id"]), tags=(r["stato"],), values=(
+                fmt_dt(r["data_ora"]), r["utente"], r["matricola"], r["sede"], r["ticket"],
+                r["stato"], r["n_foto"] or "", one_line(r["richiesta"]),
+                one_line(r["soluzione"])))
         for c in self.columns:
             arrow = (" ▼" if self.sort_rev else " ▲") if c == self.sort_col else ""
             self.tree.heading(c, text=self.col_titles[c] + arrow)
@@ -2330,10 +3094,15 @@ class App(tk.Tk):
             self.detail.insert("end", fmt_dt(r["data_ora"]) + "     ")
             self.detail.insert("end", "Utente: ", "h")
             self.detail.insert("end", r["utente"] + "     ")
+            if r["matricola"]:
+                self.detail.insert("end", "Matricola: ", "h")
+                self.detail.insert("end", r["matricola"] + "     ")
             self.detail.insert("end", "Sede: ", "h")
             self.detail.insert("end", (r["sede"] or "-") + "     ")
             self.detail.insert("end", "Ticket: ", "h")
-            self.detail.insert("end", (r["ticket"] or "nessuno") + "\n")
+            self.detail.insert("end", (r["ticket"] or "nessuno") + "     ")
+            self.detail.insert("end", "Stato: ", "h")
+            self.detail.insert("end", r["stato"] + "\n", "st_" + r["stato"])
             station = [(l, r[k]) for l, k in (("Telefono", "telefono"),
                                               ("Seriale PC", "seriale_pc"), ("IMEI", "imei"))
                        if r[k]]
@@ -2366,9 +3135,10 @@ class App(tk.Tk):
         self.edit_id = r["id"]
         self.var_dt.set(fmt_dt(r["data_ora"]))
         self.var_user.set(r["utente"])
-        self._set_station(r["sede"], r["telefono"], r["seriale_pc"], r["imei"])
+        self._set_station(r["sede"], r["telefono"], r["seriale_pc"], r["imei"], r["matricola"])
         self._autofilled_for = key_name(r["utente"])
         self.var_ticket.set(r["ticket"])
+        self.var_stato.set(r["stato"] if r["stato"] in STATI_INTERVENTO else "Risolto")
         for w, key in ((self.t_richiesta, "richiesta"), (self.t_soluzione, "soluzione"),
                        (self.t_note, "note")):
             w.delete("1.0", "end")
@@ -2382,6 +3152,18 @@ class App(tk.Tk):
         self.btn_clear.configure(text="Annulla modifica")
         self.update_user_hint()
         self.nb.select(self.tab_new)
+
+    def mark_resolved(self):
+        r = self.selected_row()
+        if not r:
+            messagebox.showinfo(APP_NAME, "Seleziona prima un intervento dall'elenco.")
+            return
+        if r["stato"] == "Risolto":
+            messagebox.showinfo(APP_NAME, "Questo intervento è già segnato come risolto.")
+            return
+        self.db.set_stato(r["id"], "Risolto")
+        self.refresh_stats()
+        self.apply_filters()
 
     def delete_selected(self):
         r = self.selected_row()
@@ -2464,10 +3246,11 @@ class App(tk.Tk):
         mid.grid(row=2, column=0, sticky="nsew")
         mid.columnconfigure(0, weight=1)
         mid.rowconfigure(0, weight=1)
-        cols = ("nome", "sede", "telefono", "seriale", "imei", "n")
+        cols = ("nome", "matricola", "sede", "telefono", "seriale", "imei", "n")
         self.users_tree = ttk.Treeview(mid, columns=cols, show="headings", selectmode="browse")
         for c, title, width, stretch in (
-                ("nome", "Utente", 230, True), ("sede", "Sede", 110, False),
+                ("nome", "Utente", 230, True), ("matricola", "Matricola", 100, False),
+                ("sede", "Sede", 110, False),
                 ("telefono", "Telefono", 130, False), ("seriale", "Seriale PC", 170, False),
                 ("imei", "IMEI cellulare", 170, False), ("n", "Interventi", 80, False)):
             self.users_tree.heading(c, text=title)
@@ -2510,12 +3293,14 @@ class App(tk.Tk):
         for u in self.users_data:
             if sede and sede != u["sede"].casefold():
                 continue
-            text = " ".join((u["nome"], u["sede"], u["telefono"], u["seriale_pc"], u["imei"]))
+            text = " ".join((u["nome"], u["matricola"], u["sede"], u["telefono"],
+                             u["seriale_pc"], u["imei"]))
             if terms and not matches_all(terms, text):
                 continue
             self.users_visible.append(u)
             self.users_tree.insert("", "end", iid=str(u["id"]), values=(
-                u["nome"], u["sede"], u["telefono"], u["seriale_pc"], u["imei"], u["n"]))
+                u["nome"], u["matricola"], u["sede"], u["telefono"], u["seriale_pc"], u["imei"],
+                u["n"]))
 
     def describe_user_scope(self):
         parts = []
@@ -2569,7 +3354,7 @@ class App(tk.Tk):
             messagebox.showwarning(APP_NAME, "Scrivi il nome e cognome dell'utente.")
             return False
         fields = (normalize_name(data["sede"]), data["telefono"].strip(),
-                  data["seriale_pc"].strip(), data["imei"].strip())
+                  data["seriale_pc"].strip(), data["imei"].strip(), data["matricola"].strip())
         try:
             if user is None:
                 _, created = self.db.add_user(nome, *fields)
@@ -2626,10 +3411,16 @@ class App(tk.Tk):
         self.nb_print.grid(row=0, column=0, sticky="nsew")
         self.tab_building = ttk.Frame(self.nb_print, padding=12)
         self.tab_toner = ttk.Frame(self.nb_print, padding=12)
+        self.tab_manut = ttk.Frame(self.nb_print, padding=12)
+        self.tab_scorta = ttk.Frame(self.nb_print, padding=12)
         self.nb_print.add(self.tab_building, text="Edificio e stampanti")
         self.nb_print.add(self.tab_toner, text="Cambi toner")
+        self.nb_print.add(self.tab_manut, text="Interventi tecnico")
+        self.nb_print.add(self.tab_scorta, text="Scorta toner")
         self._build_building_view()
         self._build_toner_log()
+        self._build_manut_log()
+        self._build_scorta()
 
     def get_printer_image(self, model, size):
         key = "%s_%s" % (printer_image_key(model), size)
@@ -2678,8 +3469,9 @@ class App(tk.Tk):
         self.canvas.bind("<Configure>", lambda e: self.schedule_draw())
         self.canvas.bind("<MouseWheel>",
                          lambda e: self.canvas.yview_scroll(int(-e.delta / 120), "units"))
-        ttk.Label(t, text="Clicca su una stampante per registrare il cambio toner e vedere lo "
-                          "storico. Con «+ Aggiungi stampante» la metti sul piano giusto.",
+        ttk.Label(t, text="Clicca su una stampante per registrare il cambio toner o vaschetta, "
+                          "vedere lo storico e gli interventi del tecnico. Con «+ Aggiungi "
+                          "stampante» la metti sul piano giusto.",
                   style="Hint.TLabel").grid(row=2, column=0, sticky="w", pady=(6, 0))
 
     def current_building(self):
@@ -2703,6 +3495,8 @@ class App(tk.Tk):
         self.refresh_toner_filter_lists()
         self.schedule_draw()
         self.apply_toner_filters()
+        self.apply_manut_filters()
+        self.refresh_scorta()
 
     def schedule_draw(self):
         if self._draw_job:
@@ -2786,8 +3580,12 @@ class App(tk.Tk):
             lines.append((p["modello"], ("Segoe UI", 8), GREY))
         if p["ultimo"]:
             colore, when = p["ultimo"].split("|", 1)
-            lines.append(("ultimo toner: %s %s" % (colore, fmt_dt(when)[:5]), ("Segoe UI", 8),
-                          TONER_TESTO.get(colore, TEXT)))
+            lines.append(("ultimo %s: %s" % (
+                "cambio" if colore == "Vaschetta" else "toner", "%s %s" % (
+                    colore, fmt_dt(when)[:5])), ("Segoe UI", 8), TONER_TESTO.get(colore, TEXT)))
+        if p.get("man_richieste"):
+            lines.append(("tecnico richiesto (%d)" % p["man_richieste"], ("Segoe UI", 8, "bold"),
+                          RED))
         y = py + ih + 4
         for text, font, color in lines:
             item = c.create_text(cx, y, text=text, anchor="n", width=slot, font=font, fill=color,
@@ -2890,10 +3688,17 @@ class App(tk.Tk):
         self.refresh_toner_filter_lists()
         self.schedule_draw()
         self.apply_toner_filters()
+        self.apply_manut_filters()
+        self.refresh_scorta()
 
     def after_toner_change(self):
         self.schedule_draw()
         self.apply_toner_filters()
+        self.refresh_scorta()
+
+    def after_manut_change(self):
+        self.schedule_draw()
+        self.apply_manut_filters()
 
     # ---------------- scheda: cambi toner ----------------
     def _build_toner_log(self):
@@ -2992,6 +3797,7 @@ class App(tk.Tk):
             self.var_t_ed.set("(Tutti)")
         if self.var_t_pr.get() not in labels:
             self.var_t_pr.set("(Tutte)")
+        self.refresh_manut_filter_lists(eds, labels)
 
     def set_toner_period(self, kind):
         dal, al = period_dates(kind)
@@ -3084,9 +3890,404 @@ class App(tk.Tk):
             return
         self.finish_export(path)
 
+    # ---------------- scheda: interventi del tecnico Konica ----------------
+    def _build_manut_log(self):
+        t = self.tab_manut
+        t.columnconfigure(0, weight=1)
+        t.rowconfigure(2, weight=1)
+        self.var_m_ed = tk.StringVar(value="(Tutti)")
+        self.var_m_pr = tk.StringVar(value="(Tutte)")
+        self.var_m_stato = tk.StringVar(value="(Tutti)")
+        self.var_m_dal = tk.StringVar()
+        self.var_m_al = tk.StringVar()
+        self.var_m_text = tk.StringVar()
+
+        box = ttk.LabelFrame(t, text="Filtri", padding=10)
+        box.grid(row=0, column=0, sticky="ew")
+        r1 = ttk.Frame(box)
+        r1.pack(fill="x")
+        ttk.Label(r1, text="Edificio").pack(side="left")
+        self.cb_m_ed = ttk.Combobox(r1, textvariable=self.var_m_ed, state="readonly", width=26)
+        self.cb_m_ed.pack(side="left", padx=(6, 14))
+        ttk.Label(r1, text="Stampante").pack(side="left")
+        self.cb_m_pr = ttk.Combobox(r1, textvariable=self.var_m_pr, state="readonly", width=40)
+        self.cb_m_pr.pack(side="left", padx=(6, 14))
+        ttk.Label(r1, text="Stato").pack(side="left")
+        ttk.Combobox(r1, textvariable=self.var_m_stato, state="readonly", width=11,
+                     values=["(Tutti)"] + STATI_TECNICO).pack(side="left", padx=(6, 14))
+        ttk.Label(r1, text="Cerca").pack(side="left")
+        ttk.Entry(r1, textvariable=self.var_m_text, width=18).pack(side="left", padx=(6, 0),
+                                                                  fill="x", expand=True)
+
+        r2 = ttk.Frame(box)
+        r2.pack(fill="x", pady=(10, 0))
+        ttk.Label(r2, text="Dal").pack(side="left")
+        self.ent_m_dal = ttk.Entry(r2, textvariable=self.var_m_dal, width=11)
+        self.ent_m_dal.pack(side="left", padx=(6, 12))
+        ttk.Label(r2, text="Al").pack(side="left")
+        self.ent_m_al = ttk.Entry(r2, textvariable=self.var_m_al, width=11)
+        self.ent_m_al.pack(side="left", padx=(6, 18))
+        ttk.Label(r2, text="Periodo veloce:", style="Hint.TLabel").pack(side="left")
+        for label, kind in (("Oggi", "oggi"), ("7 giorni", "7g"), ("Questo mese", "mese"),
+                            ("Quest'anno", "anno"), ("Tutto", "tutto")):
+            ttk.Button(r2, text=label, command=lambda k=kind: self.set_manut_period(k)).pack(
+                side="left", padx=(6, 0))
+        ttk.Button(r2, text="Azzera filtri", style="Primary.TButton",
+                   command=self.reset_manut_filters).pack(side="right")
+        for v in (self.var_m_ed, self.var_m_pr, self.var_m_stato, self.var_m_dal, self.var_m_al,
+                  self.var_m_text):
+            v.trace_add("write", self.schedule_manut_filter)
+
+        cnt = ttk.Frame(t)
+        cnt.grid(row=1, column=0, sticky="ew", pady=(10, 6))
+        self.lbl_m_count = ttk.Label(cnt, text="", style="Count.TLabel")
+        self.lbl_m_count.pack(side="left")
+        self.lbl_m_hint = ttk.Label(cnt, text="", style="Hint.TLabel")
+        self.lbl_m_hint.pack(side="left", padx=(14, 0))
+
+        tf = ttk.Frame(t)
+        tf.grid(row=2, column=0, sticky="nsew")
+        tf.columnconfigure(0, weight=1)
+        tf.rowconfigure(0, weight=1)
+        cols = ("data", "edificio", "piano", "stampante", "ticket", "stato", "data_tec", "tecnico",
+                "problema", "intervento")
+        self.manut_tree = ttk.Treeview(tf, columns=cols, show="headings", selectmode="browse")
+        for c, title, width, stretch in (
+                ("data", "Richiesta del", 120, False), ("edificio", "Edificio", 140, False),
+                ("piano", "Piano", 85, False), ("stampante", "Stampante", 130, False),
+                ("ticket", "Ticket", 70, False), ("stato", "Stato", 75, False),
+                ("data_tec", "Tecnico venuto", 95, False), ("tecnico", "Tecnico", 100, False),
+                ("problema", "Problema segnalato", 180, True),
+                ("intervento", "Intervento svolto", 180, True)):
+            self.manut_tree.heading(c, text=title)
+            self.manut_tree.column(c, width=width, anchor="w", stretch=stretch)
+        self.manut_tree.tag_configure("Richiesto", foreground=RED)
+        self.manut_tree.tag_configure("Eseguito", foreground=GREEN_DARK)
+        sb = ttk.Scrollbar(tf, orient="vertical", command=self.manut_tree.yview)
+        self.manut_tree.configure(yscrollcommand=sb.set)
+        self.manut_tree.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+        self.manut_tree.bind("<Double-1>", lambda e: self.edit_manutenzione())
+        self.manut_tree.bind("<Delete>", lambda e: self.delete_manut_selected())
+
+        bf = ttk.Frame(t)
+        bf.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        ttk.Button(bf, text="Nuovo intervento del tecnico…", style="Save.TButton",
+                   command=self.new_manutenzione).pack(side="left")
+        ttk.Button(bf, text="Modifica…", command=self.edit_manutenzione).pack(side="left",
+                                                                            padx=(8, 0))
+        ttk.Button(bf, text="Segna come eseguito", command=self.mark_manut_done).pack(
+            side="left", padx=(8, 0))
+        ttk.Button(bf, text="Elimina", style="Danger.TButton",
+                   command=self.delete_manut_selected).pack(side="left", padx=(8, 0))
+        ttk.Button(bf, text="Esporta in PDF", style="Primary.TButton",
+                   command=lambda: self.export_manut("pdf")).pack(side="right")
+        ttk.Button(bf, text="Esporta in Excel", style="Primary.TButton",
+                   command=lambda: self.export_manut("xlsx")).pack(side="right", padx=(0, 8))
+
+    def refresh_manut_filter_lists(self, eds, labels):
+        self.cb_m_ed.configure(values=eds)
+        self.cb_m_pr.configure(values=labels)
+        if self.var_m_ed.get() not in eds:
+            self.var_m_ed.set("(Tutti)")
+        if self.var_m_pr.get() not in labels:
+            self.var_m_pr.set("(Tutte)")
+
+    def set_manut_period(self, kind):
+        dal, al = period_dates(kind)
+        self.var_m_dal.set(fmt_date(dal) if dal else "")
+        self.var_m_al.set(fmt_date(al) if al else "")
+
+    def reset_manut_filters(self):
+        self.var_m_ed.set("(Tutti)")
+        self.var_m_pr.set("(Tutte)")
+        self.var_m_stato.set("(Tutti)")
+        self.var_m_dal.set("")
+        self.var_m_al.set("")
+        self.var_m_text.set("")
+
+    def schedule_manut_filter(self, *_):
+        if self._manut_job:
+            self.after_cancel(self._manut_job)
+        self._manut_job = self.after(250, self.apply_manut_filters)
+
+    def get_manut_filters(self):
+        ed_name = self.var_m_ed.get()
+        edificio_id = next((b["id"] for b in self.buildings if b["nome"] == ed_name), None)
+        stampante_id = self.toner_printer_labels.get(self.var_m_pr.get())
+        st = self.var_m_stato.get()
+        dal_txt, al_txt = self.var_m_dal.get().strip(), self.var_m_al.get().strip()
+        dal = parse_date(dal_txt) if dal_txt else None
+        al = parse_date(al_txt) if al_txt else None
+        self.ent_m_dal.configure(foreground=RED if dal_txt and not dal else TEXT)
+        self.ent_m_al.configure(foreground=RED if al_txt and not al else TEXT)
+        return {"edificio_id": edificio_id, "stampante_id": stampante_id,
+                "stato": st if st in STATI_TECNICO else "", "dal": dal, "al": al,
+                "testo": self.var_m_text.get().strip()}
+
+    def describe_manut_filters(self):
+        parts = []
+        if self.var_m_ed.get() != "(Tutti)":
+            parts.append("edificio \"%s\"" % self.var_m_ed.get())
+        if self.var_m_pr.get() != "(Tutte)":
+            parts.append("stampante \"%s\"" % self.var_m_pr.get())
+        if self.var_m_stato.get() in STATI_TECNICO:
+            parts.append("stato %s" % self.var_m_stato.get())
+        dal = parse_date(self.var_m_dal.get()) if self.var_m_dal.get().strip() else None
+        al = parse_date(self.var_m_al.get()) if self.var_m_al.get().strip() else None
+        if dal or al:
+            parts.append("periodo %s - %s" % (fmt_date(dal) if dal else "inizio",
+                                              fmt_date(al) if al else "oggi"))
+        if self.var_m_text.get().strip():
+            parts.append("testo \"%s\"" % self.var_m_text.get().strip())
+        return "; ".join(parts) if parts else "nessun filtro (tutti gli interventi del tecnico)"
+
+    def apply_manut_filters(self):
+        self._manut_job = None
+        self.manut_rows = self.db.manutenzioni_search(**self.get_manut_filters())
+        self.manut_tree.delete(*self.manut_tree.get_children())
+        self.manut_rows_by_id = {}
+        for m in self.manut_rows:
+            self.manut_rows_by_id[str(m["id"])] = m
+            self.manut_tree.insert("", "end", iid=str(m["id"]), tags=(m["stato"],), values=(
+                fmt_dt(m["data_ora"]), m["edificio"], floor_label(m["piano"]),
+                m["stampante"] or m["modello"], m["ticket"], m["stato"], tec_date(m),
+                m["tecnico"], one_line(m["problema"], 70), one_line(m["intervento"], 70)))
+        richieste = sum(1 for m in self.manut_rows if m["stato"] == "Richiesto")
+        self.lbl_m_count.configure(text="Interventi trovati: %d" % len(self.manut_rows))
+        self.lbl_m_hint.configure(
+            text=("Da eseguire: %d" % richieste) if richieste else "")
+
+    def selected_manut(self):
+        sel = self.manut_tree.selection()
+        if not sel:
+            messagebox.showinfo(APP_NAME, "Seleziona prima un intervento dall'elenco.")
+            return None
+        return self.manut_rows_by_id.get(sel[0])
+
+    def open_manut_editor(self, printer_id=None, manut=None, after=None, lock=False, parent=None):
+        current = dict(manut) if manut else {"stampante_id": printer_id}
+
+        def on_save(data):
+            ok = self.save_manutenzione(manut["id"] if manut else None, data)
+            if ok and after:
+                after()
+            return ok
+
+        ManutenzioneDialog(parent or self, self.toner_printer_labels, current, on_save,
+                           lock_printer=lock)
+
+    def new_manutenzione(self):
+        pid = self.toner_printer_labels.get(self.var_m_pr.get())
+        self.open_manut_editor(pid)
+
+    def edit_manutenzione(self):
+        m = self.selected_manut()
+        if m:
+            self.open_manut_editor(m["stampante_id"], m)
+
+    def save_manutenzione(self, mid, data):
+        args = (data["stampante_id"], data["data_ora"], data["data_tecnico"],
+                data["ticket"].strip(), data["tecnico"].strip(), data["problema"],
+                data["intervento"], data["stato"])
+        try:
+            if mid is None:
+                self.db.add_manutenzione(*args)
+            else:
+                self.db.update_manutenzione(mid, *args)
+        except sqlite3.Error as e:
+            messagebox.showerror(APP_NAME, "Non sono riuscito a salvare:\n%s" % e)
+            return False
+        self.after_manut_change()
+        return True
+
+    def set_manut_done(self, m):
+        data_t = m["data_tecnico"] or date.today().isoformat()
+        self.db.set_stato_manutenzione(m["id"], "Eseguito", data_t)
+        self.after_manut_change()
+
+    def mark_manut_done(self):
+        m = self.selected_manut()
+        if not m:
+            return
+        if m["stato"] == "Eseguito":
+            messagebox.showinfo(APP_NAME, "Questo intervento è già segnato come eseguito.")
+            return
+        self.set_manut_done(m)
+
+    def delete_manut_selected(self):
+        m = self.selected_manut()
+        if m and messagebox.askyesno(
+                APP_NAME, "Eliminare questo intervento del tecnico?\n\n%s - %s\n%s" % (
+                    fmt_dt(m["data_ora"]), m["stampante"] or m["modello"],
+                    one_line(m["problema"], 70))):
+            self.db.delete_manutenzione(m["id"])
+            self.after_manut_change()
+
+    def export_manut(self, kind):
+        if not self.manut_rows:
+            messagebox.showinfo(APP_NAME, "Non ci sono interventi del tecnico da esportare con "
+                                          "i filtri attuali.")
+            return
+        path = self.ask_save_path(kind, "interventi_tecnico")
+        if not path:
+            return
+        desc = self.describe_manut_filters()
+        try:
+            if kind == "xlsx":
+                export_manut_excel(path, self.manut_rows, desc)
+            else:
+                export_manut_pdf(path, self.manut_rows, desc)
+        except Exception as e:
+            messagebox.showerror(APP_NAME, "Esportazione non riuscita (il file è aperto in un "
+                                           "altro programma?):\n%s" % e)
+            return
+        self.finish_export(path)
+
+    # ---------------- scheda: scorta toner ----------------
+    def _build_scorta(self):
+        t = self.tab_scorta
+        t.columnconfigure(0, weight=1)
+        t.rowconfigure(2, weight=1)
+        self.lbl_scorta_alert = ttk.Label(t, text="", font=("Segoe UI", 12, "bold"),
+                                          foreground=GREEN, wraplength=1050, justify="left")
+        self.lbl_scorta_alert.grid(row=0, column=0, sticky="w")
+        ttk.Label(t, style="Hint.TLabel", wraplength=1050, justify="left",
+                  text="Scrivi quanti toner (e vaschette) hai in magazzino per ogni modello: a ogni "
+                       "cambio registrato ne tolgo uno da solo e ti avviso quando stanno per finire. "
+                       "Quelli che non imposti non vengono contati.").grid(
+            row=1, column=0, sticky="w", pady=(2, 8))
+        tf = ttk.Frame(t)
+        tf.grid(row=2, column=0, sticky="nsew")
+        tf.columnconfigure(0, weight=1)
+        tf.rowconfigure(0, weight=1)
+        cols = ("modello", "colore", "quantita", "soglia", "stato")
+        self.scorta_tree = ttk.Treeview(tf, columns=cols, show="headings", selectmode="browse")
+        for c, title, width, stretch in (
+                ("modello", "Modello stampante", 220, True), ("colore", "Toner / vaschetta", 140, False),
+                ("quantita", "In magazzino", 110, False), ("soglia", "Avviso a", 90, False),
+                ("stato", "Stato", 140, False)):
+            self.scorta_tree.heading(c, text=title)
+            self.scorta_tree.column(c, width=width, anchor="center" if c in (
+                "quantita", "soglia") else "w", stretch=stretch)
+        self.scorta_tree.tag_configure("Finito", foreground=RED)
+        self.scorta_tree.tag_configure("In esaurimento", foreground="#b36b00")
+        self.scorta_tree.tag_configure("OK", foreground=GREEN_DARK)
+        self.scorta_tree.tag_configure("Non impostata", foreground=GREY)
+        sb = ttk.Scrollbar(tf, orient="vertical", command=self.scorta_tree.yview)
+        self.scorta_tree.configure(yscrollcommand=sb.set)
+        self.scorta_tree.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+        self.scorta_tree.bind("<Double-1>", lambda e: self.scorta_edit())
+        bf = ttk.Frame(t)
+        bf.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        ttk.Button(bf, text="Ho ricevuto toner…", style="Save.TButton",
+                   command=self.scorta_receive).pack(side="left")
+        ttk.Button(bf, text="Modifica quantità e avviso…", command=self.scorta_edit).pack(
+            side="left", padx=(8, 0))
+        ttk.Button(bf, text="Non contare più questo toner", command=self.scorta_untrack).pack(
+            side="left", padx=(8, 0))
+
+    def scorta_models(self):
+        models = list(self.models_list())
+        for r in self.db.scorta_all():
+            if r["modello"].casefold() not in {m.casefold() for m in models}:
+                models.append(r["modello"])
+        return models
+
+    def refresh_scorta(self):
+        by_key = {(r["modello"].casefold(), r["colore"]): r for r in self.db.scorta_all()}
+        keep = self.scorta_tree.selection()
+        keep_key = self.scorta_keys.get(keep[0]) if keep else None
+        self.scorta_tree.delete(*self.scorta_tree.get_children())
+        self.scorta_keys = {}
+        n = 0
+        for modello in self.scorta_models():
+            for colore in TONER_NOMI:
+                row = by_key.get((modello.casefold(), colore))
+                iid = "s%d" % n
+                n += 1
+                self.scorta_keys[iid] = (modello, colore)
+                if row:
+                    stato = scorta_status(row["quantita"], row["soglia"])
+                    values = (modello, colore, row["quantita"], row["soglia"], stato)
+                else:
+                    stato = "Non impostata"
+                    values = (modello, colore, "-", "", stato)
+                self.scorta_tree.insert("", "end", iid=iid, tags=(stato,), values=values)
+                if keep_key and keep_key == (modello, colore):
+                    self.scorta_tree.selection_set(iid)
+        low = self.db.scorta_bassa()
+        if low:
+            self.lbl_scorta_alert.configure(
+                foreground=RED, text="Attenzione, da ordinare: " + "; ".join(
+                    "%s %s (ne restano %d)" % (r["colore"], r["modello"], r["quantita"])
+                    for r in low))
+        else:
+            tracked = len(by_key)
+            self.lbl_scorta_alert.configure(
+                foreground=GREEN, text="Scorta toner: tutto a posto." if tracked
+                else "Scorta toner: non hai ancora impostato nulla.")
+        self.nb_print.tab(self.tab_scorta, text="Scorta toner" + (" ⚠" if low else ""))
+        self.nb.tab(self.tab_print, text="Stampanti" + (" ⚠" if low else ""))
+
+    def _scorta_selected(self):
+        sel = self.scorta_tree.selection()
+        return self.scorta_keys.get(sel[0]) if sel else None
+
+    def scorta_receive(self):
+        key = self._scorta_selected()
+        ScortaDialog(self, self.scorta_models(), "add", key[0] if key else "",
+                     key[1] if key else "", 1, SOGLIA_SCORTA, self.save_scorta)
+
+    def scorta_edit(self):
+        key = self._scorta_selected()
+        if not key:
+            messagebox.showinfo(APP_NAME, "Seleziona prima una riga dall'elenco.")
+            return
+        row = self.db.scorta_get(*key)
+        ScortaDialog(self, self.scorta_models(), "set", key[0], key[1],
+                     row["quantita"] if row else 0, row["soglia"] if row else SOGLIA_SCORTA,
+                     self.save_scorta)
+
+    def scorta_untrack(self):
+        key = self._scorta_selected()
+        if not key:
+            messagebox.showinfo(APP_NAME, "Seleziona prima una riga dall'elenco.")
+            return
+        if not self.db.scorta_get(*key):
+            messagebox.showinfo(APP_NAME, "Questo toner non è contato: non c'è niente da togliere.")
+            return
+        if messagebox.askyesno(APP_NAME, "Smettere di contare \"%s - %s\"?\nNon ti avviserò più "
+                                         "quando sta per finire." % (key[1], key[0])):
+            self.db.delete_scorta(*key)
+            self.refresh_scorta()
+
+    def save_scorta(self, mode, data):
+        modello = " ".join(data["modello"].split())
+        if not modello:
+            messagebox.showwarning(APP_NAME, "Scegli o scrivi il modello della stampante.")
+            return False
+        if data["colore"] not in TONER_NOMI:
+            messagebox.showwarning(APP_NAME, "Scegli il toner o la vaschetta.")
+            return False
+        try:
+            if mode == "add":
+                self.db.add_scorta(modello, data["colore"], data["quantita"])
+            else:
+                self.db.set_scorta(modello, data["colore"], data["quantita"], data["soglia"])
+        except sqlite3.Error as e:
+            messagebox.showerror(APP_NAME, "Non sono riuscito a salvare:\n%s" % e)
+            return False
+        self.refresh_scorta()
+        return True
+
     # ---------------- varie ----------------
     def refresh_stats(self):
         oggi, mese, tot = self.db.stats()
+        aperti = self.db.count_aperti()
+        self.stat_vars["aperti"].set(str(aperti))
+        self.stat_labels["aperti"].configure(fg=RED if aperti else NAVY)
         self.stat_vars["oggi"].set(str(oggi))
         self.stat_vars["mese"].set(str(mese))
         self.stat_vars["tot"].set(str(tot))
@@ -3140,11 +4341,12 @@ class App(tk.Tk):
             messagebox.showerror(APP_NAME, "Non sono riuscito a creare il file:\n%s" % e)
             return
         messagebox.showinfo(APP_NAME, "File creato con %d utenti, %d interventi, %d foto, "
-                            "%d stampanti e %d cambi toner:\n%s\n\n"
+                            "%d stampanti, %d cambi toner e %d interventi del tecnico:\n%s\n\n"
                             "Mandalo al telefono (AirDrop, email o iCloud) e nell'app tocca "
                             "Scambio > Ricevi dal PC."
                             % (len(data["utenti"]), len(data["interventi"]), n_foto,
-                               len(data["stampanti"]), len(data["toner"]), path))
+                               len(data["stampanti"]), len(data["toner"]),
+                               len(data["manutenzioni"]), path))
 
     def import_from_phone(self):
         path = filedialog.askopenfilename(
@@ -3172,8 +4374,20 @@ class App(tk.Tk):
                          % (res["toner_nuovi"], res["toner_gia_presenti"]))
         if res["toner_saltati"]:
             lines.append("Cambi toner ignorati (stampante non trovata): %d" % res["toner_saltati"])
+        if res["manut_nuove"] or res["manut_aggiornate"] or res["manut_gia_presenti"] \
+                or res["manut_saltate"]:
+            lines.append("Interventi del tecnico: nuovi %d, aggiornati %d, già presenti %d"
+                         % (res["manut_nuove"], res["manut_aggiornate"],
+                            res["manut_gia_presenti"]))
+        if res["manut_saltate"]:
+            lines.append("Interventi del tecnico ignorati (stampante non trovata): %d"
+                         % res["manut_saltate"])
         if res["saltati"]:
             lines.append("Righe non valide ignorate: %d" % res["saltati"])
+        if res["scorta_bassa"]:
+            lines.append("\nATTENZIONE, scorta toner bassa: " + "; ".join(res["scorta_bassa"]))
+        if res["manut_nuove"] or res["manut_aggiornate"]:
+            self.after_manut_change()
         if res["toner_nuovi"]:
             self.after_toner_change()
         messagebox.showinfo(APP_NAME, "Importazione completata.\n\n" + "\n".join(lines))
