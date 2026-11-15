@@ -305,6 +305,149 @@ def parse_apparati_text(text, marca="", modello=""):
 
 
 # --------------------------------------------------------------------------
+# Memoria dei verbali precedenti: suggerimenti e compilazione automatica
+# --------------------------------------------------------------------------
+CAMPI_STORICO = ("tipologia", "marca_modello", "provenienza", "destinazione", "contatti", "titolo",
+                 "oggetto", "descrizione", "sede_citta", "indirizzo", "cap", "tecnico", "collega",
+                 "materiale", "accessori", "dot_modello", "ap_marca", "ap_modello")
+
+
+def nome_pulito(text):
+    """'Mario Rossi (matricola M1)' -> 'Mario Rossi'."""
+    return re.sub(r"\s*\(matricola[^)]*\)\s*$", "", text or "", flags=re.I).strip()
+
+
+def tipologia_da_dotazione(tipo):
+    """Da 'Smartphone aziendale' a 'Smartphone' (vuoto se non e' un apparato da trasferire)."""
+    t = (tipo or "").casefold()
+    if "notebook" in t or "portatile" in t:
+        return "Notebook"
+    if "smartphone" in t or "cellulare" in t or "telefono" in t:
+        return "Smartphone"
+    if "tablet" in t:
+        return "Tablet"
+    if "pc" in t or "desktop" in t or "computer" in t:
+        return "PC fisso"
+    return ""
+
+
+def _codice_key(text):
+    return re.sub(r"[\s-]", "", text or "").casefold()
+
+
+def storico(rows):
+    """rows = [(tipo, dati), ...] dal piu' recente al piu' vecchio (i verbali gia' fatti).
+    Restituisce quello che serve per suggerire i valori e compilare i campi da soli:
+      valori[campo]   testi gia' usati, i piu' recenti per primi
+      dispositivi     apparati noti (tipologia, marca_modello, seriale, utente)
+      titoli          nome -> titolo usato nelle assegnazioni
+      sedi            citta' -> indirizzo e CAP dei censimenti
+      oggetti         oggetto del censimento -> descrizione
+      modelli         modello -> marca (censimenti)"""
+    out = {"valori": {k: [] for k in CAMPI_STORICO}, "dispositivi": [], "titoli": {}, "sedi": {},
+           "oggetti": {}, "modelli": {}}
+    seen = {k: set() for k in CAMPI_STORICO}
+    dev_seen = set()
+
+    def valore(campo, text):
+        text = (text or "").strip() if isinstance(text, str) else ""
+        if text and text.casefold() not in seen[campo]:
+            seen[campo].add(text.casefold())
+            out["valori"][campo].append(text)
+
+    def dispositivo(tipologia, mm, seriale, utente):
+        tipologia, mm, seriale, utente = [x.strip() if isinstance(x, str) else ""
+                                          for x in (tipologia, mm, seriale, utente)]
+        if not (seriale or mm):
+            return
+        key = _codice_key(seriale) if seriale else (tipologia.casefold(), mm.casefold(),
+                                                    utente.casefold())
+        if key in dev_seen:
+            return
+        dev_seen.add(key)
+        out["dispositivi"].append({"tipologia": tipologia, "marca_modello": mm,
+                                   "seriale": seriale, "utente": utente})
+
+    for tipo, d in rows:
+        d = d or {}
+        g = lambda k: d.get(k).strip() if isinstance(d.get(k), str) else ""
+        for k in ("tipologia", "marca_modello", "provenienza", "destinazione", "contatti", "titolo",
+                  "oggetto", "descrizione", "sede_citta", "indirizzo", "cap", "tecnico", "collega"):
+            valore(k, g(k))
+        if tipo == "trasferimento":
+            dispositivo(g("tipologia"), g("marca_modello"), g("seriale"), g("assegnatario"))
+        elif tipo == "presa_in_carico":
+            dispositivo(g("tipologia"), g("marca_modello"), g("seriale"), nome_pulito(g("utente")))
+            for x in d.get("materiale") or []:
+                valore("materiale", x)
+        elif tipo == "assegnazione":
+            nome = g("utente")
+            if g("titolo") and nome and nome.casefold() not in out["titoli"]:
+                out["titoli"][nome.casefold()] = g("titolo")
+            for it in d.get("dotazione") or []:
+                if not isinstance(it, dict):
+                    continue
+                valore("dot_modello", it.get("modello"))
+                tip = tipologia_da_dotazione(it.get("tipo"))
+                if tip:
+                    dispositivo(tip, it.get("modello"), it.get("codice"), nome)
+            for x in d.get("accessori") or []:
+                valore("accessori", x)
+        elif tipo == "censimento":
+            citta = g("sede_citta")
+            if citta and citta.casefold() not in out["sedi"] and (g("indirizzo") or g("cap")):
+                out["sedi"][citta.casefold()] = {"indirizzo": g("indirizzo"), "cap": g("cap")}
+            if g("oggetto") and g("oggetto").casefold() not in out["oggetti"]:
+                out["oggetti"][g("oggetto").casefold()] = {"descrizione": g("descrizione")}
+            for r in d.get("apparati") or []:
+                if not isinstance(r, dict):
+                    continue
+                marca, modello = (r.get("marca") or "").strip(), (r.get("modello") or "").strip()
+                valore("ap_marca", marca)
+                valore("ap_modello", modello)
+                if modello and marca and modello.casefold() not in out["modelli"]:
+                    out["modelli"][modello.casefold()] = marca
+    return out
+
+
+def dispositivi_utente(st, nome, user=None):
+    """Gli apparati di una persona: quelli dei verbali gia' fatti, poi il seriale PC e l'IMEI
+    scritti nella sua scheda utente."""
+    key = nome_pulito(nome).casefold()
+    res = [dict(x) for x in st["dispositivi"] if x["utente"].casefold() == key]
+    seen = {_codice_key(x["seriale"]) for x in res if x["seriale"]}
+    for tip, ser in (("Notebook", (user or {}).get("seriale_pc")), ("Smartphone", (user or {}).get("imei"))):
+        ser = (ser or "").strip()
+        if ser and _codice_key(ser) not in seen:
+            seen.add(_codice_key(ser))
+            res.append({"tipologia": tip, "marca_modello": "", "seriale": ser,
+                        "utente": nome_pulito(nome)})
+    return res
+
+
+def trova_dispositivo(st, seriale, users=()):
+    """L'apparato con questo numero di serie/IMEI (dai verbali o dalle schede utente)."""
+    key = _codice_key(seriale)
+    if not key:
+        return None
+    for x in st["dispositivi"]:
+        if _codice_key(x["seriale"]) == key:
+            return dict(x)
+    for u in users:
+        for tip, ser in (("Notebook", u.get("seriale_pc")), ("Smartphone", u.get("imei"))):
+            if ser and _codice_key(ser) == key:
+                return {"tipologia": tip, "marca_modello": "", "seriale": ser.strip(),
+                        "utente": u.get("nome", "")}
+    return None
+
+
+def etichetta_dispositivo(x):
+    return " · ".join(p for p in (x.get("tipologia"), x.get("marca_modello"),
+                                  ("S/N " + x["seriale"]) if x.get("seriale") else "",
+                                  ("(%s)" % x["utente"]) if x.get("utente") else "") if p)
+
+
+# --------------------------------------------------------------------------
 # Valori da mettere nei modelli
 # --------------------------------------------------------------------------
 def frase_assegnatario(titolo, nome):

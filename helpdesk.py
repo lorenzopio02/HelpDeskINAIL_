@@ -2641,6 +2641,12 @@ class VerbaleDialog(ModalDialog):
         self.apparati = [dict(r) for r in self.ini.get("apparati", [])]
         self.dotazione = [dict(r) for r in self.ini.get("dotazione", [])]
         self.user_key = None
+        self.hist = app.verbali_storico()      # quello che hai gia' scritto nei verbali precedenti
+        self.dev_map = {}
+        self._dot_auto = None
+        self._sede_auto = {}
+        self._marca_auto = ""          # marca rimasta scritta dal giro prima (non digitata da te)
+        self._suggest_adders = {}
 
         outer = ttk.Frame(self)
         outer.pack(fill="both", expand=True)
@@ -2701,7 +2707,7 @@ class VerbaleDialog(ModalDialog):
         self._line(label, build)
         return var, holder[0]
 
-    def _text(self, label, key, height, hint=""):
+    def _text(self, label, key, height, hint="", suggest=""):
         value = self.ini.get(key, "")
         if isinstance(value, (list, tuple)):
             value = "\n".join(value)
@@ -2713,6 +2719,27 @@ class VerbaleDialog(ModalDialog):
             self.t[key] = t
             if hint:
                 ttk.Label(fr, text=hint, style="Hint.TLabel").pack(anchor="w")
+            options = self._hist(suggest) if suggest else []
+            if options:
+                row = ttk.Frame(fr)
+                row.pack(anchor="w", pady=(4, 0))
+                ttk.Label(row, text="Aggiungi dai verbali precedenti:", style="Hint.TLabel").pack(
+                    side="left")
+                var = tk.StringVar()
+                cb = ttk.Combobox(row, textvariable=var, values=options, width=34,
+                                  state="readonly")
+                cb.pack(side="left", padx=6)
+
+                def add_line(event=None, t=t, var=var):
+                    item = var.get().strip()
+                    if not item:
+                        return
+                    if item.casefold() not in [x.strip().casefold()
+                                               for x in t.get("1.0", "end").splitlines()]:
+                        t.insert("end", ("\n" if t.get("1.0", "end").strip() else "") + item)
+                    var.set("")
+                cb.bind("<<ComboboxSelected>>", add_line)
+                self._suggest_adders[key] = (var, add_line)
         self._line(label, build)
 
     def _motivi(self, options):
@@ -2726,6 +2753,25 @@ class VerbaleDialog(ModalDialog):
         self._line("Motivazione", build)
         self._entry("Altro (motivo)", "altro", 50,
                     hint="se lo scrivi, la casella «Altro» viene spuntata")
+
+    def _hist(self, campo, base=()):
+        """Suggerimenti per un campo: i valori fissi, poi quelli gia' usati nei verbali precedenti."""
+        vals, seen = [], set()
+        for v in list(base) + self.hist["valori"].get(campo, []):
+            v = (v or "").strip()
+            if v and v.casefold() not in seen:
+                seen.add(v.casefold())
+                vals.append(v)
+        return vals
+
+    def _hcombo(self, label, key, campo, width=44, base=(), hint="", default=""):
+        return self._combo(label, key, self._hist(campo, base), width, hint=hint,
+                           default=default)
+
+    @staticmethod
+    def _on_pick(cb, handler):
+        for ev in ("<<ComboboxSelected>>", "<FocusOut>", "<Return>"):
+            cb.bind(ev, handler, add="+")
 
     def _user_combo(self, label, key, hint="scegli un utente in lista e compilo i suoi dati"):
         var, cb = self._combo(label, key, self.app.users_cache, 40, hint=hint)
@@ -2759,46 +2805,148 @@ class VerbaleDialog(ModalDialog):
                 self.v["utente"].set(wanted)
         elif self.tipo == "assegnazione":
             self._set_if_empty("matricola", u["matricola"])
+            self._set_if_empty("titolo", self.hist["titoli"].get(u["nome"].casefold(), ""))
+            self._dot_hint()
+        if self.tipo in ("trasferimento", "presa_in_carico"):
+            self._user_devices(u)
         self._device_hint()
 
+    # ----- apparati gia' noti (dai verbali precedenti e dalla scheda utente) -----
+    @staticmethod
+    def _group(tip):
+        tip = (tip or "").casefold()
+        if any(w in tip for w in PC_WORDS):
+            return "pc"
+        if any(w in tip for w in PHONE_WORDS):
+            return "phone"
+        return ""
+
     def _device_hint(self, *_):
-        """Se l'apparato è un PC o un cellulare, propongo il seriale/IMEI scritto nella scheda utente."""
+        """Se cambi la tipologia (PC o cellulare) metto il seriale/IMEI giusto della persona."""
         u = self._current_user()
         if not u or "tipologia" not in self.v:
             return
-        tip = self.v["tipologia"].get().casefold()
-        if any(w in tip for w in PC_WORDS):
-            self._set_if_empty("seriale", u["seriale_pc"])
-        elif any(w in tip for w in PHONE_WORDS):
-            self._set_if_empty("seriale", u["imei"])
+        group = self._group(self.v["tipologia"].get())
+        if not group:
+            return
+        devs = VB.dispositivi_utente(self.hist, u["nome"], u)
+        cur = self.v["seriale"].get().strip()
+        cur_dev = next((d for d in devs if cur and VB._codice_key(d["seriale"]) ==
+                        VB._codice_key(cur)), None)
+        wanted = [d for d in devs if self._group(d["tipologia"]) == group]
+        if cur and not (cur_dev and self._group(cur_dev["tipologia"]) != group):
+            return                                   # il seriale scritto va bene: non lo tocco
+        if cur_dev and self.v["marca_modello"].get().strip() == cur_dev["marca_modello"]:
+            self.v["marca_modello"].set("")
+        self.v["seriale"].set(wanted[0]["seriale"] if wanted else "")
+        if wanted and not self.v["marca_modello"].get().strip():
+            self.v["marca_modello"].set(wanted[0]["marca_modello"])
+
+    def _device_label(self, d):
+        return VB.etichetta_dispositivo(d)
+
+    def _set_device_list(self, devs=None):
+        if devs is None:
+            devs = self.hist["dispositivi"][:80]
+        self.dev_map = {}
+        for d in devs:
+            self.dev_map.setdefault(self._device_label(d), d)
+        if hasattr(self, "dev_cb"):
+            self.dev_cb.configure(values=list(self.dev_map))
+
+    def _apply_device(self, dev, override=False):
+        for k in ("tipologia", "marca_modello", "seriale"):
+            val = dev.get(k, "")
+            if k in self.v and (override or (val and not self.v[k].get().strip())):
+                self.v[k].set(val)         # scegliendo dall'elenco sostituisco tutto, anche con il vuoto
+        uk = self.user_key
+        if uk and dev.get("utente") and not self.v[uk].get().strip():
+            self.v[uk].set(dev["utente"])
+            self._user_picked()
+
+    def _user_devices(self, u):
+        devs = VB.dispositivi_utente(self.hist, u["nome"], u)
+        self._set_device_list(devs + self.hist["dispositivi"][:80])   # prima i suoi, poi tutti gli altri
+        if devs and "tipologia" in self.v and not any(
+                self.v[k].get().strip() for k in ("tipologia", "marca_modello", "seriale")):
+            self._apply_device(devs[0])
+
+    def _device_chosen(self, event=None):
+        dev = self.dev_map.get(self.dev_var.get())
+        if dev:
+            self._apply_device(dev, override=True)
+
+    def _serial_picked(self, event=None):
+        dev = VB.trova_dispositivo(self.hist, self.v["seriale"].get(), self.app.users_data)
+        if dev:
+            self._apply_device(dev)
+
+    def _serial_values(self):
+        vals, seen = [], set()
+        for x in [d["seriale"] for d in self.hist["dispositivi"]] + \
+                [u.get(k, "") for u in self.app.users_data for k in ("seriale_pc", "imei")]:
+            if x and x.casefold() not in seen:
+                seen.add(x.casefold())
+                vals.append(x)
+        return vals[:300]
+
+    def _device_row(self):
+        self.dev_var = tk.StringVar()
+
+        def build(fr):
+            self.dev_cb = ttk.Combobox(fr, textvariable=self.dev_var, state="readonly", width=62)
+            self.dev_cb.pack(side="left")
+            self.dev_cb.bind("<<ComboboxSelected>>", self._device_chosen)
+            self.dev_cb.bind("<MouseWheel>", self._wheel_on_combo)
+            ttk.Label(fr, text="compila tipologia, modello e seriale", style="Hint.TLabel").pack(
+                side="left", padx=(8, 0))
+        self._line("Apparato già noto", build)
+        self._set_device_list()
+
+    def _dot_hint(self, *_):
+        """Assegnazione: per un notebook o uno smartphone propongo il seriale/IMEI della persona."""
+        u = self._current_user() if self.tipo == "assegnazione" else None
+        if not u or not hasattr(self, "dv"):
+            return
+        cur = self.dv["codice"].get().strip()
+        if cur and cur != self._dot_auto:
+            return                                    # l'hai scritto tu: non lo tocco
+        tip = VB.tipologia_da_dotazione(self.dv["tipo"].get())
+        val = u["seriale_pc"] if tip == "Notebook" else u["imei"] if tip == "Smartphone" else ""
+        self._dot_auto = val
+        self.dv["codice"].set(val or "")
 
     def _tipologia(self, label="Tipologia *"):
-        var, _ = self._combo(label, "tipologia", VB.TIPOLOGIE, 28)
+        var, _ = self._combo(label, "tipologia", self._hist("tipologia", VB.TIPOLOGIE), 28)
         var.trace_add("write", self._device_hint)
 
     # ----- i quattro tipi di verbale -----
     def _form_trasferimento(self):
+        self._device_row()
         self._tipologia()
-        self._entry("Marca / Modello", "marca_modello", 44)
-        self._entry("Numero di serie", "seriale", 36)
+        self._hcombo("Marca / Modello", "marca_modello", "marca_modello", 44)
+        _, cb = self._combo("Numero di serie", "seriale", self._serial_values(), 36)
+        self._on_pick(cb, self._serial_picked)
         luoghi = self.app.verbale_luoghi()
-        self._combo("Provenienza (struttura)", "provenienza", luoghi, 64)
-        self._combo("Destinazione (struttura)", "destinazione", luoghi, 64)
+        self._hcombo("Provenienza (struttura)", "provenienza", "provenienza", 64, base=luoghi)
+        self._hcombo("Destinazione (struttura)", "destinazione", "destinazione", 64, base=luoghi)
         self._user_combo("Assegnatario", "assegnatario")
-        self._entry("Contatti", "contatti", 36)
+        self._hcombo("Contatti", "contatti", "contatti", 36)
         self._motivi(VB.MOTIVI_TRASFERIMENTO)
         self._text("Note", "note", 3)
         self._entry("Data spedizione", "data_sped", 14, hint="se la lasci vuota uso la data del verbale")
 
     def _form_presa_in_carico(self):
+        self._device_row()
         self._tipologia("Tipologia dispositivo *")
-        self._entry("Marca e modello", "marca_modello", 44)
-        self._entry("Numero seriale", "seriale", 36)
+        self._hcombo("Marca e modello", "marca_modello", "marca_modello", 44)
+        _, cb = self._combo("Numero seriale", "seriale", self._serial_values(), 36)
+        self._on_pick(cb, self._serial_picked)
         self._user_combo("Utente assegnatario *", "utente")
         self._entry("N° INC", "inc", 24, hint="il ticket dell'incidente")
         self._entry("N° RIC", "ric", 24, hint="la richiesta")
         self._text("Elenco materiale consegnato", "materiale", 4,
-                   hint="Una voce per riga (esempio: caricabatterie, cover).")
+                   hint="Una voce per riga (esempio: caricabatterie, cover).", suggest="materiale")
         self._motivi(VB.MOTIVI_PRESA_IN_CARICO)
 
     def _form_assegnazione(self):
@@ -2808,25 +2956,59 @@ class VerbaleDialog(ModalDialog):
         self._entry("Matricola", "matricola", 20)
         self._dotazione_box()
         self._text("Accessori inclusi", "accessori", 3,
-                   hint="Una voce per riga (esempio: zaino porta notebook).")
+                   hint="Una voce per riga (esempio: zaino porta notebook).", suggest="accessori")
 
     def _form_censimento(self):
         st = self.app.settings
-        self._entry("Oggetto *", "oggetto", 62, hint="esempio: Dispositivi Microsoft Lumia 950")
-        self._entry("Nel testo: «costituito da»", "descrizione", 62,
-                    hint="esempio: dispositivi smartphone Microsoft Lumia")
-        self._combo("Sede (città)", "sede_citta", self.app.sedi_cache, 26,
-                    default=st.get("sede_citta", ""))
-        self._entry("Indirizzo", "indirizzo", 40, default=st.get("indirizzo", ""))
-        self._entry("CAP", "cap", 10, default=st.get("cap", ""))
-        self._entry("Tecnico *", "tecnico", 36, default=st.get("tecnico", ""),
-                    hint="chi redige il verbale")
-        self._entry("Indicazioni ricevute da", "collega", 40,
-                    hint="facoltativo: se lo lasci vuoto la frase sulla dismissione non compare")
+        _, cb = self._hcombo("Oggetto *", "oggetto", "oggetto", 62,
+                             hint="esempio: Dispositivi Microsoft Lumia 950")
+        self._on_pick(cb, self._oggetto_picked)
+        self._hcombo("Nel testo: «costituito da»", "descrizione", "descrizione", 62,
+                     hint="esempio: dispositivi smartphone Microsoft Lumia")
+        _, cb = self._hcombo("Sede (città)", "sede_citta", "sede_citta", 26,
+                             base=self.app.sedi_cache, default=st.get("sede_citta", ""))
+        self._on_pick(cb, self._sede_picked)
+        self._hcombo("Indirizzo", "indirizzo", "indirizzo", 40, default=st.get("indirizzo", ""))
+        self._hcombo("CAP", "cap", "cap", 10, default=st.get("cap", ""))
+        # indirizzo e CAP messi da me (non scritti da te): se cambi citta' li sostituisco
+        self._sede_auto = {k: self.v[k].get().strip() for k in ("indirizzo", "cap")
+                           if self.v[k].get().strip() and not self.ini.get(k)}
+        self._hcombo("Tecnico *", "tecnico", "tecnico", 36, base=[st.get("tecnico", "")],
+                     default=st.get("tecnico", ""), hint="chi redige il verbale")
+        self._hcombo("Indicazioni ricevute da", "collega", "collega", 40,
+                     base=self.app.users_cache,
+                     hint="facoltativo: se lo lasci vuoto la frase sulla dismissione non compare")
         var, _ = self._combo("Titolo colonna codice", "col_codice", VB.COLONNE_CODICE, 20,
                              default="IMEI")
         var.trace_add("write", lambda *_: self._fill_apparati())
         self._apparati_box()
+
+    def _oggetto_picked(self, event=None):
+        info = self.hist["oggetti"].get(self.v["oggetto"].get().strip().casefold())
+        if info:
+            self._set_if_empty("descrizione", info.get("descrizione", ""))
+
+    def _sede_picked(self, event=None):
+        citta = self.v["sede_citta"].get().strip().casefold()
+        info = self.hist["sedi"].get(citta)
+        st = self.app.settings
+        if not info and citta and citta == st.get("sede_citta", "").strip().casefold():
+            info = {"indirizzo": st.get("indirizzo", ""), "cap": st.get("cap", "")}
+        for k in ("indirizzo", "cap"):
+            if self.v[k].get().strip() and self.v[k].get().strip() == self._sede_auto.get(k):
+                self.v[k].set("")                    # era quello della citta' di prima
+                self._sede_auto.pop(k, None)
+            new = (info or {}).get(k, "")
+            if new and not self.v[k].get().strip():
+                self.v[k].set(new)
+                self._sede_auto[k] = new
+
+    def _modello_picked(self, event=None):
+        marca = self.hist["modelli"].get(self.v_modello.get().strip().casefold())
+        cur = self.v_marca.get().strip()
+        if marca and (not cur or cur == self._marca_auto):
+            self.v_marca.set(marca)
+            self._marca_auto = marca
 
     # ----- elenco degli apparecchi del censimento -----
     def _tree(self, parent, columns, height):
@@ -2850,15 +3032,24 @@ class VerbaleDialog(ModalDialog):
         add = ttk.Frame(box)
         add.grid(row=1, column=0, sticky="ew", pady=(8, 0))
         last = self.apparati[-1] if self.apparati else {}
+        self._marca_auto = last.get("marca", "")
         self.v_marca = tk.StringVar(value=last.get("marca", ""))
         self.v_modello = tk.StringVar(value=last.get("modello", ""))
         self.v_codice = tk.StringVar()
-        for label, var, width in (("Marca", self.v_marca, 16), ("Modello", self.v_modello, 16),
-                                  ("Codice", self.v_codice, 24)):
+        for label, var, width, campo in (("Marca", self.v_marca, 16, "ap_marca"),
+                                         ("Modello", self.v_modello, 16, "ap_modello"),
+                                         ("Codice", self.v_codice, 24, "")):
             ttk.Label(add, text=label).pack(side="left", padx=(0, 4))
-            e = ttk.Entry(add, textvariable=var, width=width)
+            if campo:
+                values = self._hist(campo)
+                e = ttk.Combobox(add, textvariable=var, values=values, width=width)
+                bind_autocomplete(e, var, lambda v=values: v)
+                if campo == "ap_modello":
+                    self._on_pick(e, self._modello_picked)
+            else:
+                e = ttk.Entry(add, textvariable=var, width=width)
             e.pack(side="left", padx=(0, 10))
-            e.bind("<Return>", lambda ev: self._add_apparato())
+            e.bind("<Return>", lambda ev: self._add_apparato(), add="+")
             if var is self.v_codice:
                 self.e_codice = e
         ttk.Button(add, text="Aggiungi", style="Primary.TButton",
@@ -2898,6 +3089,7 @@ class VerbaleDialog(ModalDialog):
         if not (marca or modello or codice):
             return
         self.apparati.append({"marca": marca, "modello": modello, "codice": codice})
+        self._marca_auto = marca                     # per il prossimo resta scritta questa
         self.v_codice.set("")
         self._fill_apparati()
         self.e_codice.focus_set()
@@ -2915,6 +3107,7 @@ class VerbaleDialog(ModalDialog):
         if len(idx) != 1:
             return
         r = self.apparati.pop(idx[0])
+        self._marca_auto = ""
         self.v_marca.set(r.get("marca", ""))
         self.v_modello.set(r.get("modello", ""))
         self.v_codice.set(r.get("codice", ""))
@@ -2946,13 +3139,17 @@ class VerbaleDialog(ModalDialog):
         self.tv_dot.bind("<Delete>", lambda e: self._del_dot())
         self.dv = {k: tk.StringVar() for k in ("tipo", "modello", "codice", "iccid", "numero")}
         self.dv["tipo"].set(VB.TIPI_DOTAZIONE[0])
+        self.dv["tipo"].trace_add("write", self._dot_hint)
         r1 = ttk.Frame(box)
         r1.grid(row=1, column=0, sticky="ew", pady=(8, 0))
         ttk.Label(r1, text="Oggetto").pack(side="left", padx=(0, 4))
         ttk.Combobox(r1, textvariable=self.dv["tipo"], values=VB.TIPI_DOTAZIONE, width=22).pack(
             side="left", padx=(0, 10))
         ttk.Label(r1, text="Modello").pack(side="left", padx=(0, 4))
-        ttk.Entry(r1, textvariable=self.dv["modello"], width=24).pack(side="left", padx=(0, 10))
+        dot_models = self._hist("dot_modello")
+        cb_mod = ttk.Combobox(r1, textvariable=self.dv["modello"], values=dot_models, width=22)
+        bind_autocomplete(cb_mod, self.dv["modello"], lambda: dot_models)
+        cb_mod.pack(side="left", padx=(0, 10))
         ttk.Label(r1, text="S/N o IMEI").pack(side="left", padx=(0, 4))
         e = ttk.Entry(r1, textvariable=self.dv["codice"], width=22)
         e.pack(side="left")
@@ -3064,10 +3261,12 @@ class VerbaleDialog(ModalDialog):
         """Se hai scritto un apparecchio o un oggetto e non hai premuto «Aggiungi», lo aggiungo io."""
         if self.tipo == "censimento" and self.v_codice.get().strip():
             self._add_apparato()
-        if self.tipo == "assegnazione" and (self.dv["modello"].get().strip()
-                                            or self.dv["codice"].get().strip()
-                                            or self.dv["iccid"].get().strip()):
-            self._add_dot()
+        if self.tipo == "assegnazione":
+            codice = self.dv["codice"].get().strip()
+            # il seriale proposto da me (dalla scheda utente) non e' un oggetto da aggiungere in silenzio
+            if (self.dv["modello"].get().strip() or self.dv["iccid"].get().strip()
+                    or (codice and codice != (self._dot_auto or ""))):
+                self._add_dot()
 
     def collect(self):
         d = {k: v.get().strip() for k, v in self.v.items()}
@@ -5274,6 +5473,19 @@ class App(tk.Tk):
                        "non cancella il file Word (se il verbale è anche sul telefono, toglilo "
                        "anche lì, altrimenti torna con la prossima importazione)."
                   ).grid(row=4, column=0, sticky="w", pady=(8, 0))
+
+    def verbali_storico(self):
+        """Quello che hai scritto nei verbali gia' fatti (serve a suggerire e compilare da solo)."""
+        rows = []
+        if VB is not None:
+            for r in self.db.search_verbali():
+                try:
+                    dati = json.loads(r["dati"] or "{}")
+                except ValueError:
+                    continue
+                rows.append((r["modificato"] or "", r["tipo"], dati))
+        rows.sort(key=lambda x: x[0], reverse=True)
+        return VB.storico([(t, d) for _, t, d in rows]) if VB is not None else {}
 
     def verbale_luoghi(self):
         """Suggerimenti per provenienza/destinazione: strutture e sedi note."""

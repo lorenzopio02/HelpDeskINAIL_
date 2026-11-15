@@ -134,6 +134,85 @@
   }
   const saveSettings = () => setMeta("verbSet", settings);
 
+  /* ---------- quello che hai già scritto nei verbali precedenti (stessa logica del programma del PC) ---------- */
+  const CAMPI_STORICO = ["tipologia", "marca_modello", "provenienza", "destinazione", "contatti", "titolo", "oggetto", "descrizione", "sede_citta", "indirizzo", "cap", "tecnico", "collega", "materiale", "accessori", "dot_modello", "ap_marca", "ap_modello"];
+  const nomePulito = x => String(x || "").replace(/\s*\(matricola[^)]*\)\s*$/i, "").trim();
+  const codeKey = x => String(x || "").replace(/[\s-]/g, "").toLowerCase();
+  function tipDaDot(tipo) {
+    const x = String(tipo || "").toLowerCase();
+    if (/notebook|portatile/.test(x)) return "Notebook";
+    if (/smartphone|cellulare|telefono/.test(x)) return "Smartphone";
+    if (x.includes("tablet")) return "Tablet";
+    if (/pc|desktop|computer/.test(x)) return "PC fisso";
+    return "";
+  }
+  const groupOf = tip => { tip = String(tip || "").toLowerCase(); return isPcWord(tip) ? "pc" : isPhoneWord(tip) ? "phone" : ""; };
+  const uniq = arr => { const seen = new Set(), o = []; for (let x of arr) { x = str(x); const k = x.toLowerCase(); if (x && !seen.has(k)) { seen.add(k); o.push(x); } } return o; };
+  /* rows = [{tipo, dati}] dal più recente al più vecchio */
+  function storico(rows) {
+    const out = { valori: {}, dispositivi: [], titoli: {}, sedi: {}, oggetti: {}, modelli: {} }, seen = {}, devSeen = new Set();
+    CAMPI_STORICO.forEach(k => { out.valori[k] = []; seen[k] = new Set(); });
+    const valore = (campo, text) => { text = typeof text === "string" ? text.trim() : ""; const k = text.toLowerCase(); if (text && !seen[campo].has(k)) { seen[campo].add(k); out.valori[campo].push(text); } };
+    const dispositivo = (tip, mm, ser, ut) => {
+      [tip, mm, ser, ut] = [tip, mm, ser, ut].map(x => typeof x === "string" ? x.trim() : "");
+      if (!(ser || mm)) return;
+      const key = ser ? codeKey(ser) : [tip, mm, ut].map(x => x.toLowerCase()).join("|");
+      if (devSeen.has(key)) return;
+      devSeen.add(key);
+      out.dispositivi.push({ tipologia: tip, marca_modello: mm, seriale: ser, utente: ut });
+    };
+    for (const row of rows || []) {
+      const tipo = row && row.tipo, d = row && row.dati && typeof row.dati === "object" ? row.dati : {};
+      const g = k => typeof d[k] === "string" ? d[k].trim() : "", arr = k => Array.isArray(d[k]) ? d[k] : [];
+      for (const k of ["tipologia", "marca_modello", "provenienza", "destinazione", "contatti", "titolo", "oggetto", "descrizione", "sede_citta", "indirizzo", "cap", "tecnico", "collega"]) valore(k, g(k));
+      if (tipo === "trasferimento") dispositivo(g("tipologia"), g("marca_modello"), g("seriale"), g("assegnatario"));
+      else if (tipo === "presa_in_carico") {
+        dispositivo(g("tipologia"), g("marca_modello"), g("seriale"), nomePulito(g("utente")));
+        arr("materiale").forEach(x => valore("materiale", x));
+      } else if (tipo === "assegnazione") {
+        const nome = g("utente");
+        if (g("titolo") && nome && !(nome.toLowerCase() in out.titoli)) out.titoli[nome.toLowerCase()] = g("titolo");
+        for (const it of arr("dotazione")) {
+          if (!it || typeof it !== "object") continue;
+          valore("dot_modello", it.modello);
+          const tip = tipDaDot(it.tipo);
+          if (tip) dispositivo(tip, it.modello, it.codice, nome);
+        }
+        arr("accessori").forEach(x => valore("accessori", x));
+      } else if (tipo === "censimento") {
+        const citta = g("sede_citta");
+        if (citta && !(citta.toLowerCase() in out.sedi) && (g("indirizzo") || g("cap"))) out.sedi[citta.toLowerCase()] = { indirizzo: g("indirizzo"), cap: g("cap") };
+        if (g("oggetto") && !(g("oggetto").toLowerCase() in out.oggetti)) out.oggetti[g("oggetto").toLowerCase()] = { descrizione: g("descrizione") };
+        for (const r of arr("apparati")) {
+          if (!r || typeof r !== "object") continue;
+          const marca = str(r.marca), modello = str(r.modello);
+          valore("ap_marca", marca); valore("ap_modello", modello);
+          if (modello && marca && !(modello.toLowerCase() in out.modelli)) out.modelli[modello.toLowerCase()] = marca;
+        }
+      }
+    }
+    return out;
+  }
+  function dispositiviUtente(st, nome, u) {
+    const key = nomePulito(nome).toLowerCase(), res = st.dispositivi.filter(x => x.utente.toLowerCase() === key).map(x => ({ ...x }));
+    const seen = new Set(res.filter(x => x.seriale).map(x => codeKey(x.seriale)));
+    for (const [tip, ser0] of [["Notebook", u && u.seriale_pc], ["Smartphone", u && u.imei]]) {
+      const ser = str(ser0);
+      if (ser && !seen.has(codeKey(ser))) { seen.add(codeKey(ser)); res.push({ tipologia: tip, marca_modello: "", seriale: ser, utente: nomePulito(nome) }); }
+    }
+    return res;
+  }
+  function trovaDispositivo(st, seriale, usrs) {
+    const key = codeKey(seriale); if (!key) return null;
+    const x = st.dispositivi.find(d => codeKey(d.seriale) === key); if (x) return { ...x };
+    for (const u of usrs || []) for (const [tip, ser] of [["Notebook", u.seriale_pc], ["Smartphone", u.imei]]) if (ser && codeKey(ser) === key) return { tipologia: tip, marca_modello: "", seriale: str(ser), utente: u.nome || "" };
+    return null;
+  }
+  const etichetta = x => [x.tipologia, x.marca_modello, x.seriale ? "S/N " + x.seriale : "", x.utente ? `(${x.utente})` : ""].filter(Boolean).join(" · ");
+  let H = storico([]);
+  const histVals = (campo, base = []) => uniq([...base, ...(H.valori[campo] || [])]);
+  const histItems = (campo, base = []) => () => histVals(campo, base).map(text => ({ text }));
+
   /* ---------- il testo del verbale (come nei modelli Word) ---------- */
   function docOf(v) {
     const d = v.dati, g = k => str(d[k]), t = v.tipo, B = BLANK, kv = (k, x) => ({ t: "kv", k, v: x || B });
@@ -345,6 +424,7 @@
 
   async function openForm(tipo, rec, prefillUser) {
     await loadSettings();
+    H = storico((await getAll("verbali")).sort((a, b) => (b.modificato || "").localeCompare(a.modificato || "")).map(v => ({ tipo: v.tipo, dati: v.dati })));
     const d = rec ? JSON.parse(JSON.stringify(rec.dati)) : {};
     S = { uid: rec ? rec.uid : null, tipo, photos: rec ? (rec.foto || []).map(f => ({ ...f })) : [], apparati: (d.apparati || []).map(r => ({ ...r })), dotazione: (d.dotazione || []).map(r => ({ ...r })), editA: -1 };
     d.data = rec ? itToIso(d.data) : isoDay(new Date());
@@ -406,32 +486,124 @@
   function wireForm(d) {
     const t = S.tipo, g = k => { const e = $("v_" + k); return e ? e.value : ""; };
     const ac = (k, fn) => { if ($("v_" + k)) autoComplete($("v_" + k), fn); };
-    ac("tipologia", listItems(TIPOLOGIE)); ac("titolo", listItems(TITOLI_LISTA.filter(Boolean))); ac("sede_citta", sedeItems); ac("col_codice", listItems(COLONNE));
-    if (t === "trasferimento") { ac("provenienza", luoghi); ac("destinazione", luoghi); }
+    const setIfEmpty = (k, v) => { const e = $("v_" + k); if (e && v && !e.value.trim()) e.value = v; };
     const uk = userKeyOf(t);
+    const lines = txt => txt.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+    const luoghiItems = () => uniq([...histVals("provenienza"), ...histVals("destinazione"), ...luoghi().map(x => x.text)]).map(text => ({ text }));
+    const collegaItems = () => { const base = userItems(), names = new Set(base.map(i => i.text.toLowerCase())); return [...base, ...histVals("collega").filter(x => !names.has(x.toLowerCase())).map(text => ({ text }))]; };
+    const serialItems = () => {
+      const grp = groupOf(g("tipologia")), seen = new Set(), items = [];
+      const add = (ser, tip, mm, ut) => { ser = str(ser); const k = codeKey(ser); if (!ser || seen.has(k)) return; seen.add(k); items.push({ text: ser, hay: [ser, tip, mm, ut].join(" "), sub: [tip, mm, ut && `(${ut})`].filter(Boolean).join(" · "), grp: groupOf(tip) }); };
+      H.dispositivi.forEach(x => add(x.seriale, x.tipologia, x.marca_modello, x.utente));
+      users.forEach(u => { add(u.seriale_pc, "Notebook", "", u.nome); add(u.imei, "Smartphone", "", u.nome); });
+      return grp ? [...items.filter(i => i.grp === grp), ...items.filter(i => i.grp !== grp)] : items;
+    };
+    ac("tipologia", histItems("tipologia", TIPOLOGIE)); ac("titolo", histItems("titolo", TITOLI_LISTA.filter(Boolean))); ac("sede_citta", histItems("sede_citta", sediList)); ac("col_codice", listItems(COLONNE));
+    ac("marca_modello", histItems("marca_modello")); ac("seriale", serialItems); ac("contatti", histItems("contatti"));
+    ac("provenienza", luoghiItems); ac("destinazione", luoghiItems);
+    ac("oggetto", histItems("oggetto")); ac("descrizione", histItems("descrizione")); ac("indirizzo", histItems("indirizzo")); ac("cap", histItems("cap"));
+    ac("tecnico", histItems("tecnico", [settings.tecnico])); ac("collega", collegaItems);
     if (uk) autoComplete($("v_" + uk), userItems, "Nessun utente in lista: scrivi il nome (oppure importa gli utenti dal PC in Scambio).");
     const curUser = () => {
       if (!uk) return null;
       const raw = g(uk).replace(/\s*\(matricola[^)]*\)\s*$/i, "");
       return raw.trim() ? users.find(u => u.key === keyOf(raw)) : null;
     };
-    const setIfEmpty = (k, v) => { const e = $("v_" + k); if (e && v && !e.value.trim()) e.value = v; };
+
+    /* apparati già noti: tipologia, modello e seriale si compilano da soli */
+    let devBox = null;
+    if (uk && $("v_tipologia")) {
+      devBox = document.createElement("div"); devBox.id = "v_devs";
+      const wrap = $("v_" + uk).parentNode, hint = wrap.nextElementSibling;
+      (hint && hint.classList.contains("hint") ? hint : wrap).insertAdjacentElement("afterend", devBox);
+    }
+    const applyDevice = (dev, override) => {
+      for (const k of ["tipologia", "marca_modello", "seriale"]) { const e = $("v_" + k); if (e && (override || (dev[k] && !e.value.trim()))) e.value = dev[k] || ""; }
+      if (uk && dev.utente && !$("v_" + uk).value.trim()) { $("v_" + uk).value = dev.utente; picked(); }
+    };
+    const drawDevs = devs => {
+      if (!devBox) return;
+      devBox.innerHTML = devs.length ? `<div class="hint">Apparati già noti di questa persona: tocca per compilare tipologia, modello e seriale.</div><div class="chips">${devs.map((x, i) => `<button type="button" data-i="${i}">${esc(etichetta({ ...x, utente: "" }))}</button>`).join("")}</div>` : "";
+      devBox.querySelectorAll("button").forEach(b => b.onclick = () => applyDevice(devs[+b.dataset.i], true));
+    };
+    const userDevices = u => {
+      const devs = dispositiviUtente(H, u.nome, u);
+      drawDevs(devs);
+      if (devs.length && !["tipologia", "marca_modello", "seriale"].some(k => g(k).trim())) applyDevice(devs[0]);
+    };
+    /* se cambi la tipologia (PC o cellulare) metto il seriale/IMEI giusto della persona */
     const deviceHint = () => {
       const u = curUser(); if (!u || !$("v_tipologia")) return;
-      const tip = g("tipologia").toLowerCase();
-      if (isPcWord(tip)) setIfEmpty("seriale", u.seriale_pc); else if (isPhoneWord(tip)) setIfEmpty("seriale", u.imei);
+      const grp = groupOf(g("tipologia")); if (!grp) return;
+      const devs = dispositiviUtente(H, u.nome, u), cur = g("seriale").trim();
+      const curDev = cur ? devs.find(x => codeKey(x.seriale) === codeKey(cur)) : null, wanted = devs.filter(x => groupOf(x.tipologia) === grp);
+      if (cur && !(curDev && groupOf(curDev.tipologia) !== grp)) return;      // il seriale scritto va bene: non lo tocco
+      if (curDev && g("marca_modello").trim() === curDev.marca_modello) $("v_marca_modello").value = "";
+      $("v_seriale").value = wanted.length ? wanted[0].seriale : "";
+      if (wanted.length && !g("marca_modello").trim()) $("v_marca_modello").value = wanted[0].marca_modello;
     };
-    const picked = () => {
+    /* assegnazione: per un notebook o uno smartphone propongo il seriale/IMEI della persona */
+    let dotAuto = null;
+    const dotHint = () => {
+      const u = t === "assegnazione" ? curUser() : null; if (!u || !$("v_dTipo")) return;
+      const cur = $("v_dCodice").value.trim(); if (cur && cur !== dotAuto) return;      // l'hai scritto tu: non lo tocco
+      const tip = tipDaDot($("v_dTipo").value), val = tip === "Notebook" ? str(u.seriale_pc) : tip === "Smartphone" ? str(u.imei) : "";
+      dotAuto = val; $("v_dCodice").value = val;
+    };
+    function picked() {
       const u = curUser(); if (!u) return;
       const inp = $("v_" + uk);
       if (t === "trasferimento" || t === "assegnazione") { if (inp.value !== u.nome) inp.value = u.nome; }
       if (t === "trasferimento") setIfEmpty("contatti", u.telefono);
       else if (t === "presa_in_carico") { const w = u.matricola ? `${u.nome} (matricola ${u.matricola})` : u.nome; if (inp.value !== w) inp.value = w; }
-      else if (t === "assegnazione") setIfEmpty("matricola", u.matricola);
+      else if (t === "assegnazione") { setIfEmpty("matricola", u.matricola); setIfEmpty("titolo", H.titoli[u.nome.toLowerCase()] || ""); dotHint(); }
+      if (t === "trasferimento" || t === "presa_in_carico") userDevices(u);
       deviceHint();
-    };
-    if (uk) $("v_" + uk).addEventListener("change", picked);
+    }
+    if (uk) $("v_" + uk).addEventListener("change", () => { if (!curUser()) drawDevs([]); picked(); });
     if ($("v_tipologia")) { $("v_tipologia").addEventListener("input", deviceHint); $("v_tipologia").addEventListener("change", deviceHint); }
+    if ($("v_seriale")) $("v_seriale").addEventListener("change", () => { const dev = trovaDispositivo(H, g("seriale"), users); if (dev) applyDevice(dev); });
+
+    /* verbale di censimento: oggetto → descrizione, città → indirizzo e CAP */
+    const sedeAuto = {};      // indirizzo e CAP messi da me (non scritti da te): se cambi città li sostituisco
+    if (t === "censimento" && !S.uid) for (const k of ["indirizzo", "cap"]) if (str(d[k])) sedeAuto[k] = str(d[k]);
+    if (t === "censimento") {
+      $("v_oggetto").addEventListener("change", () => { const info = H.oggetti[g("oggetto").trim().toLowerCase()]; if (info) setIfEmpty("descrizione", info.descrizione); });
+      $("v_sede_citta").addEventListener("change", () => {
+        const citta = g("sede_citta").trim().toLowerCase();
+        let info = H.sedi[citta];
+        if (!info && citta && citta === str(settings.sede_citta).toLowerCase()) info = { indirizzo: str(settings.indirizzo), cap: str(settings.cap) };
+        for (const k of ["indirizzo", "cap"]) {
+          const e = $("v_" + k);
+          if (e.value.trim() && e.value.trim() === sedeAuto[k]) { e.value = ""; delete sedeAuto[k]; }      // era quello della città di prima
+          const nv = info ? str(info[k]) : "";
+          if (nv && !e.value.trim()) { e.value = nv; sedeAuto[k] = nv; }
+        }
+      });
+    }
+
+    /* materiale e accessori: voci dei verbali precedenti da aggiungere con un tocco */
+    const suggest = k => {
+      const ta = $("v_" + k), all = histVals(k); if (!ta || !all.length) return;
+      const box = document.createElement("div"), chips = document.createElement("div"), more = document.createElement("input");
+      box.id = "v_" + k + "_sug";
+      const hint = ta.nextElementSibling; (hint && hint.classList.contains("hint") ? hint : ta).insertAdjacentElement("afterend", box);
+      more.placeholder = "Altre voci: tocca per scegliere"; more.autocomplete = "off"; more.setAttribute("autocapitalize", "sentences");
+      box.append(chips, more);
+      let left = [];
+      autoComplete(more, () => left.map(text => ({ text })));
+      const have = () => new Set(lines(ta.value).map(x => x.toLowerCase()));
+      const add = x => { if (!have().has(x.toLowerCase())) ta.value = (ta.value.trim() ? ta.value.replace(/\s+$/, "") + "\n" : "") + x; draw(); };
+      const draw = () => {
+        const h = have(); left = all.filter(x => !h.has(x.toLowerCase()));
+        chips.innerHTML = left.length ? `<div class="hint">Dai verbali precedenti: tocca per aggiungere.</div><div class="chips">${left.slice(0, 8).map((x, i) => `<button type="button" data-i="${i}">＋ ${esc(x)}</button>`).join("")}</div>` : "";
+        chips.querySelectorAll("button").forEach(b => b.onclick = () => add(left[+b.dataset.i]));
+        more.parentNode.classList.toggle("hidden", left.length <= 8);
+      };
+      more.addEventListener("change", () => { const x = more.value.trim(); more.value = ""; if (x) add(x); });
+      ta.addEventListener("input", draw); draw();
+    };
+    suggest("materiale"); suggest("accessori");
 
     /* foto */
     const thumbs = () => {
@@ -454,17 +626,23 @@
         $("v_aList").querySelectorAll(".vr").forEach(row => row.onclick = e => {
           const i = +row.dataset.i;
           if (e.target.dataset.del !== undefined) { S.apparati.splice(i, 1); return draw(); }
-          const r = S.apparati.splice(i, 1)[0]; $("v_aMarca").value = r.marca; $("v_aModello").value = r.modello; $("v_aCodice").value = r.codice; draw(); $("v_aCodice").focus();
+          const r = S.apparati.splice(i, 1)[0]; marcaAuto = ""; $("v_aMarca").value = r.marca; $("v_aModello").value = r.modello; $("v_aCodice").value = r.codice; draw(); $("v_aCodice").focus();
         });
         const av = controllaApparati(S.apparati, colonna());
         $("v_aWarn").innerHTML = av.length ? `<div class="msg err">${esc(av.slice(0, 4).join("\n") + (av.length > 4 ? `\n…e altri ${av.length - 4} da controllare` : ""))}</div>` : "";
         $("v_aCodLab").textContent = colonna();
         $("v_aCodice").setAttribute("inputmode", colonna().toUpperCase() === "IMEI" ? "numeric" : "text");
       };
+      let marcaAuto = "";      // marca rimasta scritta dal giro prima (non digitata da te)
+      autoComplete($("v_aMarca"), histItems("ap_marca")); autoComplete($("v_aModello"), histItems("ap_modello"));
+      $("v_aModello").addEventListener("change", () => {
+        const marca = H.modelli[$("v_aModello").value.trim().toLowerCase()], cur = $("v_aMarca").value.trim();
+        if (marca && (!cur || cur === marcaAuto)) { $("v_aMarca").value = marca; marcaAuto = marca; }
+      });
       const add = () => {
         const marca = $("v_aMarca").value.trim(), modello = $("v_aModello").value.trim(), codice = $("v_aCodice").value.trim();
         if (!(marca || modello || codice)) return;
-        S.apparati.push({ marca, modello, codice }); $("v_aCodice").value = ""; draw(); $("v_aCodice").focus();
+        S.apparati.push({ marca, modello, codice }); marcaAuto = marca; $("v_aCodice").value = ""; draw(); $("v_aCodice").focus();
       };
       S.flush = () => { if ($("v_aCodice").value.trim()) add(); };
       $("v_aAdd").onclick = add;
@@ -472,12 +650,12 @@
       $("v_col_codice").addEventListener("change", draw); $("v_col_codice").addEventListener("input", draw);
       $("v_aPasteBtn").onclick = () => { $("v_aPasteBox").classList.toggle("hidden"); $("v_aPaste").focus(); };
       $("v_aPasteOk").onclick = () => { S.apparati.push(...parseApparati($("v_aPaste").value, $("v_aMarca").value.trim(), $("v_aModello").value.trim())); $("v_aPaste").value = ""; $("v_aPasteBox").classList.add("hidden"); draw(); };
-      if (S.apparati.length) { const l = S.apparati[S.apparati.length - 1]; $("v_aMarca").value = l.marca; $("v_aModello").value = l.modello; }
+      if (S.apparati.length) { const l = S.apparati[S.apparati.length - 1]; $("v_aMarca").value = l.marca; $("v_aModello").value = l.modello; marcaAuto = l.marca; }
       draw();
     }
     /* assegnazione: dotazione */
     if (t === "assegnazione") {
-      autoComplete($("v_dTipo"), listItems(TIPI_DOT));
+      autoComplete($("v_dTipo"), listItems(TIPI_DOT)); autoComplete($("v_dModello"), histItems("dot_modello"));
       const isSim = () => $("v_dTipo").value.toLowerCase().includes("sim");
       const draw = () => {
         $("v_dList").innerHTML = S.dotazione.map((r, i) => `<div class="vr" data-i="${i}"><div><b>${esc([r.tipo, r.modello].filter(Boolean).join(" · "))}</b><br><small>${esc(righeDotazione(r).join(" · "))}</small></div><button type="button" class="x" data-del="${i}">×</button></div>`).join("") || `<div class="hint">Nessun oggetto ancora.</div>`;
@@ -494,13 +672,15 @@
         if (!isSim()) { r.iccid = ""; r.numero = ""; }
         S.dotazione.push(r); ["v_dModello", "v_dCodice", "v_dIccid", "v_dNumero"].forEach(i => $(i).value = ""); draw();
       };
-      S.flush = () => { if (["v_dModello", "v_dCodice", "v_dIccid", "v_dNumero"].some(i => $(i).value.trim())) add(); };
+      /* il seriale proposto da me (dalla scheda utente) non è un oggetto da aggiungere in silenzio */
+      S.flush = () => { if (["v_dModello", "v_dCodice", "v_dIccid", "v_dNumero"].some(i => $(i).value.trim() && !(i === "v_dCodice" && $(i).value.trim() === dotAuto))) add(); };
       $("v_dAdd").onclick = add;
-      $("v_dTipo").addEventListener("input", sim); $("v_dTipo").addEventListener("change", sim);
+      $("v_dTipo").addEventListener("input", () => { sim(); dotHint(); }); $("v_dTipo").addEventListener("change", () => { sim(); dotHint(); });
       sim(); draw();
     }
     $("v_cancel").onclick = () => { const uid = S.uid; closeModal(); if (uid) showVer(uid); };
     $("v_save").onclick = save;
+    if (!S.uid && uk && curUser()) picked();      // «Nuovo verbale» dalla scheda di un utente: parto già compilato
   }
 
   function collect() {

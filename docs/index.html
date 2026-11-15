@@ -423,7 +423,9 @@ function autoComplete(inp, getItems, emptyMsg) {
   };
   const render = first => {
     if (skip) return;
-    const t = words(inp.value), all = getItems();
+    let t = words(inp.value);
+    const all = getItems();
+    if (first && t.length && all.some(it => it.text.toLowerCase() === inp.value.trim().toLowerCase())) t = [];   /* già scelto: tocchi il campo e vedi tutta la lista per cambiarlo */
     let m = all.filter(it => { const h = (it.hay || it.text).toLowerCase(); return t.every(w => h.includes(w)); });
     if (t.length) m.sort((a, b) => (b.text.toLowerCase().startsWith(t[0]) ? 1 : 0) - (a.text.toLowerCase().startsWith(t[0]) ? 1 : 0));
     if (t.length && m.length === 1 && m[0].text.toLowerCase() === inp.value.trim().toLowerCase()) m = [];   // già scelto
