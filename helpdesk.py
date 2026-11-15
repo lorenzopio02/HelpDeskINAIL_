@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import uuid
 import zipfile
@@ -25,6 +26,11 @@ try:
     from printer_images import IMAGES as PRINTER_IMAGES
 except ImportError:
     PRINTER_IMAGES = {}
+
+try:
+    import verbali as VB          # verbali Word (trasferimento, consegna, assegnazione, censimento)
+except ImportError:
+    VB = None
 
 APP_NAME = "Help Desk INAIL"
 
@@ -197,6 +203,95 @@ def staging_dir():
     return os.path.join(attachments_root(), "_temp")
 
 
+# ---------------------------------------------------------------------------
+# Verbali Word: impostazioni e cartelle
+# ---------------------------------------------------------------------------
+SETTINGS_DEFAULT = {"tecnico": "", "sede_citta": "Firenze", "indirizzo": "Via Delle Porte Nuove, 61",
+                    "cap": "50144", "cartella_verbali": ""}
+
+
+def settings_path():
+    return os.path.join(data_dir(), "impostazioni.json")
+
+
+def load_settings():
+    s = dict(SETTINGS_DEFAULT)
+    try:
+        with open(settings_path(), "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        if isinstance(saved, dict):
+            s.update({k: str(v) for k, v in saved.items() if k in SETTINGS_DEFAULT})
+    except (OSError, ValueError):
+        pass
+    return s
+
+
+def save_settings(s):
+    try:
+        with open(settings_path(), "w", encoding="utf-8") as f:
+            json.dump(s, f, ensure_ascii=False, indent=2)
+        return True
+    except OSError:
+        return False
+
+
+def templates_dir():
+    """Cartella dei modelli Word dei verbali (si possono modificare a mano)."""
+    return os.path.join(data_dir(), "Modelli verbali")
+
+
+def verbali_foto_root():
+    """Qui restano le foto allegate ai verbali (sono incluse nel backup)."""
+    path = os.path.join(attachments_root(), "verbali")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def parse_iso_date(text):
+    try:
+        return date.fromisoformat((text or "")[:10])
+    except ValueError:
+        return None
+
+
+def verbale_stato_word(r):
+    """Da creare (mai fatto), Da rifare (dati cambiati dopo il Word) o Creato."""
+    if not r.get("word_il"):
+        return "Da creare"
+    return "Da rifare" if (r.get("modificato") or "") > r["word_il"] else "Creato"
+
+
+def verbale_firme_text(r):
+    try:
+        firme = json.loads(r.get("dati") or "{}").get("_firme") or {}
+    except ValueError:
+        firme = {}
+    nomi = [label for k, label in (("utente", "utente"), ("tecnico", "tecnico")) if firme.get(k)]
+    return " + ".join(nomi) if nomi else ""
+
+
+def riassunto_verbale(tipo, d):
+    """(soggetto, dettaglio) mostrati nell'elenco dei verbali."""
+    def join(*parts):
+        return " · ".join(p.strip() for p in parts if p and p.strip())
+
+    g = lambda k: (d.get(k) or "").strip()
+    sn = ("S/N " + g("seriale")) if g("seriale") else ""
+    if tipo == "trasferimento":
+        rotta = " → ".join(x for x in (g("provenienza"), g("destinazione")) if x)
+        return g("assegnatario") or g("tipologia"), join(g("tipologia"), g("marca_modello"), sn, rotta)
+    if tipo == "presa_in_carico":
+        ticket = join(("INC " + g("inc")) if g("inc") else "", ("RIC " + g("ric")) if g("ric") else "")
+        return g("utente"), join(g("tipologia"), g("marca_modello"), sn, ticket)
+    if tipo == "assegnazione":
+        voci = [join(x.get("tipo", ""), x.get("modello", "")) for x in d.get("dotazione") or []]
+        return g("utente"), ", ".join(v for v in voci if v)
+    if tipo == "censimento":
+        n = len(d.get("apparati") or [])
+        return g("oggetto"), "%d apparecchi" % n + ((" · " + g("tecnico")) if g("tecnico") else "")
+    return "", ""
+
+
 def unique_path(folder, stem, ext):
     path = os.path.join(folder, stem + ext)
     n = 2
@@ -346,6 +441,22 @@ CREATE TABLE IF NOT EXISTS scorta (
     modificato TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (modello, colore)
 );
+
+CREATE TABLE IF NOT EXISTS verbali (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid        TEXT NOT NULL DEFAULT '',
+    tipo       TEXT NOT NULL,
+    data       TEXT NOT NULL DEFAULT '',
+    soggetto   TEXT NOT NULL DEFAULT '',
+    dettaglio  TEXT NOT NULL DEFAULT '',
+    dati       TEXT NOT NULL DEFAULT '{}',
+    file       TEXT NOT NULL DEFAULT '',
+    n_foto     INTEGER NOT NULL DEFAULT 0,
+    creato     TEXT NOT NULL DEFAULT '',
+    modificato TEXT NOT NULL DEFAULT '',
+    word_il    TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_verbali_data ON verbali(data);
 """
 
 SELECT_INTERVENTI = (
@@ -412,6 +523,9 @@ class Database:
             self.conn.execute(
                 "ALTER TABLE interventi ADD COLUMN stato TEXT NOT NULL DEFAULT 'Risolto'")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_man_uid ON manutenzioni(uid)")
+        if "word_il" not in self._columns("verbali"):
+            self.conn.execute("ALTER TABLE verbali ADD COLUMN word_il TEXT NOT NULL DEFAULT ''")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_verbali_uid ON verbali(uid)")
         self.conn.commit()
 
     def _seed(self):
@@ -955,6 +1069,57 @@ class Database:
         sql += " ORDER BY t.data_ora DESC, t.id DESC"
         return [dict(r) for r in self.conn.execute(sql, params)]
 
+    # ---------------- verbali Word ----------------
+    def add_verbale(self, uid, tipo, data_iso, soggetto, dettaglio, dati, file, n_foto,
+                    modificato=None, word_il=""):
+        now = now_utc_iso()
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO verbali (uid, tipo, data, soggetto, dettaglio, dati, file, n_foto, "
+                "creato, modificato, word_il) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (uid, tipo, data_iso, soggetto, dettaglio, json.dumps(dati, ensure_ascii=False),
+                 file, n_foto, now, modificato or now, word_il))
+        return cur.lastrowid
+
+    def update_verbale(self, vid, data_iso, soggetto, dettaglio, dati, file, n_foto,
+                       modificato=None, word_il=None):
+        """word_il = quando e' stato fatto il Word (None = non cambia)."""
+        sql = ("UPDATE verbali SET data=?, soggetto=?, dettaglio=?, dati=?, file=?, n_foto=?, "
+               "modificato=?")
+        params = [data_iso, soggetto, dettaglio, json.dumps(dati, ensure_ascii=False), file,
+                  n_foto, modificato or now_utc_iso()]
+        if word_il is not None:
+            sql += ", word_il=?"
+            params.append(word_il)
+        with self.conn:
+            self.conn.execute(sql + " WHERE id=?", params + [vid])
+
+    def find_verbale_by_uid(self, uid):
+        row = self.conn.execute("SELECT * FROM verbali WHERE uid = ?", (uid,)).fetchone()
+        return dict(row) if row else None
+
+    def get_verbale(self, vid):
+        row = self.conn.execute("SELECT * FROM verbali WHERE id = ?", (vid,)).fetchone()
+        return dict(row) if row else None
+
+    def search_verbali(self, tipo="", testo=""):
+        sql = "SELECT * FROM verbali WHERE 1=1"
+        params = []
+        if tipo:
+            sql += " AND tipo = ?"
+            params.append(tipo)
+        sql += " ORDER BY data DESC, id DESC"
+        rows = [dict(r) for r in self.conn.execute(sql, params)]
+        terms = (testo or "").casefold().split()
+        if terms:
+            rows = [r for r in rows if matches_all(
+                terms, " ".join((r["soggetto"], r["dettaglio"], r["file"])))]
+        return rows
+
+    def delete_verbale(self, vid):
+        with self.conn:
+            self.conn.execute("DELETE FROM verbali WHERE id = ?", (vid,))
+
     def backup_to(self, dest_path):
         dest = sqlite3.connect(dest_path)
         try:
@@ -1189,7 +1354,9 @@ def import_phone_data(db, data):
     res = {"utenti_nuovi": 0, "utenti_aggiornati": 0, "interventi_nuovi": 0,
            "interventi_aggiornati": 0, "interventi_gia_presenti": 0, "foto": 0, "saltati": 0,
            "toner_nuovi": 0, "toner_gia_presenti": 0, "toner_saltati": 0, "scorta_bassa": [],
-           "manut_nuove": 0, "manut_aggiornate": 0, "manut_gia_presenti": 0, "manut_saltate": 0}
+           "manut_nuove": 0, "manut_aggiornate": 0, "manut_gia_presenti": 0, "manut_saltate": 0,
+           "verbali_nuovi": 0, "verbali_aggiornati": 0, "verbali_gia_presenti": 0,
+           "verbali_saltati": 0, "verbali_foto": 0}
 
     for u in data.get("utenti") or []:
         nome = normalize_name(_clean(u.get("nome")))
@@ -1216,6 +1383,7 @@ def import_phone_data(db, data):
         return res
     import_phone_toner(db, data.get("toner") or [], res)
     import_phone_manutenzioni(db, data.get("manutenzioni") or [], res)
+    import_phone_verbali(db, data.get("verbali") or [], res)
     for it in data.get("interventi") or []:
         uid = _clean(it.get("uid"))
         utente = normalize_name(_clean(it.get("utente")))
@@ -1270,6 +1438,99 @@ def import_phone_data(db, data):
     return res
 
 
+def clean_verbale_dati(dati):
+    """Pulisce i dati di un verbale arrivato dal telefono (testi, elenchi, date gg/mm/aaaa)."""
+    out = {}
+    for k, v in (dati or {}).items():
+        if not isinstance(k, str) or k.startswith("_"):
+            continue
+        if k in ("motivi", "materiale", "accessori"):
+            out[k] = [_clean(x) for x in (v if isinstance(v, list) else []) if _clean(x)]
+        elif k == "apparati":
+            out[k] = [{c: _clean(r.get(c)) for c in ("marca", "modello", "codice")}
+                      for r in (v if isinstance(v, list) else []) if isinstance(r, dict)]
+        elif k == "dotazione":
+            out[k] = [{c: _clean(r.get(c)) for c in ("tipo", "modello", "codice", "iccid", "numero")}
+                      for r in (v if isinstance(v, list) else []) if isinstance(r, dict)]
+        else:
+            out[k] = _clean(v)
+    for k in ("data", "data_sped"):
+        m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", out.get(k, ""))
+        if m:
+            out[k] = "%s/%s/%s" % (m.group(3), m.group(2), m.group(1))
+    return out
+
+
+def _write_data_url(payload, path, max_bytes):
+    """Salva su file un'immagine in formato data URL. True se riuscito."""
+    payload = _clean(payload)
+    if "," not in payload:
+        return False
+    try:
+        raw = base64.b64decode(payload.split(",", 1)[1])
+    except ValueError:
+        return False
+    if not raw or len(raw) > max_bytes:
+        return False
+    with open(path, "wb") as fh:
+        fh.write(raw)
+    return True
+
+
+def import_phone_verbali(db, items, res):
+    """Verbali fatti sul telefono (dati, foto, firme). Un verbale gia' presente si aggiorna solo
+    se sul telefono e' stato modificato dopo."""
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        uid = re.sub(r"[^A-Za-z0-9_-]", "", _clean(it.get("uid")))[:40]
+        tipo = _clean(it.get("tipo"))
+        if VB is None or tipo not in VB.TIPI or not uid or not isinstance(it.get("dati"), dict):
+            res["verbali_saltati"] += 1
+            continue
+        mod = _clean(it.get("modificato")) or now_utc_iso()
+        existing = db.find_verbale_by_uid(uid)
+        if existing and not mod > existing["modificato"]:
+            res["verbali_gia_presenti"] += 1
+            continue
+        dati = clean_verbale_dati(it["dati"])
+        folder = os.path.join(verbali_foto_root(), uid)
+        os.makedirs(folder, exist_ok=True)
+        keep, foto_names, firme = set(), [], {}
+        for n, f in enumerate(it.get("foto") or [], 1):
+            if not isinstance(f, dict):
+                continue
+            name = "foto_%02d_%s" % (n, safe_photo_name(f.get("nome")))
+            if _write_data_url(f.get("data"), os.path.join(folder, name), 15 * 1024 * 1024):
+                foto_names.append(name)
+                keep.add(name)
+                res["verbali_foto"] += 1
+        for chi in ("tecnico", "utente"):
+            src = (it.get("firme") or {}).get(chi) if isinstance(it.get("firme"), dict) else None
+            name = "firma_%s.png" % chi
+            if src and _write_data_url(src, os.path.join(folder, name), 3 * 1024 * 1024):
+                firme[chi] = name
+                keep.add(name)
+        for name in os.listdir(folder):          # tolgo i file che sul telefono non ci sono piu'
+            if name not in keep:
+                try:
+                    os.remove(os.path.join(folder, name))
+                except OSError:
+                    pass
+        dati["_foto"] = foto_names
+        dati["_firme"] = firme
+        soggetto, dettaglio = riassunto_verbale(tipo, dati)
+        data_iso = (parse_date(dati.get("data", "")) or date.today()).isoformat()
+        if existing:
+            db.update_verbale(existing["id"], data_iso, soggetto, dettaglio, dati,
+                              existing["file"], len(foto_names), modificato=mod)
+            res["verbali_aggiornati"] += 1
+        else:
+            db.add_verbale(uid, tipo, data_iso, soggetto, dettaglio, dati, "", len(foto_names),
+                           modificato=mod)
+            res["verbali_nuovi"] += 1
+
+
 PHONE_PHOTO_PX = 1400   # lato lungo massimo delle foto mandate al telefono
 
 
@@ -1296,7 +1557,7 @@ def photo_data_url(path):
         return None
 
 
-def build_phone_export(db, with_photos=False):
+def build_phone_export(db, with_photos=False, settings=None):
     """Dati del PC per il telefono: utenti e interventi (con le foto, se richiesto).
     Gli interventi nati sul PC ricevono un identificativo (uid), così quando il telefono li
     rimanda indietro il programma li riconosce e non li duplica."""
@@ -1341,10 +1602,43 @@ def build_phone_export(db, with_photos=False):
                         "m.ticket, m.tecnico, m.problema, m.intervento, m.stato, m.modificato "
                         "FROM manutenzioni m JOIN stampanti s ON s.id = m.stampante_id "
                         "ORDER BY m.id").fetchall()]
-    return ({"tipo": "helpdesk-pc", "versione": 4, "creato": now, "utenti": users,
+    verbali, n_foto_v = verbali_for_phone(db, with_photos)
+    return ({"tipo": "helpdesk-pc", "versione": 5, "creato": now, "utenti": users,
              "interventi": items, "edifici": edifici, "stampanti": stampanti,
              "toner": toner, "manutenzioni": manutenzioni, "scorta": db.scorta_all(),
-             "scorta_aggiornata": now}, n_foto)
+             "scorta_aggiornata": now, "verbali": verbali,
+             "impostazioni_verbali": {k: _clean((settings or {}).get(k))
+                                      for k in ("tecnico", "sede_citta", "indirizzo", "cap")}},
+            n_foto + n_foto_v)
+
+
+def verbali_for_phone(db, with_photos):
+    """I verbali (anche quelli fatti sul PC) con foto e firme, per farli firmare sul telefono."""
+    out, n_foto = [], 0
+    for r in db.search_verbali():
+        try:
+            dati = json.loads(r["dati"] or "{}")
+        except ValueError:
+            continue
+        folder = os.path.join(verbali_foto_root(), r["uid"])
+        foto_names, firme_names = dati.pop("_foto", []), dati.pop("_firme", {})
+        item = {"uid": r["uid"], "tipo": r["tipo"], "dati": dati, "foto": [], "firme": {},
+                "modificato": r["modificato"], "creato": r["creato"]}
+        if with_photos:
+            for name in foto_names:
+                p = os.path.join(folder, name)
+                data = photo_data_url(p) if os.path.isfile(p) else None
+                if data:
+                    item["foto"].append({"nome": name, "data": data})
+            n_foto += len(item["foto"])
+        for chi, name in (firme_names or {}).items():
+            p = os.path.join(folder, name)
+            if os.path.isfile(p):
+                with open(p, "rb") as fh:
+                    item["firme"][chi] = "data:image/png;base64," + \
+                        base64.b64encode(fh.read()).decode("ascii")
+        out.append(item)
+    return out, n_foto
 
 
 def user_cell(u, key):
@@ -2245,6 +2539,602 @@ class UserExportDialog(ModalDialog):
             self.destroy()
 
 
+# ---------------------------------------------------------------------------
+# Verbali Word: finestre
+# ---------------------------------------------------------------------------
+VERB_LIST_KEYS = ("materiale", "accessori")
+PC_WORDS = ("notebook", "pc", "portatile", "computer", "desktop")
+PHONE_WORDS = ("smartphone", "cellulare", "telefono", "tablet")
+TITOLI_ELENCO = ["", "avv.", "dott.", "dott.ssa", "ing.", "arch.", "geom.", "rag.", "sig.",
+                 "sig.ra", "prof.", "prof.ssa"]
+
+
+class ScrollFrame(ttk.Frame):
+    """Contenitore con barra di scorrimento verticale (si scorre anche con la rotellina)."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.canvas = tk.Canvas(self, bg=LIGHT, highlightthickness=0)
+        sb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.inner = ttk.Frame(self.canvas, padding=16)
+        self._win = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+        self.inner.bind("<Configure>",
+                        lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self._win, width=e.width))
+
+    def wheel(self, event):
+        if event.widget.winfo_class() in ("Treeview", "Text", "TCombobox", "Listbox"):
+            return
+        self.canvas.yview_scroll(int(-event.delta / 120), "units")
+
+
+class PasteDialog(ModalDialog):
+    """Finestra dove incollare un elenco (per esempio copiato da Excel)."""
+
+    def __init__(self, parent, title, intro, on_ok):
+        super().__init__(parent, title, "640x430")
+        self.on_ok = on_ok
+        body = ttk.Frame(self, padding=14)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=intro, style="Hint.TLabel", wraplength=600, justify="left").pack(
+            anchor="w")
+        self.txt = make_text(body, 12)
+        self.txt.pack(fill="both", expand=True, pady=8)
+        self.txt.focus_set()
+        btns = ttk.Frame(body)
+        btns.pack(fill="x")
+        ttk.Button(btns, text="Annulla", command=self.destroy).pack(side="right")
+        ttk.Button(btns, text="Aggiungi all'elenco", style="Save.TButton",
+                   command=self.ok).pack(side="right", padx=(0, 8))
+
+    def ok(self):
+        text = self.txt.get("1.0", "end").strip()
+        if text:
+            self.on_ok(text)
+        self.destroy()
+
+
+class VerbaliSettingsDialog(ModalDialog):
+    FIELDS = (("Nome del tecnico (compare nei censimenti)", "tecnico"),
+              ("Sede (città)", "sede_citta"), ("Indirizzo della sede", "indirizzo"), ("CAP", "cap"))
+
+    def __init__(self, parent, settings, on_save):
+        super().__init__(parent, "Dati per i verbali")
+        self.resizable(False, False)
+        self.on_save = on_save
+        body = ttk.Frame(self, padding=16)
+        body.pack(fill="both", expand=True)
+        self.vars = {}
+        for i, (label, key) in enumerate(self.FIELDS):
+            ttk.Label(body, text=label).grid(row=i, column=0, sticky="w", pady=5, padx=(0, 14))
+            self.vars[key] = tk.StringVar(value=settings.get(key, ""))
+            ttk.Entry(body, textvariable=self.vars[key], width=40).grid(row=i, column=1,
+                                                                        sticky="ew", pady=5)
+        ttk.Label(body, style="Hint.TLabel", wraplength=480, justify="left",
+                  text="Questi dati si propongono da soli nei nuovi verbali di censimento. "
+                       "Li puoi comunque cambiare ogni volta.").grid(
+            row=len(self.FIELDS), column=0, columnspan=2, sticky="w", pady=(8, 0))
+        btns = ttk.Frame(body)
+        btns.grid(row=len(self.FIELDS) + 1, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        ttk.Button(btns, text="Annulla", command=self.destroy).pack(side="right")
+        ttk.Button(btns, text="Salva", style="Save.TButton", command=self.save).pack(
+            side="right", padx=(0, 8))
+
+    def save(self):
+        self.on_save({k: v.get().strip() for k, v in self.vars.items()})
+        self.destroy()
+
+
+class VerbaleDialog(ModalDialog):
+    """Modulo per creare un verbale Word. I campi cambiano in base al tipo di verbale."""
+
+    def __init__(self, app, tipo, ini, on_create):
+        super().__init__(app, "Verbale - " + VB.TIPI[tipo][0])
+        self.app, self.tipo, self.on_create, self.ini = app, tipo, on_create, ini or {}
+        self.geometry("900x%d" % min(820, max(560, self.winfo_screenheight() - 110)))
+        self.minsize(800, 520)
+        self.v, self.t, self.checks = {}, {}, {}
+        self.photos = [p for p in self.ini.get("foto", []) if os.path.isfile(p)]
+        self.apparati = [dict(r) for r in self.ini.get("apparati", [])]
+        self.dotazione = [dict(r) for r in self.ini.get("dotazione", [])]
+        self.user_key = None
+
+        outer = ttk.Frame(self)
+        outer.pack(fill="both", expand=True)
+        bar = ttk.Frame(outer, padding=(16, 10))
+        bar.pack(side="bottom", fill="x")
+        ttk.Button(bar, text="Annulla", command=self.destroy).pack(side="right")
+        ttk.Button(bar, text="Crea il Word…", style="Save.TButton", command=self.create).pack(
+            side="right", padx=(0, 8))
+        ttk.Label(bar, style="Hint.TLabel",
+                  text="* = obbligatorio. Quello che lasci vuoto resta una riga da compilare a "
+                       "mano.").pack(side="left")
+        sf = self.sf = ScrollFrame(outer)
+        sf.pack(fill="both", expand=True)
+        self.bind("<MouseWheel>", sf.wheel)
+        self.body = sf.inner
+        self.body.columnconfigure(1, weight=1)
+        self.row = 0
+        self._entry("Data *", "data", 14, hint="gg/mm/aaaa",
+                    default=fmt_date(date.today()))
+        getattr(self, "_form_" + tipo)()
+        self._photo_box()
+
+    # ----- costruzione dei campi -----
+    def _wheel_on_combo(self, event):
+        self.sf.canvas.yview_scroll(int(-event.delta / 120), "units")
+        return "break"
+
+    def _line(self, label, build):
+        ttk.Label(self.body, text=label).grid(row=self.row, column=0, sticky="nw", pady=5,
+                                              padx=(0, 14))
+        fr = ttk.Frame(self.body)
+        fr.grid(row=self.row, column=1, sticky="ew", pady=5)
+        build(fr)
+        self.row += 1
+
+    def _entry(self, label, key, width=44, hint="", default=""):
+        var = self.v[key] = tk.StringVar(value=self.ini.get(key, default))
+
+        def build(fr):
+            ttk.Entry(fr, textvariable=var, width=width).pack(side="left")
+            if hint:
+                ttk.Label(fr, text=hint, style="Hint.TLabel").pack(side="left", padx=(8, 0))
+        self._line(label, build)
+        return var
+
+    def _combo(self, label, key, values, width=42, hint="", default=""):
+        var = self.v[key] = tk.StringVar(value=self.ini.get(key, default))
+        holder = []
+
+        def build(fr):
+            cb = ttk.Combobox(fr, textvariable=var, values=values, width=width)
+            bind_autocomplete(cb, var, lambda: values)
+            cb.pack(side="left")
+            cb.bind("<MouseWheel>", self._wheel_on_combo)
+            holder.append(cb)
+            if hint:
+                ttk.Label(fr, text=hint, style="Hint.TLabel").pack(side="left", padx=(8, 0))
+        self._line(label, build)
+        return var, holder[0]
+
+    def _text(self, label, key, height, hint=""):
+        value = self.ini.get(key, "")
+        if isinstance(value, (list, tuple)):
+            value = "\n".join(value)
+
+        def build(fr):
+            t = make_text(fr, height)
+            t.pack(fill="x", expand=True)
+            t.insert("1.0", value)
+            self.t[key] = t
+            if hint:
+                ttk.Label(fr, text=hint, style="Hint.TLabel").pack(anchor="w")
+        self._line(label, build)
+
+    def _motivi(self, options):
+        selected = self.ini.get("motivi", [])
+
+        def build(fr):
+            for opt in options:
+                var = tk.BooleanVar(value=opt in selected)
+                self.checks[opt] = var
+                ttk.Checkbutton(fr, text=opt, variable=var).pack(anchor="w")
+        self._line("Motivazione", build)
+        self._entry("Altro (motivo)", "altro", 50,
+                    hint="se lo scrivi, la casella «Altro» viene spuntata")
+
+    def _user_combo(self, label, key, hint="scegli un utente in lista e compilo i suoi dati"):
+        var, cb = self._combo(label, key, self.app.users_cache, 40, hint=hint)
+        for ev in ("<<ComboboxSelected>>", "<FocusOut>", "<Return>"):
+            cb.bind(ev, self._user_picked, add="+")
+        self.user_key = key
+        return var
+
+    # ----- dati dell'utente scelto -----
+    def _current_user(self):
+        if not self.user_key:
+            return None
+        raw = re.sub(r"\s*\(matricola[^)]*\)\s*$", "", self.v[self.user_key].get())
+        return self.app.users_by_key.get(key_name(raw)) if raw.strip() else None
+
+    def _set_if_empty(self, key, value):
+        if key in self.v and value and not self.v[key].get().strip():
+            self.v[key].set(value)
+
+    def _user_picked(self, event=None):
+        u = self._current_user()
+        if not u:
+            return
+        if self.tipo in ("trasferimento", "assegnazione") and self.v[self.user_key].get() != u["nome"]:
+            self.v[self.user_key].set(u["nome"])      # nome scritto come in lista
+        if self.tipo == "trasferimento":
+            self._set_if_empty("contatti", u["telefono"])
+        elif self.tipo == "presa_in_carico":
+            wanted = "%s (matricola %s)" % (u["nome"], u["matricola"]) if u["matricola"] else u["nome"]
+            if self.v["utente"].get() != wanted:
+                self.v["utente"].set(wanted)
+        elif self.tipo == "assegnazione":
+            self._set_if_empty("matricola", u["matricola"])
+        self._device_hint()
+
+    def _device_hint(self, *_):
+        """Se l'apparato è un PC o un cellulare, propongo il seriale/IMEI scritto nella scheda utente."""
+        u = self._current_user()
+        if not u or "tipologia" not in self.v:
+            return
+        tip = self.v["tipologia"].get().casefold()
+        if any(w in tip for w in PC_WORDS):
+            self._set_if_empty("seriale", u["seriale_pc"])
+        elif any(w in tip for w in PHONE_WORDS):
+            self._set_if_empty("seriale", u["imei"])
+
+    def _tipologia(self, label="Tipologia *"):
+        var, _ = self._combo(label, "tipologia", VB.TIPOLOGIE, 28)
+        var.trace_add("write", self._device_hint)
+
+    # ----- i quattro tipi di verbale -----
+    def _form_trasferimento(self):
+        self._tipologia()
+        self._entry("Marca / Modello", "marca_modello", 44)
+        self._entry("Numero di serie", "seriale", 36)
+        luoghi = self.app.verbale_luoghi()
+        self._combo("Provenienza (struttura)", "provenienza", luoghi, 64)
+        self._combo("Destinazione (struttura)", "destinazione", luoghi, 64)
+        self._user_combo("Assegnatario", "assegnatario")
+        self._entry("Contatti", "contatti", 36)
+        self._motivi(VB.MOTIVI_TRASFERIMENTO)
+        self._text("Note", "note", 3)
+        self._entry("Data spedizione", "data_sped", 14, hint="se la lasci vuota uso la data del verbale")
+
+    def _form_presa_in_carico(self):
+        self._tipologia("Tipologia dispositivo *")
+        self._entry("Marca e modello", "marca_modello", 44)
+        self._entry("Numero seriale", "seriale", 36)
+        self._user_combo("Utente assegnatario *", "utente")
+        self._entry("N° INC", "inc", 24, hint="il ticket dell'incidente")
+        self._entry("N° RIC", "ric", 24, hint="la richiesta")
+        self._text("Elenco materiale consegnato", "materiale", 4,
+                   hint="Una voce per riga (esempio: caricabatterie, cover).")
+        self._motivi(VB.MOTIVI_PRESA_IN_CARICO)
+
+    def _form_assegnazione(self):
+        self._combo("Titolo", "titolo", TITOLI_ELENCO, 12,
+                    hint="facoltativo: scrive «al dott.», «all'avv.», «alla dott.ssa»…")
+        self._user_combo("Utente *", "utente")
+        self._entry("Matricola", "matricola", 20)
+        self._dotazione_box()
+        self._text("Accessori inclusi", "accessori", 3,
+                   hint="Una voce per riga (esempio: zaino porta notebook).")
+
+    def _form_censimento(self):
+        st = self.app.settings
+        self._entry("Oggetto *", "oggetto", 62, hint="esempio: Dispositivi Microsoft Lumia 950")
+        self._entry("Nel testo: «costituito da»", "descrizione", 62,
+                    hint="esempio: dispositivi smartphone Microsoft Lumia")
+        self._combo("Sede (città)", "sede_citta", self.app.sedi_cache, 26,
+                    default=st.get("sede_citta", ""))
+        self._entry("Indirizzo", "indirizzo", 40, default=st.get("indirizzo", ""))
+        self._entry("CAP", "cap", 10, default=st.get("cap", ""))
+        self._entry("Tecnico *", "tecnico", 36, default=st.get("tecnico", ""),
+                    hint="chi redige il verbale")
+        self._entry("Indicazioni ricevute da", "collega", 40,
+                    hint="facoltativo: se lo lasci vuoto la frase sulla dismissione non compare")
+        var, _ = self._combo("Titolo colonna codice", "col_codice", VB.COLONNE_CODICE, 20,
+                             default="IMEI")
+        var.trace_add("write", lambda *_: self._fill_apparati())
+        self._apparati_box()
+
+    # ----- elenco degli apparecchi del censimento -----
+    def _tree(self, parent, columns, height):
+        tv = ttk.Treeview(parent, columns=[c[0] for c in columns], show="headings", height=height,
+                          selectmode="extended")
+        for c, title, width in columns:
+            tv.heading(c, text=title)
+            tv.column(c, width=width, anchor="w")
+        return tv
+
+    def _apparati_box(self):
+        box = ttk.LabelFrame(self.body, text="Apparecchi censiti", padding=10)
+        box.grid(row=self.row, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        self.row += 1
+        box.columnconfigure(0, weight=1)
+        self.tv_app = self._tree(box, (("n", "N.", 44), ("marca", "Marca", 170),
+                                       ("modello", "Modello", 170), ("codice", "Codice", 280)), 7)
+        self.tv_app.grid(row=0, column=0, sticky="ew")
+        self.tv_app.bind("<Double-1>", lambda e: self._edit_apparato())
+        self.tv_app.bind("<Delete>", lambda e: self._del_apparati())
+        add = ttk.Frame(box)
+        add.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        last = self.apparati[-1] if self.apparati else {}
+        self.v_marca = tk.StringVar(value=last.get("marca", ""))
+        self.v_modello = tk.StringVar(value=last.get("modello", ""))
+        self.v_codice = tk.StringVar()
+        for label, var, width in (("Marca", self.v_marca, 16), ("Modello", self.v_modello, 16),
+                                  ("Codice", self.v_codice, 24)):
+            ttk.Label(add, text=label).pack(side="left", padx=(0, 4))
+            e = ttk.Entry(add, textvariable=var, width=width)
+            e.pack(side="left", padx=(0, 10))
+            e.bind("<Return>", lambda ev: self._add_apparato())
+            if var is self.v_codice:
+                self.e_codice = e
+        ttk.Button(add, text="Aggiungi", style="Primary.TButton",
+                   command=self._add_apparato).pack(side="left")
+        row2 = ttk.Frame(box)
+        row2.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(row2, text="Rimuovi selezionati", command=self._del_apparati).pack(side="left")
+        ttk.Button(row2, text="Incolla elenco…", command=self._paste_apparati).pack(
+            side="left", padx=(8, 0))
+        self.lbl_count = ttk.Label(row2, style="Hint.TLabel")
+        self.lbl_count.pack(side="right")
+        ttk.Label(box, style="Hint.TLabel", wraplength=800, justify="left",
+                  text="Marca e modello restano scritti: per i prossimi apparecchi basta il codice "
+                       "e Invio. Doppio clic su una riga per correggerla.").grid(
+            row=3, column=0, sticky="w", pady=(6, 0))
+        self.lbl_warn = ttk.Label(box, foreground=RED, wraplength=800, justify="left")
+        self.lbl_warn.grid(row=4, column=0, sticky="w", pady=(4, 0))
+        self._fill_apparati()
+
+    def _fill_apparati(self):
+        if not hasattr(self, "tv_app"):
+            return
+        self.tv_app.delete(*self.tv_app.get_children())
+        for i, r in enumerate(self.apparati):
+            self.tv_app.insert("", "end", iid=str(i), values=(
+                i + 1, r.get("marca", ""), r.get("modello", ""), r.get("codice", "")))
+        self.lbl_count.configure(text="Totale: %d" % len(self.apparati))
+        col = self.v["col_codice"].get() or "IMEI"
+        avvisi = VB.controlla_apparati(self.apparati, col)
+        text = "\n".join(avvisi[:4]) + ("\n…e altri %d da controllare" % (len(avvisi) - 4)
+                                        if len(avvisi) > 4 else "")
+        self.lbl_warn.configure(text=text)
+
+    def _add_apparato(self):
+        marca, modello = self.v_marca.get().strip(), self.v_modello.get().strip()
+        codice = self.v_codice.get().strip()
+        if not (marca or modello or codice):
+            return
+        self.apparati.append({"marca": marca, "modello": modello, "codice": codice})
+        self.v_codice.set("")
+        self._fill_apparati()
+        self.e_codice.focus_set()
+
+    def _selected_indexes(self, tv):
+        return sorted((int(i) for i in tv.selection()), reverse=True)
+
+    def _del_apparati(self):
+        for i in self._selected_indexes(self.tv_app):
+            del self.apparati[i]
+        self._fill_apparati()
+
+    def _edit_apparato(self):
+        idx = self._selected_indexes(self.tv_app)
+        if len(idx) != 1:
+            return
+        r = self.apparati.pop(idx[0])
+        self.v_marca.set(r.get("marca", ""))
+        self.v_modello.set(r.get("modello", ""))
+        self.v_codice.set(r.get("codice", ""))
+        self._fill_apparati()
+        self.e_codice.focus_set()
+
+    def _paste_apparati(self):
+        def ok(text):
+            rows = VB.parse_apparati_text(text, self.v_marca.get().strip(),
+                                          self.v_modello.get().strip())
+            self.apparati.extend(rows)
+            self._fill_apparati()
+        PasteDialog(self, "Incolla elenco apparecchi",
+                    "Incolla qui l'elenco, una riga per apparecchio. Puoi copiarlo da Excel "
+                    "(colonne: marca, modello, codice) oppure scrivere solo i codici, uno per riga: "
+                    "in quel caso uso la marca e il modello scritti nel modulo.", ok)
+
+    # ----- dotazione dell'assegnazione -----
+    def _dotazione_box(self):
+        box = ttk.LabelFrame(self.body, text="Dotazione assegnata *", padding=10)
+        box.grid(row=self.row, column=0, columnspan=2, sticky="ew", pady=(12, 8))
+        self.row += 1
+        box.columnconfigure(0, weight=1)
+        self.tv_dot = self._tree(box, (("tipo", "Oggetto", 170), ("modello", "Modello", 190),
+                                       ("codice", "S/N o IMEI", 180), ("iccid", "ICCID", 170),
+                                       ("numero", "Numero", 110)), 5)
+        self.tv_dot.grid(row=0, column=0, sticky="ew")
+        self.tv_dot.bind("<Double-1>", lambda e: self._edit_dot())
+        self.tv_dot.bind("<Delete>", lambda e: self._del_dot())
+        self.dv = {k: tk.StringVar() for k in ("tipo", "modello", "codice", "iccid", "numero")}
+        self.dv["tipo"].set(VB.TIPI_DOTAZIONE[0])
+        r1 = ttk.Frame(box)
+        r1.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        ttk.Label(r1, text="Oggetto").pack(side="left", padx=(0, 4))
+        ttk.Combobox(r1, textvariable=self.dv["tipo"], values=VB.TIPI_DOTAZIONE, width=22).pack(
+            side="left", padx=(0, 10))
+        ttk.Label(r1, text="Modello").pack(side="left", padx=(0, 4))
+        ttk.Entry(r1, textvariable=self.dv["modello"], width=24).pack(side="left", padx=(0, 10))
+        ttk.Label(r1, text="S/N o IMEI").pack(side="left", padx=(0, 4))
+        e = ttk.Entry(r1, textvariable=self.dv["codice"], width=22)
+        e.pack(side="left")
+        e.bind("<Return>", lambda ev: self._add_dot())
+        r2 = ttk.Frame(box)
+        r2.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        ttk.Label(r2, text="Solo per la SIM:  ICCID").pack(side="left", padx=(0, 4))
+        ttk.Entry(r2, textvariable=self.dv["iccid"], width=26).pack(side="left", padx=(0, 10))
+        ttk.Label(r2, text="Numero").pack(side="left", padx=(0, 4))
+        ttk.Entry(r2, textvariable=self.dv["numero"], width=18).pack(side="left", padx=(0, 10))
+        ttk.Button(r2, text="Aggiungi", style="Primary.TButton", command=self._add_dot).pack(
+            side="left")
+        ttk.Button(r2, text="Rimuovi selezionati", command=self._del_dot).pack(
+            side="left", padx=(8, 0))
+        ttk.Label(box, style="Hint.TLabel", wraplength=800, justify="left",
+                  text="Se non scrivi il codice resta una riga ______ da compilare a mano. "
+                       "Doppio clic su una riga per correggerla.").grid(
+            row=3, column=0, sticky="w", pady=(6, 0))
+        self._fill_dot()
+
+    def _fill_dot(self):
+        if not hasattr(self, "tv_dot"):
+            return
+        self.tv_dot.delete(*self.tv_dot.get_children())
+        for i, r in enumerate(self.dotazione):
+            self.tv_dot.insert("", "end", iid=str(i), values=(
+                r.get("tipo", ""), r.get("modello", ""), r.get("codice", ""),
+                r.get("iccid", ""), r.get("numero", "")))
+
+    def _add_dot(self):
+        r = {k: v.get().strip() for k, v in self.dv.items()}
+        if not r["tipo"]:
+            return
+        self.dotazione.append(r)
+        for k in ("modello", "codice", "iccid", "numero"):
+            self.dv[k].set("")
+        self._fill_dot()
+
+    def _del_dot(self):
+        for i in self._selected_indexes(self.tv_dot):
+            del self.dotazione[i]
+        self._fill_dot()
+
+    def _edit_dot(self):
+        idx = self._selected_indexes(self.tv_dot)
+        if len(idx) != 1:
+            return
+        r = self.dotazione.pop(idx[0])
+        for k in self.dv:
+            self.dv[k].set(r.get(k, ""))
+        self._fill_dot()
+
+    # ----- foto -----
+    def _photo_box(self):
+        obbl = VB.TIPI[self.tipo][2]
+        box = ttk.LabelFrame(
+            self.body, padding=10,
+            text="Foto da allegare (%s)" % ("OBBLIGATORIA: almeno una" if obbl else "facoltativa"))
+        box.grid(row=self.row, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+        self.row += 1
+        box.columnconfigure(0, weight=1)
+        self.tv_ph = self._tree(box, (("nome", "File", 600),), 4)
+        self.tv_ph.grid(row=0, column=0, sticky="ew")
+        btns = ttk.Frame(box)
+        btns.grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Button(btns, text="Aggiungi foto…", command=self._add_photos).pack(side="left")
+        ttk.Button(btns, text="Incolla immagine (dagli appunti)", command=self._paste_photo).pack(
+            side="left", padx=(8, 0))
+        ttk.Button(btns, text="Rimuovi selezionate", command=self._del_photos).pack(
+            side="left", padx=(8, 0))
+        ttk.Label(box, style="Hint.TLabel", wraplength=800, justify="left",
+                  text="Le foto vengono messe in fondo al verbale, in una pagina «Allegato "
+                       "fotografico».").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self._fill_photos()
+
+    def _fill_photos(self):
+        self.tv_ph.delete(*self.tv_ph.get_children())
+        for i, p in enumerate(self.photos):
+            self.tv_ph.insert("", "end", iid=str(i), values=(os.path.basename(p),))
+
+    def _add_photos(self):
+        files = filedialog.askopenfilenames(
+            parent=self, title="Scegli le foto da allegare",
+            filetypes=[("Immagini", "*.jpg *.jpeg *.png *.bmp *.gif *.webp *.tif *.tiff"),
+                       ("Tutti i file", "*.*")])
+        for f in files or ():
+            if os.path.isfile(f) and f not in self.photos:
+                self.photos.append(f)
+        self._fill_photos()
+
+    def _paste_photo(self):
+        found = grab_clipboard_images(staging_dir())
+        if not found:
+            messagebox.showinfo(APP_NAME, "Negli appunti non c'è nessuna immagine.\nCopia una "
+                                "foto o fai uno screenshot e riprova.", parent=self)
+            return
+        for f in found:
+            if f not in self.photos:
+                self.photos.append(f)
+        self._fill_photos()
+
+    def _del_photos(self):
+        for i in self._selected_indexes(self.tv_ph):
+            del self.photos[i]
+        self._fill_photos()
+
+    # ----- creazione -----
+    def _flush_pending(self):
+        """Se hai scritto un apparecchio o un oggetto e non hai premuto «Aggiungi», lo aggiungo io."""
+        if self.tipo == "censimento" and self.v_codice.get().strip():
+            self._add_apparato()
+        if self.tipo == "assegnazione" and (self.dv["modello"].get().strip()
+                                            or self.dv["codice"].get().strip()
+                                            or self.dv["iccid"].get().strip()):
+            self._add_dot()
+
+    def collect(self):
+        d = {k: v.get().strip() for k, v in self.v.items()}
+        for k, t in self.t.items():
+            raw = t.get("1.0", "end").strip()
+            d[k] = [x.strip() for x in raw.splitlines() if x.strip()] if k in VERB_LIST_KEYS else raw
+        if self.checks:
+            d["motivi"] = [o for o, var in self.checks.items() if var.get()]
+        if self.tipo == "censimento":
+            d["apparati"] = [dict(r) for r in self.apparati]
+        if self.tipo == "assegnazione":
+            d["dotazione"] = [dict(r) for r in self.dotazione]
+        return d
+
+    def validate(self, d):
+        dt = parse_date(d["data"])
+        if not dt:
+            return "La data non è valida.\nScrivila così: gg/mm/aaaa (esempio 15/11/2026)."
+        d["data"] = fmt_date(dt)
+        if d.get("data_sped"):
+            ds = parse_date(d["data_sped"])
+            if not ds:
+                return "La data di spedizione non è valida.\nScrivila così: gg/mm/aaaa."
+            d["data_sped"] = fmt_date(ds)
+        if self.tipo == "trasferimento" and not d["tipologia"]:
+            return "Scrivi la tipologia dell'apparato (esempio: Notebook)."
+        if self.tipo == "presa_in_carico":
+            if not d["tipologia"]:
+                return "Scrivi la tipologia del dispositivo (esempio: Notebook)."
+            if not d["utente"]:
+                return "Scrivi l'utente assegnatario."
+        if self.tipo == "assegnazione":
+            if not d["utente"]:
+                return "Scrivi il nome dell'utente a cui assegni il materiale."
+            if not d["dotazione"]:
+                return "Aggiungi almeno un oggetto alla dotazione assegnata."
+        if self.tipo == "censimento":
+            if not d["oggetto"]:
+                return "Scrivi l'oggetto del verbale (esempio: Dispositivi Microsoft Lumia 950)."
+            if not d["tecnico"]:
+                return "Scrivi il nome del tecnico che redige il verbale."
+            if not d["apparati"]:
+                return "Aggiungi almeno un apparecchio all'elenco."
+        if VB.TIPI[self.tipo][2] and not self.photos:
+            return "Per il %s la foto è obbligatoria.\nAllega almeno una foto." % \
+                   VB.TIPI[self.tipo][0].lower()
+        return None
+
+    def create(self):
+        self._flush_pending()
+        d = self.collect()
+        err = self.validate(d)
+        if err:
+            messagebox.showwarning(APP_NAME, err, parent=self)
+            return
+        if self.tipo == "censimento":
+            avvisi = VB.controlla_apparati(d["apparati"], d["col_codice"] or "IMEI")
+            if avvisi:
+                more = "\n…" if len(avvisi) > 8 else ""
+                if not messagebox.askyesno(
+                        APP_NAME, "Ci sono punti da controllare:\n\n%s%s\n\nCreo comunque il "
+                                  "verbale?" % ("\n".join(avvisi[:8]), more), parent=self):
+                    return
+        if self.on_create(self.tipo, d, list(self.photos), self):
+            self.destroy()
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -2265,6 +3155,8 @@ class App(tk.Tk):
         self.users_cache = []
         self.users_by_key = {}
         self.sedi_cache = []
+        self.settings = load_settings()
+        self.verb_rows = {}
         self.sort_col = "data"
         self.sort_rev = True
         self.buildings = []
@@ -2297,6 +3189,7 @@ class App(tk.Tk):
         self.refresh_stats()
         self.refresh_buildings()
         self.apply_filters()
+        self.refresh_verbali()
         self.clear_form()
         self.bind("<Control-s>", lambda e: self.save_intervento())
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -2341,6 +3234,9 @@ class App(tk.Tk):
         m = tk.Menu(menubar, tearoff=0)
         m.add_command(label="Importa dati dal telefono…", command=self.import_from_phone)
         m.add_command(label="Esporta dati per il telefono…", command=self.export_for_phone)
+        m.add_separator()
+        m.add_command(label="Dati per i verbali Word…", command=self.verbali_settings)
+        m.add_command(label="Apri la cartella dei modelli Word", command=self.open_templates_folder)
         m.add_separator()
         m.add_command(label="Salva una copia di backup (dati e foto)…", command=self.backup)
         m.add_command(label="Apri la cartella dei dati", command=self.open_data_folder)
@@ -2398,14 +3294,17 @@ class App(tk.Tk):
         self.tab_reg = ttk.Frame(self.nb, padding=14)
         self.tab_users = ttk.Frame(self.nb, padding=18)
         self.tab_print = ttk.Frame(self.nb, padding=10)
+        self.tab_verb = ttk.Frame(self.nb, padding=14)
         self.nb.add(self.tab_new, text="Nuovo intervento")
         self.nb.add(self.tab_reg, text="Registro e filtri")
         self.nb.add(self.tab_users, text="Utenti")
         self.nb.add(self.tab_print, text="Stampanti")
+        self.nb.add(self.tab_verb, text="Verbali")
         self._build_form()
         self._build_registry()
         self._build_users()
         self._build_printers()
+        self._build_verbali()
 
     # ---------------- scheda: nuovo intervento ----------------
     def _build_form(self):
@@ -3270,6 +4169,16 @@ class App(tk.Tk):
                    command=self.show_user_interventions).pack(side="left", padx=(8, 0))
         ttk.Button(bf, text="Elimina", style="Danger.TButton",
                    command=self.delete_user).pack(side="left", padx=(8, 0))
+        if VB is not None:
+            vb = ttk.Menubutton(bf, text="Crea verbale per questo utente…")
+            vmenu = tk.Menu(vb, tearoff=0)
+            for tipo in VB.TIPI_ORDINE:
+                vmenu.add_command(label=VB.TIPI[tipo][0] + "…",
+                                  command=lambda t=tipo: self.new_verbale_for_user(t))
+            vb["menu"] = vmenu
+            vb.pack(side="left", padx=(24, 0))
+            ttk.Button(bf, text="Suoi verbali", command=self.show_user_verbali).pack(
+                side="left", padx=(8, 0))
 
     def refresh_users(self):
         self.users_data = self.db.users_with_counts()
@@ -4282,6 +5191,373 @@ class App(tk.Tk):
         self.refresh_scorta()
         return True
 
+    # ---------------- scheda: verbali Word ----------------
+    def _build_verbali(self):
+        v = self.tab_verb
+        v.columnconfigure(0, weight=1)
+        v.rowconfigure(2, weight=1)
+        self.verb_rows = {}
+        self.var_v_tipo = tk.StringVar(value="(Tutti)")
+        self.var_v_search = tk.StringVar()
+        if VB is None:
+            ttk.Label(v, foreground=RED, wraplength=900, justify="left",
+                      text="Manca il file verbali.py (e verbali_modelli.py) accanto a helpdesk.py.\n"
+                           "Caricali su GitHub insieme a helpdesk.py e ricostruisci il programma."
+                      ).grid(row=0, column=0, sticky="w")
+            return
+        top = ttk.LabelFrame(v, text="Crea un nuovo verbale Word", padding=10)
+        top.grid(row=0, column=0, sticky="ew")
+        for tipo in VB.TIPI_ORDINE:
+            ttk.Button(top, text=VB.TIPI[tipo][0] + "…", style="Primary.TButton",
+                       command=lambda t=tipo: self.new_verbale(t)).pack(side="left", padx=(0, 8))
+        mb = ttk.Menubutton(top, text="Modelli Word")
+        menu = tk.Menu(mb, tearoff=0)
+        menu.add_command(label="Apri la cartella dei modelli", command=self.open_templates_folder)
+        menu.add_command(label="Ripristina i modelli originali…", command=self.restore_verbali_models)
+        mb["menu"] = menu
+        mb.pack(side="right")
+        ttk.Button(top, text="Dati per i verbali…", command=self.verbali_settings).pack(
+            side="right", padx=(0, 8))
+
+        sf = ttk.Frame(v)
+        sf.grid(row=1, column=0, sticky="ew", pady=(12, 6))
+        ttk.Label(sf, text="Verbali creati").pack(side="left")
+        ttk.Label(sf, text="Tipo").pack(side="left", padx=(18, 0))
+        cb = ttk.Combobox(sf, textvariable=self.var_v_tipo, width=26, state="readonly",
+                          values=["(Tutti)"] + [VB.TIPI[t][0] for t in VB.TIPI_ORDINE])
+        cb.pack(side="left", padx=(8, 0))
+        ttk.Label(sf, text="Cerca").pack(side="left", padx=(18, 0))
+        ttk.Entry(sf, textvariable=self.var_v_search, width=30).pack(side="left", padx=(8, 0))
+        self.var_v_tipo.trace_add("write", lambda *_: self.refresh_verbali())
+        self.var_v_search.trace_add("write", lambda *_: self.refresh_verbali())
+        self.lbl_verb_count = ttk.Label(sf, style="Hint.TLabel")
+        self.lbl_verb_count.pack(side="right")
+
+        mid = ttk.Frame(v)
+        mid.grid(row=2, column=0, sticky="nsew")
+        mid.columnconfigure(0, weight=1)
+        mid.rowconfigure(0, weight=1)
+        cols = ("data", "tipo", "soggetto", "dettaglio", "foto", "firme", "stato", "file")
+        self.verb_tree = ttk.Treeview(mid, columns=cols, show="headings", selectmode="browse")
+        self.verb_tree.tag_configure("da_fare", foreground=RED)
+        for c, title, width, stretch in (
+                ("data", "Data", 80, False), ("tipo", "Verbale", 170, False),
+                ("soggetto", "Utente / oggetto", 190, False), ("dettaglio", "Dettaglio", 260, True),
+                ("foto", "Foto", 45, False), ("firme", "Firme", 110, False),
+                ("stato", "Word", 100, False), ("file", "File Word", 190, False)):
+            self.verb_tree.heading(c, text=title)
+            self.verb_tree.column(c, width=width, anchor="center" if c == "foto" else "w",
+                                  stretch=stretch)
+        vsb = ttk.Scrollbar(mid, orient="vertical", command=self.verb_tree.yview)
+        self.verb_tree.configure(yscrollcommand=vsb.set)
+        self.verb_tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        self.verb_tree.bind("<Double-1>", lambda e: self.open_verbale_file())
+
+        bf = ttk.Frame(v)
+        bf.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        ttk.Button(bf, text="Crea il Word…", style="Save.TButton",
+                   command=self.create_word_for_selected).pack(side="left", padx=(0, 8))
+        ttk.Button(bf, text="Apri il Word", style="Primary.TButton",
+                   command=self.open_verbale_file).pack(side="left")
+        ttk.Button(bf, text="Apri la cartella", command=self.open_verbale_folder).pack(
+            side="left", padx=(8, 0))
+        ttk.Button(bf, text="Modifica e ricrea…", command=self.edit_verbale).pack(
+            side="left", padx=(8, 0))
+        ttk.Button(bf, text="Togli dall'elenco", style="Danger.TButton",
+                   command=self.delete_verbale).pack(side="left", padx=(8, 0))
+        ttk.Label(v, style="Hint.TLabel", wraplength=1000, justify="left",
+                  text="I verbali fatti sul telefono (con foto e firme) arrivano con File > Importa "
+                       "dati dal telefono: qui compaiono con «Word da creare»; selezionali e "
+                       "premi «Crea il Word…». Il file Word resta nella cartella che scegli. "
+                       "«Modifica e ricrea» corregge un dato e rifà il Word. «Togli dall'elenco» "
+                       "non cancella il file Word (se il verbale è anche sul telefono, toglilo "
+                       "anche lì, altrimenti torna con la prossima importazione)."
+                  ).grid(row=4, column=0, sticky="w", pady=(8, 0))
+
+    def verbale_luoghi(self):
+        """Suggerimenti per provenienza/destinazione: strutture e sedi note."""
+        found = {}
+        for name in [b["nome"] for b in self.buildings] + list(self.sedi_cache):
+            if name and name.strip():
+                found.setdefault(name.strip().casefold(), name.strip())
+        return sorted(found.values(), key=str.casefold)
+
+    def refresh_verbali(self):
+        if VB is None or not hasattr(self, "verb_tree"):
+            return
+        label = self.var_v_tipo.get()
+        tipo = next((t for t in VB.TIPI_ORDINE if VB.TIPI[t][0] == label), "")
+        rows = self.db.search_verbali(tipo, self.var_v_search.get())
+        self.verb_rows = {r["id"]: r for r in rows}
+        self.verb_tree.delete(*self.verb_tree.get_children())
+        da_fare = 0
+        for r in rows:
+            d = parse_iso_date(r["data"])
+            nome_tipo = VB.TIPI[r["tipo"]][0] if r["tipo"] in VB.TIPI else r["tipo"]
+            stato = verbale_stato_word(r)
+            da_fare += stato != "Creato"
+            self.verb_tree.insert("", "end", iid=str(r["id"]), tags=(
+                () if stato == "Creato" else ("da_fare",)), values=(
+                fmt_date(d) if d else r["data"], nome_tipo, r["soggetto"], r["dettaglio"],
+                r["n_foto"] or "", verbale_firme_text(r), stato, os.path.basename(r["file"])))
+        self.lbl_verb_count.configure(
+            text="%d verbali" % len(rows) + (" · %d da creare/rifare" % da_fare if da_fare else ""))
+
+    def selected_verbale(self):
+        sel = self.verb_tree.selection() if hasattr(self, "verb_tree") else ()
+        if not sel:
+            messagebox.showinfo(APP_NAME, "Seleziona prima un verbale dall'elenco.")
+            return None
+        return self.verb_rows.get(int(sel[0]))
+
+    def verbali_ready(self):
+        if VB is None:
+            messagebox.showinfo(APP_NAME, "Mancano i file verbali.py e verbali_modelli.py: "
+                                "caricali su GitHub insieme a helpdesk.py.")
+            return False
+        return True
+
+    def new_verbale(self, tipo, ini=None):
+        if not self.verbali_ready():
+            return
+        VerbaleDialog(self, tipo, ini, self.make_verbale)
+
+    def new_verbale_for_user(self, tipo):
+        """Dalla scheda Utenti: apre il verbale con i dati dell'utente già scritti."""
+        user = self.selected_user()
+        if not user or not self.verbali_ready():
+            return
+        nome = user["nome"]
+        if tipo == "trasferimento":
+            ini = {"assegnatario": nome, "contatti": user["telefono"]}
+        elif tipo == "presa_in_carico":
+            ini = {"utente": "%s (matricola %s)" % (nome, user["matricola"])
+                   if user["matricola"] else nome}
+        elif tipo == "assegnazione":
+            ini = {"utente": nome, "matricola": user["matricola"]}
+        else:
+            ini = {}
+        self.new_verbale(tipo, ini)
+
+    def show_user_verbali(self):
+        user = self.selected_user()
+        if not user or not self.verbali_ready():
+            return
+        self.var_v_tipo.set("(Tutti)")
+        self.var_v_search.set(user["nome"])
+        self.nb.select(self.tab_verb)
+
+    def create_word_for_selected(self):
+        """Fa il Word di un verbale già nell'elenco (per esempio arrivato dal telefono)."""
+        r = self.selected_verbale()
+        if not r or not self.verbali_ready():
+            return
+        try:
+            dati = json.loads(r["dati"] or "{}")
+        except ValueError:
+            dati = {}
+        foto_dir = os.path.join(verbali_foto_root(), r["uid"])
+        photos = [os.path.join(foto_dir, n) for n in dati.get("_foto", [])
+                  if os.path.isfile(os.path.join(foto_dir, n))]
+        d = {k: v for k, v in dati.items() if not k.startswith("_")}
+        self.make_verbale(r["tipo"], d, photos, self, r)
+
+    def make_verbale(self, tipo, d, photos, parent, edit_row=None):
+        """Chiamata dal modulo: sceglie dove salvare, crea il Word e lo registra nell'elenco."""
+        if edit_row and edit_row["file"]:
+            init_dir, init_name = os.path.split(edit_row["file"])
+        else:
+            init_dir = self.settings.get("cartella_verbali", "")
+            init_name = VB.nome_file_proposto(tipo, d)
+        kw = {"initialdir": init_dir} if init_dir and os.path.isdir(init_dir) else {}
+        path = filedialog.asksaveasfilename(
+            parent=parent, title="Salva il verbale Word", defaultextension=".docx",
+            initialfile=init_name, filetypes=[("Documento Word", "*.docx")], **kw)
+        if not path:
+            return False
+        uid = edit_row["uid"] if edit_row else VB.nuovo_codice()
+        foto_dir = os.path.join(verbali_foto_root(), uid)
+        stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        old = {}
+        if edit_row:
+            try:
+                old = json.loads(edit_row["dati"] or "{}")
+            except ValueError:
+                old = {}
+        firme_names = {k: v for k, v in (old.get("_firme") or {}).items()
+                       if os.path.isfile(os.path.join(foto_dir, v))}
+        firme = {k: os.path.join(foto_dir, v) for k, v in firme_names.items()}
+        avvisi = []
+        ready, created = [], []
+        try:
+            os.makedirs(foto_dir, exist_ok=True)
+            for i, src in enumerate(photos, 1):
+                if os.path.normcase(os.path.dirname(os.path.abspath(src))) == \
+                        os.path.normcase(os.path.abspath(foto_dir)):
+                    ready.append(src)           # già preparata in una creazione precedente
+                else:
+                    target = VB.prepara_foto(src, foto_dir, "foto_%s_%02d" % (stamp, i))
+                    ready.append(target)
+                    created.append(target)
+            VB.crea_verbale(tipo, d, path, templates_dir(), photos=ready, imp=self.settings,
+                            firme=firme, avvisi=avvisi)
+        except VB.VerbaleError as e:
+            self._drop_files(created, foto_dir)
+            messagebox.showerror(APP_NAME, str(e), parent=parent)
+            return False
+        except Exception as e:
+            self._drop_files(created, foto_dir)
+            messagebox.showerror(APP_NAME, "Non sono riuscito a creare il verbale:\n%s" % e,
+                                 parent=parent)
+            return False
+        # foto non più usate (tolte in "Modifica e ricrea")
+        keep = {os.path.normcase(os.path.abspath(p)) for p in list(ready) + list(firme.values())}
+        try:
+            for name in os.listdir(foto_dir):
+                full = os.path.abspath(os.path.join(foto_dir, name))
+                if os.path.normcase(full) not in keep:
+                    os.remove(full)
+        except OSError:
+            pass
+        dati = dict(d)
+        dati["_foto"] = [os.path.basename(p) for p in ready]
+        dati["_firme"] = firme_names
+        soggetto, dettaglio = riassunto_verbale(tipo, d)
+        data_iso = (parse_date(d["data"]) or date.today()).isoformat()
+        now = now_utc_iso()
+        try:
+            if edit_row:
+                self.db.update_verbale(edit_row["id"], data_iso, soggetto, dettaglio, dati, path,
+                                       len(ready), modificato=now, word_il=now)
+            else:
+                self.db.add_verbale(uid, tipo, data_iso, soggetto, dettaglio, dati, path,
+                                    len(ready), modificato=now, word_il=now)
+        except sqlite3.Error as e:
+            messagebox.showerror(APP_NAME, "Il Word è stato creato ma non sono riuscito a "
+                                 "metterlo nell'elenco:\n%s\n\nFile: %s" % (e, path), parent=parent)
+        # ricordo cartella e (per i censimenti) tecnico e sede per la volta dopo
+        self.settings["cartella_verbali"] = os.path.dirname(path)
+        if tipo == "censimento":
+            for k in ("tecnico", "sede_citta", "indirizzo", "cap"):
+                if d.get(k):
+                    self.settings[k] = d[k]
+        save_settings(self.settings)
+        self.refresh_verbali()
+        if avvisi:
+            messagebox.showwarning(APP_NAME, "\n\n".join(avvisi), parent=parent)
+        if messagebox.askyesno(APP_NAME, "Verbale creato:\n%s\n\nVuoi aprirlo ora?" % path,
+                               parent=parent):
+            open_path(path)
+        return True
+
+    def _drop_files(self, files, folder):
+        for f in files:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        try:
+            os.rmdir(folder)        # solo se è vuota
+        except OSError:
+            pass
+
+    def open_verbale_file(self):
+        r = self.selected_verbale()
+        if not r:
+            return
+        if not r["file"] or not os.path.isfile(r["file"]):
+            messagebox.showinfo(APP_NAME, "Il file Word non si trova più qui:\n%s\n\nSe lo hai "
+                                "spostato o cancellato puoi rifarlo con «Modifica e ricrea…»."
+                                % r["file"])
+            return
+        if not open_path(r["file"]):
+            messagebox.showinfo(APP_NAME, "Il file è qui:\n%s" % r["file"])
+
+    def open_verbale_folder(self):
+        r = self.selected_verbale()
+        if not r:
+            return
+        folder = os.path.dirname(r["file"])
+        if r["file"] and os.path.isfile(r["file"]):
+            try:
+                subprocess.Popen(["explorer", "/select,", os.path.normpath(r["file"])])
+                return
+            except Exception:
+                pass
+        if folder and os.path.isdir(folder):
+            if open_path(folder):
+                return
+        messagebox.showinfo(APP_NAME, "La cartella non si trova più:\n%s" % folder)
+
+    def edit_verbale(self):
+        r = self.selected_verbale()
+        if not r or not self.verbali_ready():
+            return
+        try:
+            ini = json.loads(r["dati"] or "{}")
+        except ValueError:
+            ini = {}
+        foto_dir = os.path.join(verbali_foto_root(), r["uid"])
+        ini["foto"] = [os.path.join(foto_dir, n) for n in ini.pop("_foto", [])]
+        ini.pop("_firme", None)
+        if r["tipo"] not in VB.TIPI:
+            messagebox.showinfo(APP_NAME, "Tipo di verbale non riconosciuto.")
+            return
+        VerbaleDialog(self, r["tipo"], ini,
+                      lambda tipo, d, photos, parent: self.make_verbale(tipo, d, photos, parent, r))
+
+    def delete_verbale(self):
+        r = self.selected_verbale()
+        if not r:
+            return
+        if not messagebox.askyesno(
+                APP_NAME, "Togliere questo verbale dall'elenco?\n\n%s - %s\n\nIl file Word NON "
+                          "viene cancellato: resta dove l'hai salvato. Vengono eliminate dal "
+                          "programma le foto allegate e i dati per «Modifica e ricrea»."
+                          % (r["soggetto"], os.path.basename(r["file"])), icon="warning"):
+            return
+        self.db.delete_verbale(r["id"])
+        shutil.rmtree(os.path.join(verbali_foto_root(), r["uid"]), ignore_errors=True)
+        self.refresh_verbali()
+
+    def verbali_settings(self):
+        if not self.verbali_ready():
+            return
+
+        def save(values):
+            self.settings.update(values)
+            if not save_settings(self.settings):
+                messagebox.showwarning(APP_NAME, "Non sono riuscito a salvare le impostazioni.")
+        VerbaliSettingsDialog(self, self.settings, save)
+
+    def open_templates_folder(self):
+        if not self.verbali_ready():
+            return
+        try:
+            VB.ensure_templates(templates_dir())
+        except Exception as e:
+            messagebox.showerror(APP_NAME, "Non riesco a preparare i modelli:\n%s" % e)
+            return
+        if not open_path(templates_dir()):
+            messagebox.showinfo(APP_NAME, "I modelli sono in:\n%s" % templates_dir())
+
+    def restore_verbali_models(self):
+        if not self.verbali_ready():
+            return
+        if not messagebox.askyesno(
+                APP_NAME, "Rimettere i quattro modelli Word originali?\n\nI modelli che hai "
+                          "modificato non vanno persi: ne resta una copia con scritto «(prima del "
+                          "ripristino)» nella stessa cartella."):
+            return
+        try:
+            kept = VB.restore_templates(templates_dir())
+        except Exception as e:
+            messagebox.showerror(APP_NAME, "Ripristino non riuscito:\n%s" % e)
+            return
+        messagebox.showinfo(APP_NAME, "Modelli ripristinati.\n\nCopie dei precedenti: %d.\nCartella:"
+                            "\n%s" % (len(kept), templates_dir()))
+
     # ---------------- varie ----------------
     def refresh_stats(self):
         oggi, mese, tot = self.db.stats()
@@ -4334,19 +5610,20 @@ class App(tk.Tk):
         if not path:
             return
         try:
-            data, n_foto = build_phone_export(self.db, with_photos=foto)
+            data, n_foto = build_phone_export(self.db, with_photos=foto, settings=self.settings)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False)
         except (OSError, sqlite3.Error) as e:
             messagebox.showerror(APP_NAME, "Non sono riuscito a creare il file:\n%s" % e)
             return
         messagebox.showinfo(APP_NAME, "File creato con %d utenti, %d interventi, %d foto, "
-                            "%d stampanti, %d cambi toner e %d interventi del tecnico:\n%s\n\n"
+                            "%d stampanti, %d cambi toner, %d interventi del tecnico e %d "
+                            "verbali:\n%s\n\n"
                             "Mandalo al telefono (AirDrop, email o iCloud) e nell'app tocca "
                             "Scambio > Ricevi dal PC."
                             % (len(data["utenti"]), len(data["interventi"]), n_foto,
                                len(data["stampanti"]), len(data["toner"]),
-                               len(data["manutenzioni"]), path))
+                               len(data["manutenzioni"]), len(data["verbali"]), path))
 
     def import_from_phone(self):
         path = filedialog.askopenfilename(
@@ -4364,6 +5641,7 @@ class App(tk.Tk):
         self.refresh_users()
         self.refresh_stats()
         self.apply_filters()
+        self.refresh_verbali()
         lines = ["Interventi nuovi: %d" % res["interventi_nuovi"],
                  "Interventi aggiornati: %d" % res["interventi_aggiornati"],
                  "Già presenti (saltati): %d" % res["interventi_gia_presenti"],
@@ -4382,6 +5660,16 @@ class App(tk.Tk):
         if res["manut_saltate"]:
             lines.append("Interventi del tecnico ignorati (stampante non trovata): %d"
                          % res["manut_saltate"])
+        if res["verbali_nuovi"] or res["verbali_aggiornati"] or res["verbali_gia_presenti"] \
+                or res["verbali_saltati"]:
+            lines.append("Verbali: nuovi %d, aggiornati %d, già presenti %d (foto: %d)"
+                         % (res["verbali_nuovi"], res["verbali_aggiornati"],
+                            res["verbali_gia_presenti"], res["verbali_foto"]))
+            if res["verbali_nuovi"] or res["verbali_aggiornati"]:
+                lines.append("   -> scheda «Verbali»: «Crea il Word…» per quelli da creare.")
+        if res["verbali_saltati"]:
+            lines.append("Verbali ignorati (non validi o programma senza verbali.py): %d"
+                         % res["verbali_saltati"])
         if res["saltati"]:
             lines.append("Righe non valide ignorate: %d" % res["saltati"])
         if res["scorta_bassa"]:

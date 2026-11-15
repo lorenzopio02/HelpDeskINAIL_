@@ -146,6 +146,122 @@
     return u;
   }
 
+  /* ------------------------- verbale in PDF (A4 verticale) ------------------------- */
+  /* o.blocks: title, p, h, kv, checks, list, table, sigs {left, slots:[{label,img}]}; o.logo; o.photos: [img] (img = {bin,w,h} JPEG) */
+  function makeDocPdf(o) {
+    const PW = 595, PH = 842, M = 44, FOOT = 28, bottom = PH - M - FOOT, W = PW - 2 * M;
+    const pages = [], imgs = []; let ops, y;
+    const imgNo = im => { let i = imgs.indexOf(im); if (i < 0) { imgs.push(im); i = imgs.length - 1; } return i + 1; };
+    const fillRect = (x, top, w, h, hex) => ops.push(`${rgb(hex)} rg ${x.toFixed(2)} ${(PH - top - h).toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)} re f`);
+    const hline = (x1, x2, top, hex, lw) => ops.push(`${rgb(hex)} RG ${lw} w ${x1.toFixed(2)} ${(PH - top).toFixed(2)} m ${x2.toFixed(2)} ${(PH - top).toFixed(2)} l S`);
+    const text = (x, base, s, bold, size, hex) => ops.push(`${rgb(hex)} rg BT /F${bold ? 2 : 1} ${size} Tf ${x.toFixed(2)} ${(PH - base).toFixed(2)} Td (${esc(s)}) Tj ET`);
+    const picture = (im, x, top, w, h) => ops.push(`q ${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${x.toFixed(2)} ${(PH - top - h).toFixed(2)} cm /Im${imgNo(im)} Do Q`);
+    const newPage = () => { ops = []; pages.push(ops); y = M; };
+    const need = h => { if (y + h > bottom) newPage(); };
+    const INK = "#1c2733";
+
+    newPage();
+    if (o.logo) { const lh = 30, lw = lh * o.logo.w / o.logo.h; picture(o.logo, M, M, lw, lh); y = M + lh + 8; } else y = M + 4;
+    const tri = W / 3;
+    fillRect(M, y, tri, 3, GREEN); fillRect(M + tri, y, tri, 3, "#dfe9f2"); fillRect(M + 2 * tri, y, tri, 3, RED);
+    y += 18;
+
+    function table(b) {
+      const sum = b.weights.reduce((a, c) => a + c, 0), cw = b.weights.map(w => w / sum * W), xs = []; let acc = M;
+      cw.forEach(w => { xs.push(acc); acc += w; });
+      const PAD = 4, FS = 9, LH = 12;
+      const head = () => {
+        need(26);
+        fillRect(M, y, W, 18, NAVY);
+        b.head.forEach((h, i) => text(xs[i] + PAD, y + 12.5, wrap(h, cw[i] - 2 * PAD, true, FS, 1)[0], true, FS, "#ffffff"));
+        y += 18;
+      };
+      head();
+      b.rows.forEach((r, ri) => {
+        const cl = r.map((c, i) => wrap(c, cw[i] - 2 * PAD, false, FS, 4)), rh = Math.max(...cl.map(a => a.length)) * LH + 2 * PAD - 2;
+        if (y + rh > bottom) { newPage(); head(); }
+        if (ri % 2 === 1) fillRect(M, y, W, rh, LIGHT);
+        cl.forEach((ls, i) => ls.forEach((l, k) => text(xs[i] + PAD, y + PAD + 8 + k * LH - 1, l, false, FS, INK)));
+        hline(M, M + W, y + rh, "#c5d3e0", 0.4);
+        y += rh;
+      });
+      y += 8;
+    }
+    function sigs(b) {
+      const slots = b.slots || [], n = Math.max(1, slots.length), H = 96;
+      need(H + 14);
+      if (b.left) { text(M, y + 10, toWin(b.left), true, 10, INK); }
+      y += 16;
+      const sw = W / n;
+      slots.forEach((s, i) => {
+        const cx = M + sw * i + sw / 2, lw = Math.min(sw - 30, 190);
+        text(cx - tw(wrap(s.label, 400, true, 9, 1)[0], true, 9) / 2, y + 8, wrap(s.label, 400, true, 9, 1)[0], true, 9, INK);
+        if (s.img) {
+          const maxW = Math.min(lw, 150), maxH = 46, k = Math.min(maxW / s.img.w, maxH / s.img.h), w = s.img.w * k, h = s.img.h * k;
+          picture(s.img, cx - w / 2, y + 62 - h, w, h);
+        }
+        hline(cx - lw / 2, cx + lw / 2, y + 64, INK, 0.6);
+      });
+      y += H - 16 + 6;
+    }
+
+    for (const b of o.blocks || []) {
+      if (b.t === "title") { const ls = wrap(b.s, W, true, 13, 4); need(ls.length * 17 + 14); ls.forEach(l => { text(M + (W - tw(l, true, 13)) / 2, y + 13, l, true, 13, NAVY); y += 17; }); y += 8; }
+      else if (b.t === "h") { need(36); y += 8; text(M, y + 10, b.s, true, 10, NAVY); y += 15; }
+      else if (b.t === "p") { const ls = wrap(b.s, W, !!b.bold, 10, 80); ls.forEach(l => { need(14); text(M, y + 10, l, !!b.bold, 10, INK); y += 13.5; }); y += 5; }
+      else if (b.t === "kv") { const kk = toWin(b.k + ": "), kw = tw(kk, true, 10), ls = wrap(b.v, W - kw, false, 10, 10); need(14); text(M, y + 10, kk, true, 10, INK); ls.forEach((l, i) => { if (i) need(14); text(M + kw, y + 10, l, false, 10, INK); y += 13.5; }); }
+      else if (b.t === "checks") { for (const it of b.items) { const ls = wrap((it.on ? "[X]  " : "[   ]  ") + it.s, W - 10, it.on, 10, 3); ls.forEach(l => { need(14); text(M + 6, y + 10, l, it.on, 10, INK); y += 13.5; }); } y += 3; }
+      else if (b.t === "list") { for (const it of b.items) { const ls = wrap(it, W - 22, false, 10, 5); ls.forEach((l, i) => { need(14); if (!i) text(M + 8, y + 10, "-", false, 10, INK); text(M + 20, y + 10, l, false, 10, INK); y += 13.5; }); } y += 3; }
+      else if (b.t === "table") table(b);
+      else if (b.t === "sigs") sigs(b);
+      else if (b.t === "gap") y += b.h || 8;
+    }
+
+    const ph = o.photos || [];
+    if (ph.length) {
+      newPage();
+      const t = "ALLEGATO FOTOGRAFICO"; text(M + (W - tw(t, true, 12)) / 2, y + 12, t, true, 12, NAVY); y += 28;
+      ph.forEach((im, i) => {
+        const k = Math.min(W / im.w, 330 / im.h), w = im.w * k, h = im.h * k;
+        need(h + 24);
+        picture(im, M + (W - w) / 2, y, w, h); y += h + 12;
+        const cap = `Foto ${i + 1} di ${ph.length}`; text(M + (W - tw(cap, false, 8.5)) / 2, y, cap, false, 8.5, GREY); y += 18;
+      });
+    }
+    const stamp = toWin(o.footer || ("Copia generata dal telefono il " + pdate()));
+    pages.forEach((p, i) => { ops = p; text(M, PH - 22, stamp, false, 7.5, GREY); const s = `Pagina ${i + 1} di ${pages.length}`; text(PW - M - tw(s, false, 7.5), PH - 22, s, false, 7.5, GREY); });
+
+    const objs = []; const add = s => { objs.push(s); return objs.length; };
+    add("<</Type/Catalog/Pages 2 0 R>>");
+    add("");
+    add("<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>>");
+    add("<</Type/Font/Subtype/Type1/BaseFont/Helvetica-Bold/Encoding/WinAnsiEncoding>>");
+    const refs = imgs.map(im => add(`<</Type/XObject/Subtype/Image/Width ${im.w}/Height ${im.h}/ColorSpace/DeviceRGB/BitsPerComponent 8/Filter/DCTDecode/Length ${im.bin.length}>>\nstream\n${im.bin}\nendstream`));
+    const xo = refs.length ? `/XObject<<${refs.map((r, i) => `/Im${i + 1} ${r} 0 R`).join("")}>>` : "";
+    const kids = [];
+    pages.forEach(p => {
+      const body = p.join("\n"), cRef = add(`<</Length ${body.length}>>\nstream\n${body}\nendstream`);
+      kids.push(add(`<</Type/Page/Parent 2 0 R/MediaBox[0 0 ${PW} ${PH}]/Resources<</Font<</F1 3 0 R/F2 4 0 R>>${xo}>>/Contents ${cRef} 0 R>>`));
+    });
+    objs[1] = `<</Type/Pages/Kids[${kids.map(k => k + " 0 R").join(" ")}]/Count ${kids.length}>>`;
+    let out = "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n"; const offs = [];
+    objs.forEach((b, i) => { offs.push(out.length); out += `${i + 1} 0 obj\n${b}\nendobj\n`; });
+    const xr = out.length;
+    out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + offs.map(v => String(v).padStart(10, "0") + " 00000 n \n").join("");
+    out += `trailer\n<</Size ${objs.length + 1}/Root 1 0 R>>\nstartxref\n${xr}\n%%EOF\n`;
+    const u = new Uint8Array(out.length); for (let i = 0; i < out.length; i++) u[i] = out.charCodeAt(i) & 255;
+    return u;
+  }
+
+  /* immagine (foto, firma) -> JPEG pronto per il PDF, su fondo bianco */
+  async function toJpegImg(src, max, q) {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error("immagine non leggibile")); i.src = src; });
+    const k = Math.min(1, (max || 1400) / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement("canvas"); c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
+    const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
+    return { bin: atob(c.toDataURL("image/jpeg", q || 0.85).split(",")[1]), w: c.width, h: c.height };
+  }
+
   async function loadLogo() {
     try {
       const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = "logo_header.png"; });
@@ -214,5 +330,5 @@
     return zip(files);
   }
 
-  root.HDExport = { makePdf, makeXlsx, loadLogo };
+  root.HDExport = { makePdf, makeXlsx, loadLogo, makeDocPdf, toJpegImg };
 })(window);

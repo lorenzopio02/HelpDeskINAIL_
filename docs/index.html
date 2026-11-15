@@ -22,7 +22,7 @@ header h1{font-size:17px;margin:0;color:var(--navy)}
 .tri i{flex:1}.tri i:nth-child(1){background:var(--green)}.tri i:nth-child(2){background:#dfe9f2}.tri i:nth-child(3){background:var(--red)}
 main{padding:14px 14px calc(88px + env(safe-area-inset-bottom))}
 nav{position:fixed;left:0;right:0;bottom:0;background:var(--navy);display:flex;padding-bottom:env(safe-area-inset-bottom);z-index:10}
-nav button{flex:1;background:none;border:0;color:#b8c7d9;padding:11px 1px 9px;font-size:11px;font-weight:600}
+nav button{flex:1;background:none;border:0;color:#b8c7d9;padding:11px 0 9px;font-size:10.5px;font-weight:600;min-width:0}
 nav button b{display:block;font-size:20px;line-height:1.1}
 nav button.on{color:#fff;background:var(--navy2)}
 label{display:block;font-size:13px;font-weight:700;color:var(--navy);margin:12px 0 4px}
@@ -65,6 +65,45 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
 .tag.st-Risolto,.tag.st-Eseguito,.tag.st-OK{background:#e6f4ea;color:#14532d}
 .stats div.link{cursor:pointer}.stats b.red{color:var(--red)}
 .pr span.alert{display:block;color:var(--red);font-weight:700}
+.acw{position:relative}
+.ac{position:absolute;left:0;right:0;top:100%;margin-top:3px;z-index:8;max-height:224px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;background:var(--white);border:1px solid var(--navy);border-radius:10px;box-shadow:0 8px 22px rgba(0,30,64,.28)}
+.ac .aci{padding:12px;border-bottom:1px solid #e6edf4;cursor:pointer;line-height:1.25}
+.ac .aci:last-child{border-bottom:0}
+.ac .aci b{display:block;color:var(--navy)}
+.ac .aci small{display:block;color:var(--grey);font-size:12px;margin-top:1px}
+.ac .aci.on,.ac .aci:active{background:#e3eefa}
+.ac .acn{padding:10px 12px;color:var(--grey);font-size:13px}
+input[type=date],input[type=datetime-local]{display:block;min-width:0;max-width:100%;min-height:46px;overflow:hidden;-webkit-appearance:none;appearance:none;text-align:left}
+input[type=date]::-webkit-date-and-time-value,input[type=datetime-local]::-webkit-date-and-time-value{text-align:left;min-height:1.3em}
+.modal .thumbs img{width:78px;height:78px;object-fit:cover}
+.vgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}
+.vgrid button{font:inherit;font-weight:700;font-size:14px;line-height:1.25;text-align:left;padding:12px 11px;border:1px solid var(--border);border-radius:12px;background:var(--white);color:var(--navy)}
+.vgrid button small{display:block;font-weight:400;font-size:12px;color:var(--grey);margin-top:2px}
+.vbox{background:#f7fafd;margin:12px 0 4px}
+.vr{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:10px;margin:6px 0;background:var(--white)}
+.vr small{color:var(--grey);word-break:break-all}
+.vr .x{flex:none;border:0;background:var(--red);color:#fff;border-radius:50%;width:28px;height:28px;font-weight:700}
+.dc{background:#fff;border:1px solid var(--border);border-radius:10px;padding:12px;font-size:14px;margin:8px 0}
+.dc .dt{text-align:center;font-weight:700;color:var(--navy);margin-bottom:8px}
+.dc .dh{font-weight:700;color:var(--navy);margin:10px 0 3px;font-size:13px}
+.dc p{margin:5px 0}.dc p.bd{font-weight:700}
+.dc .dk{margin:2px 0}.dc .dm div{margin:1px 0}.dc ul{margin:4px 0;padding-left:20px}
+.dc .dtb{width:100%;border-collapse:collapse;font-size:12.5px;margin:6px 0}
+.dc .dtb th{background:var(--navy);color:#fff;text-align:left;padding:4px 6px}
+.dc .dtb td{border-bottom:1px solid var(--border);padding:4px 6px;word-break:break-all}
+.sg{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
+.slot{flex:1 1 150px;border:1px dashed #9fb2c8;border-radius:10px;padding:8px;text-align:center;background:#fbfdff}
+.slot .sgl{font-size:12px;font-weight:700;color:var(--navy);margin-bottom:4px}
+.slot .sgn{color:var(--grey);font-size:13px;padding:16px 0}
+.modal .slot img{width:auto;max-width:100%;max-height:72px;margin:2px 0;border-radius:0;background:#fff}
+.slot button.btn{margin-top:6px;display:block;width:100%}
+.sigm{position:fixed;inset:0;z-index:30;background:rgba(0,20,45,.88);overflow:auto;padding:16px}
+.sigc{background:var(--white);border-radius:14px;padding:14px}
+.sigc h3{margin:0 0 6px;font-size:17px;color:var(--navy)}
+.sigbox{position:relative;height:min(46vh,300px);background:#fff;border:2px solid var(--navy);border-radius:12px;overflow:hidden;margin:6px 0}
+.sigbox canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:crosshair}
+.sigline{position:absolute;left:12px;right:12px;bottom:32%;border-top:1px solid #9fb2c8;pointer-events:none}
+.sigx{position:absolute;left:14px;bottom:calc(32% + 4px);color:#9fb2c8;font-size:15px;pointer-events:none}
 </style>
 </head>
 <body>
@@ -76,11 +115,9 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
   <h2 id="newTitle">Nuovo intervento</h2>
   <div class="stats"><div class="link" id="sOpenBox"><b id="sOpen">0</b><span>Da seguire</span></div><div><b id="sOggi">0</b><span>Oggi</span></div><div><b id="sMese">0</b><span>Mese</span></div><div><b id="sTot">0</b><span>Totale</span></div></div>
   <label for="fDt">Data e ora</label><input id="fDt" type="datetime-local">
-  <div class="row"><div style="flex:2"><label for="fUser">Utente *</label><input id="fUser" list="dlUsers" autocomplete="off" autocapitalize="words" placeholder="Nome e cognome"></div><div><label for="fMat">Matricola</label><input id="fMat" autocapitalize="characters" autocomplete="off"></div></div>
-  <datalist id="dlUsers"></datalist>
+  <div class="row"><div style="flex:2"><label for="fUser">Utente *</label><input id="fUser" autocomplete="off" autocorrect="off" spellcheck="false" autocapitalize="words" placeholder="Nome e cognome"></div><div><label for="fMat">Matricola</label><input id="fMat" autocapitalize="characters" autocomplete="off"></div></div>
   <div class="hint" id="userHint"></div>
-  <label for="fSede">Sede</label><input id="fSede" list="dlSedi" autocomplete="off" autocapitalize="words" placeholder="Firenze, Livorno, DR Toscana…">
-  <datalist id="dlSedi"></datalist>
+  <label for="fSede">Sede</label><input id="fSede" autocomplete="off" autocorrect="off" spellcheck="false" autocapitalize="words" placeholder="Firenze, Livorno, DR Toscana…">
   <div class="row"><div><label for="fTel">Telefono</label><input id="fTel" inputmode="tel"></div><div><label for="fImei">IMEI cellulare</label><input id="fImei" inputmode="numeric"></div></div>
   <label for="fSn">Seriale del PC</label><input id="fSn" autocapitalize="characters">
   <button class="btn" type="button" id="btnCopy">📋 Copia dati utente</button>
@@ -103,7 +140,7 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
   <h2>Registro</h2>
   <details class="flt" id="rFlt">
    <summary id="rFltSum">Filtri</summary>
-   <label for="rUser">Utente (nome, cognome o matricola)</label><input id="rUser" list="dlUsers" autocomplete="off" placeholder="Tutti">
+   <label for="rUser">Utente (nome, cognome o matricola)</label><input id="rUser" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Tutti">
    <div class="row"><div><label for="rSede">Sede</label><select id="rSede"></select></div><div><label for="rTicket">Ticket</label><select id="rTicket"><option value="">Tutti</option><option value="con">Con ticket</option><option value="senza">Senza ticket</option></select></div></div>
    <label for="rTicketNo">N. ticket</label><input id="rTicketNo" autocapitalize="characters" autocomplete="off">
    <label for="rStato">Stato</label><select id="rStato"><option value="">Tutti</option><option value="aperti">Da richiamare (aperti e in attesa)</option><option>Aperto</option><option>In attesa</option><option>Risolto</option></select>
@@ -170,12 +207,38 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
   </div>
  </section>
 
+ <!-- VERBALI -->
+ <section id="p-ver" class="hidden">
+  <h2>Verbali</h2>
+  <div class="hint">Compili il verbale, lo fai firmare qui con il dito e lo mandi al PC: il Word esce con le firme già dentro.</div>
+  <div class="vgrid" id="vNew">
+   <button type="button" data-t="trasferimento">Trasferimento apparato<small>da una sede a un'altra</small></button>
+   <button type="button" data-t="presa_in_carico">Consegna e presa in carico<small>l'utente ci consegna un dispositivo</small></button>
+   <button type="button" data-t="assegnazione">Assegnazione materiale<small>notebook, smartphone, SIM…</small></button>
+   <button type="button" data-t="censimento">Censimento materiale<small>elenco IMEI, foto obbligatoria</small></button>
+  </div>
+  <div class="row"><div><label for="vTipo">Mostra</label><select id="vTipo"></select></div><div><label for="vSearch">Cerca</label><input id="vSearch" type="search" placeholder="Nome, apparato…"></div></div>
+  <div class="hint" id="vCount"></div>
+  <div id="vList"></div>
+  <details class="flt" id="vSet">
+   <summary>I miei dati e la mia firma</summary>
+   <div class="hint">Si propongono da soli nei censimenti. La firma salvata ti evita di rifirmare ogni volta come tecnico.</div>
+   <label for="vs_tecnico">Nome del tecnico</label><input id="vs_tecnico" autocomplete="off" autocapitalize="words" spellcheck="false">
+   <label for="vs_sede_citta">Sede (città)</label><input id="vs_sede_citta" autocomplete="off" autocapitalize="words" spellcheck="false">
+   <label for="vs_indirizzo">Indirizzo della sede</label><input id="vs_indirizzo" autocomplete="off" spellcheck="false">
+   <label for="vs_cap">CAP</label><input id="vs_cap" inputmode="numeric" autocomplete="off">
+   <label>La mia firma</label><div id="vsFirma"></div>
+   <button class="btn navy" type="button" id="vsSign">✍ Fai la mia firma</button>
+   <button class="btn" type="button" id="vsDel">Togli la firma salvata</button>
+  </details>
+ </section>
+
  <!-- SCAMBIO -->
  <section id="p-ex" class="hidden">
   <h2>Scambio con il PC</h2>
   <div class="card">
    <h3>Dal telefono al PC</h3>
-   <div class="hint">Crea un file con gli interventi, le foto, i cambi toner, gli interventi del tecnico e gli utenti nuovi o modificati. Mandalo al PC (posta aziendale, AirDrop…) e nel programma usa File › Importa dati dal telefono.</div>
+   <div class="hint">Crea un file con gli interventi, le foto, i cambi toner, gli interventi del tecnico, i verbali (con foto e firme) e gli utenti nuovi o modificati. Mandalo al PC (posta aziendale, AirDrop…) e nel programma usa File › Importa dati dal telefono.</div>
    <label for="exMode">Cosa invio</label>
    <select id="exMode"><option value="new">Solo le novità dall'ultimo invio</option><option value="all">Tutto (anche come copia di sicurezza)</option></select>
    <div class="hint" id="exInfo"></div>
@@ -183,7 +246,7 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
   </div>
   <div class="card">
    <h3>Dal PC al telefono</h3>
-   <div class="hint">Nel programma del PC usa File › Esporta dati per il telefono, poi scegli qui quel file. Arrivano utenti (con la matricola), interventi, edificio, stampanti, cambi toner, interventi del tecnico e scorta toner del PC (con le foto, se le hai incluse). Quello che c'è già sul telefono non viene duplicato; se c'è una modifica più recente vince quella.</div>
+   <div class="hint">Nel programma del PC usa File › Esporta dati per il telefono, poi scegli qui quel file. Arrivano utenti (con la matricola), interventi, verbali, edificio, stampanti, cambi toner, interventi del tecnico e scorta toner del PC (con le foto, se le hai incluse). Quello che c'è già sul telefono non viene duplicato; se c'è una modifica più recente vince quella.</div>
    <input id="imFile" type="file" accept=".json,application/json" class="hidden">
    <button class="btn navy" type="button" id="btnImport">Ricevi dal PC</button>
   </div>
@@ -204,6 +267,7 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
  <button data-p="reg"><b>☰</b>Registro</button>
  <button data-p="usr"><b>👤</b>Utenti</button>
  <button data-p="prn"><b>🖨</b>Stampanti</button>
+ <button data-p="ver"><b>📝</b>Verbali</button>
  <button data-p="ex"><b>⇄</b>Scambio</button>
 </nav>
 
@@ -211,14 +275,14 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
 <script>
 "use strict";
 /* ================== Database (IndexedDB) ================== */
-const DB_NAME = "helpdesk-inail", DB_VER = 3;
+const DB_NAME = "helpdesk-inail", DB_VER = 4;
 let db;
 function openDb() {
   return new Promise((res, rej) => {
     const rq = indexedDB.open(DB_NAME, DB_VER);
     rq.onupgradeneeded = () => {
       const d = rq.result, mk = (n, k) => { if (!d.objectStoreNames.contains(n)) d.createObjectStore(n, { keyPath: k }); };
-      mk("utenti", "key"); mk("interventi", "uid"); mk("meta", "k"); mk("edifici", "uid"); mk("stampanti", "uid"); mk("toner", "uid"); mk("manut", "uid"); mk("scorta", "k");
+      mk("utenti", "key"); mk("interventi", "uid"); mk("meta", "k"); mk("edifici", "uid"); mk("stampanti", "uid"); mk("toner", "uid"); mk("manut", "uid"); mk("scorta", "k"); mk("verbali", "uid");
     };
     rq.onsuccess = () => { db = rq.result; db.onversionchange = () => db.close(); res(); };
     rq.onerror = () => rej(rq.error);
@@ -275,16 +339,14 @@ function shrink(file, max = 1800) {
 }
 
 /* ================== Stato ================== */
-let users = [], editUid = null, photos = [], autoFor = null;
+let users = [], editUid = null, photos = [], autoFor = null, sediList = [...SEDI];
 
 async function loadUsers() {
   users = (await getAll("utenti")).sort((a, b) => a.nome.localeCompare(b.nome, "it"));
-  $("dlUsers").innerHTML = users.map(u => `<option value="${esc(u.nome)}">`).join("");
   const sedi = new Set(SEDI); users.forEach(u => u.sede && sedi.add(u.sede));
   (await getAll("interventi")).forEach(i => i.sede && sedi.add(i.sede));
   edifici.forEach(e => e.sede && sedi.add(e.sede));
-  const list = [...sedi].sort((a, b) => a.localeCompare(b, "it"));
-  $("dlSedi").innerHTML = list.map(s => `<option value="${esc(s)}">`).join("");
+  const list = sediList = [...sedi].sort((a, b) => a.localeCompare(b, "it"));
   for (const id of ["rSede", "uSede"]) {
     const cur = $(id).value;
     $(id).innerHTML = `<option value="">Tutte</option>` + list.map(s => `<option>${esc(s)}</option>`).join("");
@@ -304,12 +366,13 @@ $("sOpenBox").onclick = () => { ["rUser", "rSede", "rTicket", "rTicketNo", "rDal
 
 /* ================== Navigazione ================== */
 function go(p) {
-  ["new", "reg", "usr", "prn", "ex"].forEach(x => $("p-" + x).classList.toggle("hidden", x !== p));
+  ["new", "reg", "usr", "prn", "ver", "ex"].forEach(x => $("p-" + x).classList.toggle("hidden", x !== p));
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.p === p));
   window.scrollTo(0, 0);
   if (p === "reg") renderReg();
   if (p === "usr") renderUsers();
   if (p === "prn") renderPrn();
+  if (p === "ver") VER.render();
   if (p === "ex") renderEx();
 }
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => go(b.dataset.p));
@@ -337,6 +400,72 @@ function matHint() {
 }
 $("fMat").addEventListener("input", matHint);
 $("fMat").addEventListener("change", matHint);
+
+/* ===== menu a tendina per utente e sede =====
+   (la lista nativa dell'iPhone compare solo sopra la tastiera: qui ne uso una mia, sotto il campo) */
+let acOpen = null;
+function autoComplete(inp, getItems, emptyMsg) {
+  if (!inp || inp._ac) return;
+  inp._ac = true; inp.removeAttribute("list");
+  const wrap = document.createElement("div"); wrap.className = "acw";
+  inp.parentNode.insertBefore(wrap, inp); wrap.appendChild(inp);
+  const box = document.createElement("div"); box.className = "ac hidden"; box.setAttribute("role", "listbox"); wrap.appendChild(box);
+  let cur = -1, shown = [], skip = false;
+  const isOpen = () => !box.classList.contains("hidden");
+  const visBottom = () => { const vv = window.visualViewport; return vv ? vv.offsetTop + vv.height : window.innerHeight; };
+  const fit = () => { if (isOpen()) box.style.maxHeight = Math.max(112, Math.min(240, visBottom() - box.getBoundingClientRect().top - 10)) + "px"; };
+  const close = () => { box.classList.add("hidden"); cur = -1; if (acOpen && acOpen.box === box) acOpen = null; };
+  const mark = () => [...box.querySelectorAll(".aci")].forEach((d, i) => { d.classList.toggle("on", i === cur); if (i === cur) d.scrollIntoView({ block: "nearest" }); });
+  const pick = it => {
+    skip = true; inp.value = it.text; close();
+    inp.dispatchEvent(new Event("input", { bubbles: true })); inp.dispatchEvent(new Event("change", { bubbles: true }));
+    skip = false; inp.blur();
+  };
+  const render = first => {
+    if (skip) return;
+    const t = words(inp.value), all = getItems();
+    let m = all.filter(it => { const h = (it.hay || it.text).toLowerCase(); return t.every(w => h.includes(w)); });
+    if (t.length) m.sort((a, b) => (b.text.toLowerCase().startsWith(t[0]) ? 1 : 0) - (a.text.toLowerCase().startsWith(t[0]) ? 1 : 0));
+    if (t.length && m.length === 1 && m[0].text.toLowerCase() === inp.value.trim().toLowerCase()) m = [];   // già scelto
+    box.innerHTML = ""; cur = -1; box.style.pointerEvents = "";
+    if (!m.length) {
+      if (!all.length && !t.length && emptyMsg) {
+        const n = document.createElement("div"); n.className = "acn"; n.textContent = emptyMsg; box.appendChild(n);
+        box.style.pointerEvents = "none";   /* solo un avviso: i tocchi passano ai campi sotto */
+      } else return close();
+    }
+    shown = m.slice(0, 40);
+    shown.forEach(it => {
+      const d = document.createElement("div"); d.className = "aci"; d.setAttribute("role", "option");
+      d.innerHTML = `<b>${esc(it.text)}</b>` + (it.sub ? `<small>${esc(it.sub)}</small>` : "");
+      d.addEventListener("mousedown", e => e.preventDefault());
+      d.addEventListener("click", () => pick(it));
+      box.appendChild(d);
+    });
+    if (m.length > shown.length) { const n = document.createElement("div"); n.className = "acn"; n.textContent = `…e altri ${m.length - shown.length}: continua a scrivere per restringere`; box.appendChild(n); }
+    const wasHidden = !isOpen();
+    box.classList.remove("hidden"); acOpen = { wrap, box, close, fit }; fit();
+    if (first || wasHidden) setTimeout(() => { fit(); if (isOpen() && box.getBoundingClientRect().bottom > visBottom()) box.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, 380);
+  };
+  inp.addEventListener("focus", () => render(true));
+  inp.addEventListener("click", () => { if (!isOpen()) render(true); });
+  inp.addEventListener("input", () => render(false));
+  inp.addEventListener("keydown", e => {
+    if (e.key === "Escape") return close();
+    if (!isOpen() || !shown.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); cur = Math.min(cur + 1, shown.length - 1); mark(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); cur = Math.max(cur - 1, 0); mark(); }
+    else if (e.key === "Enter" && cur >= 0) { e.preventDefault(); pick(shown[cur]); }
+  });
+  inp.addEventListener("focusout", e => { if (e.relatedTarget && !wrap.contains(e.relatedTarget)) close(); });
+}
+document.addEventListener("pointerdown", e => { if (acOpen && !acOpen.wrap.contains(e.target)) acOpen.close(); }, true);
+if (window.visualViewport) window.visualViewport.addEventListener("resize", () => { if (acOpen) acOpen.fit(); });
+const userItems = () => users.map(u => ({ text: u.nome, hay: u.nome + " " + (u.matricola || ""), sub: [u.matricola && "Matr. " + u.matricola, u.sede].filter(Boolean).join(" · ") }));
+const sedeItems = () => sediList.map(s => ({ text: s }));
+autoComplete($("fUser"), userItems, "Nessun utente in lista: scrivi il nome, lo aggiungo quando salvi (oppure importa gli utenti dal PC in Scambio).");
+autoComplete($("fSede"), sedeItems);
+autoComplete($("rUser"), userItems);
 
 function renderThumbs() {
   $("thumbs").innerHTML = photos.map((p, i) => `<div><img src="${p.data}" alt=""><button class="x" data-i="${i}" type="button">×</button></div>`).join("");
@@ -515,19 +644,21 @@ function editUser(k) {
   if (!u) return;
   const m = $("modal");
   m.innerHTML = `<div class="card"><h3>${isNew ? "Nuovo utente" : "Scheda utente"}</h3>
-    <label>Nome e cognome</label><input id="eNome" autocapitalize="words" value="${esc(u.nome)}">
+    <label>Nome e cognome</label><input id="eNome" autocapitalize="words" autocorrect="off" spellcheck="false" value="${esc(u.nome)}">
     <label>Matricola aziendale</label><input id="eMat" autocapitalize="characters" value="${esc(u.matricola)}">
-    <label>Sede</label><input id="eSede" list="dlSedi" value="${esc(u.sede)}">
+    <label>Sede</label><input id="eSede" autocomplete="off" autocorrect="off" spellcheck="false" autocapitalize="words" value="${esc(u.sede)}">
     <label>Telefono</label><input id="eTel" inputmode="tel" value="${esc(u.telefono)}">
     <label>Seriale PC</label><input id="eSn" value="${esc(u.seriale_pc)}">
     <label>IMEI cellulare</label><input id="eImei" inputmode="numeric" value="${esc(u.imei)}">
     <button class="btn green" id="eSave" type="button">Salva</button>
-    ${isNew ? "" : `<button class="btn" id="eCopy" type="button">📋 Copia dati utente</button><button class="btn navy" id="eSee" type="button">Vedi i suoi interventi</button><button class="btn red" id="eDel" type="button">Elimina utente</button>`}
+    ${isNew ? "" : `<button class="btn" id="eCopy" type="button">📋 Copia dati utente</button><button class="btn navy" id="eSee" type="button">Vedi i suoi interventi</button><button class="btn" id="eVer" type="button">📝 Nuovo verbale per questo utente</button><button class="btn red" id="eDel" type="button">Elimina utente</button>`}
     <button class="btn" id="eClose" type="button">Chiudi</button><div id="eMsg"></div></div>`;
   m.classList.remove("hidden");
+  autoComplete($("eSede"), sedeItems);
   $("eClose").onclick = () => m.classList.add("hidden");
   if (!isNew) {
     $("eCopy").onclick = async () => { const ok = await copyText(userLines({ nome: u.nome, mat: $("eMat").value, sede: $("eSede").value, tel: $("eTel").value, sn: $("eSn").value, imei: $("eImei").value })); show($("eMsg"), ok ? "Dati dell'utente copiati." : "Copia non riuscita.", !ok); };
+    $("eVer").onclick = () => VER.chooseTipo(u);
     $("eSee").onclick = () => { m.classList.add("hidden"); $("rUser").value = u.nome; ["rSede", "rTicket", "rTicketNo", "rDal", "rAl", "rSearch", "rStato"].forEach(id => $(id).value = ""); go("reg"); };
     $("eDel").onclick = async () => {
       const n = (await getAll("interventi")).filter(i => keyOf(i.utente) === u.key).length;
@@ -846,8 +977,8 @@ const isNewT = (t, last) => (!last || t.modificato > last) && !t.daPC;
 const isNewM = (m, last) => (!last || m.modificato > last) && m.modificato !== m.daPC;
 async function renderEx() {
   const last = await getMeta("lastSent"), all = await getAll("interventi"), ton = await getAll("toner"), man = await getAll("manut");
-  const n = all.filter(i => isNew(i, last)).length, nt = ton.filter(t => isNewT(t, last)).length, nm = man.filter(m => isNewM(m, last)).length;
-  $("exInfo").textContent = (last ? `Ultimo invio: ${fmtDt(last.replace("T", " ").slice(0, 16))} (ora locale può differire di 1-2 ore). ` : `Non hai ancora creato nessun file. `) + `Interventi da inviare: ${n}. Cambi toner da inviare: ${nt}. Interventi del tecnico da inviare: ${nm}.`;
+  const n = all.filter(i => isNew(i, last)).length, nt = ton.filter(t => isNewT(t, last)).length, nm = man.filter(m => isNewM(m, last)).length, nv = await VER.countNew(last);
+  $("exInfo").textContent = (last ? `Ultimo invio: ${fmtDt(last.replace("T", " ").slice(0, 16))} (ora locale può differire di 1-2 ore). ` : `Non hai ancora creato nessun file. `) + `Interventi da inviare: ${n}. Cambi toner da inviare: ${nt}. Interventi del tecnico da inviare: ${nm}. Verbali da inviare: ${nv}.`;
   if (navigator.storage && navigator.storage.estimate) {
     const e = await navigator.storage.estimate(), p = navigator.storage.persisted ? await navigator.storage.persisted() : false;
     $("storInfo").textContent = `Spazio usato dall'app: ${((e.usage || 0) / 1048576).toFixed(1)} MB. Archivio protetto: ${p ? "sì" : "non garantito"}.`;
@@ -862,21 +993,22 @@ async function buildExport(mode) {
   const needed = new Set(items.map(i => keyOf(i.utente)));
   const usersOut = [...us, ...users.filter(u => needed.has(u.key) && !us.includes(u))];
   return {
-    tipo: "helpdesk-telefono", versione: 3, creato: nowIso(),
+    tipo: "helpdesk-telefono", versione: 4, creato: nowIso(),
     utenti: usersOut.map(u => ({ nome: u.nome, matricola: u.matricola || "", sede: u.sede || "", telefono: u.telefono || "", seriale_pc: u.seriale_pc || "", imei: u.imei || "", modificato: u.modificato || nowIso() })),
     interventi: items.map(i => ({ uid: i.uid, data_ora: i.data_ora, utente: i.utente, sede: i.sede || "", richiesta: i.richiesta, soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", stato: stOf(i), modificato: i.modificato, foto: (i.foto || []).map(f => ({ nome: f.nome, data: f.data })) })),
     toner: tons.map(t => ({ uid: t.uid, stampante_uid: t.stampante_uid, colore: t.colore, data_ora: t.data_ora, note: t.note || "", modificato: t.modificato })),
     manutenzioni: mans.map(m => ({ uid: m.uid, stampante_uid: m.stampante_uid, data_ora: m.data_ora, data_tecnico: m.data_tecnico || "", ticket: m.ticket || "", tecnico: m.tecnico || "", problema: m.problema || "", intervento: m.intervento || "", stato: m.stato, modificato: m.modificato })),
+    verbali: await VER.exportItems(mode, last),
     edifici: mode === "all" ? edifici : [], stampanti: mode === "all" ? stampanti : [],
     ...(mode === "all" && scortaAll.length ? { scorta: scortaAll.map(r => ({ modello: r.modello, colore: r.colore, quantita: r.quantita, soglia: r.soglia })), scorta_aggiornata: scortaAgg } : {})
   };
 }
 $("btnExport").onclick = async () => {
   const mode = $("exMode").value, data = await buildExport(mode);
-  if (!data.interventi.length && !data.utenti.length && !data.toner.length && !data.manutenzioni.length) return show($("exMsg"), "Non c'è niente di nuovo da inviare.", true);
+  if (!data.interventi.length && !data.utenti.length && !data.toner.length && !data.manutenzioni.length && !data.verbali.length) return show($("exMsg"), "Non c'è niente di nuovo da inviare.", true);
   const name = `dati_telefono_${localInput().replace(/[-:T]/g, "").slice(0, 12)}.json`;
   const file = new File([JSON.stringify(data)], name, { type: "application/json" });
-  const done = async () => { if (mode === "new") await setMeta("lastSent", data.creato); show($("exMsg"), `File creato: ${data.interventi.length} interventi, ${data.toner.length} cambi toner, ${data.manutenzioni.length} interventi del tecnico, ${data.utenti.length} utenti.\nNel PC: File › Importa dati dal telefono.`); renderEx(); };
+  const done = async () => { if (mode === "new") await setMeta("lastSent", data.creato); show($("exMsg"), `File creato: ${data.interventi.length} interventi, ${data.toner.length} cambi toner, ${data.manutenzioni.length} interventi del tecnico, ${data.verbali.length} verbali, ${data.utenti.length} utenti.\nNel PC: File › Importa dati dal telefono.`); renderEx(); };
   try {
     if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: "Dati Help Desk" }); return done(); }
   } catch (e) { if (e && e.name === "AbortError") return show($("exMsg"), "Invio annullato: niente è stato segnato come inviato.", true); }
@@ -947,11 +1079,13 @@ async function mergeFile(file, restore) {
     }
     await setMeta("scortaAgg", data.scorta_aggiornata || data.creato || nowIso());
   }
+  const vr = await VER.merge(data, fromPc);
   const verb = restore ? "ripristinati" : "ricevuti dal PC";
   let msg = `Utenti nuovi: ${nu}, aggiornati: ${au}`;
   if ((data.interventi || []).length) msg += `\nInterventi ${verb}: ${ni}, aggiornati: ${ai}, già presenti: ${sk}`;
   if ((data.toner || []).length) msg += `\nCambi toner ${verb}: ${nt}, già presenti: ${pt}` + (skt ? `, ignorati: ${skt}` : "");
   if ((data.manutenzioni || []).length) msg += `\nInterventi del tecnico ${verb}: ${nm}, aggiornati: ${am}, già presenti: ${pm}` + (skm ? `, ignorati: ${skm}` : "");
+  if ((data.verbali || []).length) msg += `\nVerbali ${verb}: ${vr.n}, aggiornati: ${vr.a}, già presenti: ${vr.p}` + (vr.s ? `, ignorati: ${vr.s}` : "");
   if (Array.isArray(data.scorta)) msg += `\nScorta toner: ${nsc} voci aggiornate`;
   if (ne || ns) msg += `\nEdifici nuovi: ${ne}, stampanti nuove: ${ns}`;
   return msg;
@@ -974,5 +1108,6 @@ wire("btnImport", "imFile", false); wire("btnRestore", "rsFile", true);
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 })();
 </script>
+<script src="verbali.js"></script>
 </body>
 </html>

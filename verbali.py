@@ -1,0 +1,653 @@
+# -*- coding: utf-8 -*-
+"""
+Verbali Word per l'help desk (trasferimento, consegna/presa in carico, assegnazione, censimento).
+
+I modelli sono normali file Word con dei segnaposto tra doppie graffe, per esempio {{UTENTE}}.
+Il programma apre il modello, sostituisce i segnaposto con i dati inseriti e salva un nuovo file:
+loghi, caratteri e impaginazione restano quelli del modello, che si può modificare con Word.
+
+Regole dei segnaposto
+  {{NOME}}   sostituito dal valore; se il valore è vuoto resta una riga ______ da scrivere a mano
+  {{?NOME}}  come sopra, ma se il valore è vuoto l'intero paragrafo viene tolto
+  {{-NOME}}  come sopra, ma se il valore è vuoto non scrive niente
+  {{FIRMA_TECNICO}} {{FIRMA_UTENTE}}  messi davanti alla riga della firma: se c'è la firma la
+             immagine compare sopra la riga, altrimenti non succede niente (la riga resta da firmare
+             a mano). {{FIRMA_GAP_...}} e {{FIRMA_SOLO_UTENTE}} sono righe che compaiono solo se
+             c'è la firma.
+Questo file non usa tkinter: si può provare anche senza finestre.
+"""
+import base64
+import copy
+import os
+import re
+import shutil
+import tempfile
+import uuid
+
+MARKER_RE = re.compile(r"\{\{([?-])?([A-Z0-9_]+)\}\}")
+BLANK = "_" * 30
+CHECK_ON = "☒"    # ☒
+CHECK_OFF = "☐"   # ☐
+XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
+MAX_FOTO_PX = 1800
+FIRMA_RE = re.compile(r"\{\{(FIRMA_[A-Z_]+)\}\}")
+FIRMA_LARG_CM = 4.2       # larghezza massima della firma nel Word
+FIRMA_ALT_CM = 1.05       # altezza massima
+FIRMA_PX = 900            # lato lungo massimo dell'immagine della firma
+
+# chiave -> (titolo, nome del file modello, foto obbligatoria)
+TIPI = {
+    "trasferimento": ("Trasferimento apparato", "Modello verbale trasferimento apparato.docx", False),
+    "presa_in_carico": ("Consegna e presa in carico", "Modello verbale consegna e presa in carico.docx", False),
+    "assegnazione": ("Assegnazione materiale", "Modello verbale assegnazione materiale.docx", False),
+    "censimento": ("Censimento materiale", "Modello verbale censimento materiale.docx", True),
+}
+TIPI_ORDINE = ["trasferimento", "presa_in_carico", "assegnazione", "censimento"]
+
+MOTIVI_TRASFERIMENTO = ["Apparato non utilizzato", "Riallocazione risorse", "Sostituzione apparato",
+                        "Riparazione/Manutenzione", "Pensionamento Utente"]
+MOTIVI_PRESA_IN_CARICO = ["Sostituzione dispositivo", "Guasto tecnico", "Licenziamento",
+                          "Pensionamento utente", "Dismissione"]
+TIPOLOGIE = ["Notebook", "PC fisso", "Monitor", "Smartphone", "Tablet", "Stampante", "Altro"]
+TIPI_DOTAZIONE = ["Notebook aziendale", "Cuffie professionali", "Smartphone aziendale",
+                  "Scheda SIM aziendale", "Altro"]
+COLONNE_CODICE = ["IMEI", "Numero di serie", "IMEI / Seriale"]
+
+# titolo -> preposizione articolata ("all'avv.", "al dott.", "alla dott.ssa" ...)
+TITOLI = {
+    "": "a", "avv.": "all’", "dott.": "al", "dott.ssa": "alla", "ing.": "all’",
+    "arch.": "all’", "geom.": "al", "rag.": "al", "sig.": "al", "sig.ra": "alla",
+    "prof.": "al", "prof.ssa": "alla", "on.": "all’", "dr.": "al", "dr.ssa": "alla",
+}
+
+
+class VerbaleError(Exception):
+    """Errore da mostrare così com'è all'utente."""
+
+
+def _docx():
+    try:
+        import docx
+        return docx
+    except ImportError as e:  # pragma: no cover
+        raise VerbaleError("Manca il componente per creare i file Word (python-docx). "
+                           "Ricostruisci il programma con requirements.txt aggiornato.\n(%s)" % e)
+
+
+def _w(tag):
+    from docx.oxml.ns import qn
+    return qn("w:" + tag)
+
+
+# --------------------------------------------------------------------------
+# Modelli
+# --------------------------------------------------------------------------
+def ensure_templates(folder):
+    """Scrive nella cartella i modelli che mancano (non tocca quelli che hai modificato)."""
+    from verbali_modelli import MODELLI
+    os.makedirs(folder, exist_ok=True)
+    for tipo, (_, nome, _) in TIPI.items():
+        path = os.path.join(folder, nome)
+        if not os.path.exists(path):
+            with open(path, "wb") as f:
+                f.write(base64.b64decode(MODELLI[tipo]))
+    return folder
+
+
+def restore_templates(folder):
+    """Rimette i modelli originali; quelli che c'erano restano come copia."""
+    from verbali_modelli import MODELLI
+    os.makedirs(folder, exist_ok=True)
+    kept = []
+    for tipo, (_, nome, _) in TIPI.items():
+        path = os.path.join(folder, nome)
+        if os.path.exists(path):
+            stem, ext = os.path.splitext(nome)
+            old = os.path.join(folder, "%s (prima del ripristino)%s" % (stem, ext))
+            shutil.copy2(path, old)
+            kept.append(old)
+        with open(path, "wb") as f:
+            f.write(base64.b64decode(MODELLI[tipo]))
+    return kept
+
+
+def template_path(folder, tipo):
+    ensure_templates(folder)
+    return os.path.join(folder, TIPI[tipo][1])
+
+
+# --------------------------------------------------------------------------
+# Sostituzione dei segnaposto dentro ai paragrafi
+# --------------------------------------------------------------------------
+def _t_nodes(p_el):
+    out = []
+    for t in p_el.iter(_w("t")):
+        node, inside_box = t.getparent(), False
+        while node is not None and node is not p_el:
+            if node.tag == _w("txbxContent"):
+                inside_box = True
+                break
+            node = node.getparent()
+        if not inside_box:
+            out.append(t)
+    return out
+
+
+def paragraph_text(p_el):
+    return "".join(t.text or "" for t in _t_nodes(p_el))
+
+
+def _set_text(t, text):
+    t.text = text
+    t.set(XML_SPACE, "preserve")
+
+
+def replace_markers(p_el, values, blank=BLANK):
+    """Sostituisce i segnaposto di un paragrafo (anche se Word li ha spezzati in più parti).
+    Restituisce True se il paragrafo deve essere tolto ({{?NOME}} con valore vuoto)."""
+    guard = 0
+    while guard < 200:
+        guard += 1
+        nodes = _t_nodes(p_el)
+        text = "".join(t.text or "" for t in nodes)
+        m = MARKER_RE.search(text)
+        if not m:
+            return False
+        mode, name = m.group(1), m.group(2)
+        val = values.get(name)
+        val = "" if val is None else str(val)
+        if mode == "?" and not val.strip():
+            return True
+        repl = val if val.strip() else ("" if mode == "-" else blank)
+        s, e = m.span()
+        spans, pos = [], 0
+        for n in nodes:
+            ln = len(n.text or "")
+            spans.append((n, pos, pos + ln))
+            pos += ln
+        hit = [(n, a, b) for n, a, b in spans if b > s and a < e]
+        first, fa, _ = hit[0]
+        last, la, _ = hit[-1]
+        prefix = (first.text or "")[:s - fa]
+        suffix = (last.text or "")[e - la:]
+        lines = repl.split("\n")
+        for n, _, _ in hit[1:-1]:
+            _set_text(n, "")
+        if first is last:
+            _set_text(first, prefix + lines[0] + (suffix if len(lines) == 1 else ""))
+        else:
+            _set_text(first, prefix + lines[0])
+            _set_text(last, suffix)
+        if len(lines) > 1:
+            from lxml import etree
+            anchor = last_t = first
+            for line in lines[1:]:
+                br = etree.Element(_w("br"))
+                nt = etree.Element(_w("t"))
+                anchor.addnext(br)
+                br.addnext(nt)
+                _set_text(nt, line)
+                anchor = last_t = nt
+            if first is last:
+                _set_text(last_t, (last_t.text or "") + suffix)
+    return False
+
+
+def _all_paragraphs(doc):
+    return list(doc.element.body.iter(_w("p")))
+
+
+def _find_paragraph(doc, name):
+    for p in _all_paragraphs(doc):
+        txt = paragraph_text(p)
+        if any(("{{%s%s}}" % (m, name)) in txt for m in ("", "?", "-")):
+            return p
+    return None
+
+
+def _repeat_paragraph(doc, name, items):
+    """Ripete il paragrafo che contiene il segnaposto {{name}} una volta per ogni elemento
+    (items = lista di dizionari di valori). Senza elementi il paragrafo sparisce."""
+    proto = _find_paragraph(doc, name)
+    if proto is None:
+        return None
+    for values in items:
+        clone = copy.deepcopy(proto)
+        proto.addprevious(clone)
+        if replace_markers(clone, values):
+            clone.getparent().remove(clone)
+    following = proto.getnext()
+    proto.getparent().remove(proto)
+    return following   # il paragrafo che viene dopo l'elenco (serve per le righe da compilare a mano)
+
+
+def _repeat_table_row(doc, marker, rows):
+    """Nella tabella la riga che contiene {{marker}} fa da esempio: viene ripetuta per ogni riga."""
+    for tr in doc.element.body.iter(_w("tr")):
+        if any("{{%s}}" % marker in paragraph_text(p) for p in tr.iter(_w("p"))):
+            for values in rows:
+                clone = copy.deepcopy(tr)
+                tr.addprevious(clone)
+                for p in clone.iter(_w("p")):
+                    replace_markers(p, values, blank="")
+            tr.getparent().remove(tr)
+            return True
+    return False
+
+
+# --------------------------------------------------------------------------
+# Controlli sui codici (IMEI, doppioni)
+# --------------------------------------------------------------------------
+def luhn_ok(digits):
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        d = int(ch)
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return total % 10 == 0
+
+
+def imei_problem(value):
+    """Spiega cosa non torna in un IMEI (None se va bene o se non è un numero)."""
+    s = re.sub(r"[\s-]", "", value or "")
+    if not s or not s.isdigit():
+        return None
+    if len(s) != 15:
+        return "ha %d cifre (un IMEI ne ha 15)" % len(s)
+    if not luhn_ok(s):
+        return "non supera il controllo di validità, forse c'è un errore di battitura"
+    return None
+
+
+def controlla_apparati(rows, colonna="IMEI"):
+    """Elenco di avvisi per le righe di un censimento: codici ripetuti, IMEI strani, righe vuote."""
+    avvisi, seen = [], {}
+    check_imei = colonna.strip().upper() == "IMEI"
+    for i, r in enumerate(rows, 1):
+        code = (r.get("codice") or "").strip()
+        if not code:
+            avvisi.append("Riga %d: manca il codice (%s)." % (i, colonna))
+            continue
+        key = re.sub(r"[\s-]", "", code).casefold()
+        if key in seen:
+            avvisi.append("Riga %d: il codice %s è uguale a quello della riga %d." % (i, code, seen[key]))
+        else:
+            seen[key] = i
+        if check_imei:
+            why = imei_problem(code)
+            if why:
+                avvisi.append("Riga %d: l'IMEI %s %s." % (i, code, why))
+    return avvisi
+
+
+def parse_apparati_text(text, marca="", modello=""):
+    """Legge un elenco incollato (anche da Excel): una riga per apparecchio, colonne separate da
+    tabulazione, punto e virgola o virgola. Con una sola colonna è il codice: marca e modello
+    vengono presi da quelli indicati."""
+    rows = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = [p.strip() for p in re.split(r"\t|;", line)]
+        if len(parts) == 1 and "," in line:
+            parts = [p.strip() for p in line.split(",")]
+        if len(parts) == 1:
+            rows.append({"marca": marca, "modello": modello, "codice": parts[0]})
+        elif len(parts) == 2:
+            rows.append({"marca": marca, "modello": parts[0], "codice": parts[1]})
+        else:
+            rows.append({"marca": parts[0], "modello": parts[1], "codice": parts[2]})
+    return rows
+
+
+# --------------------------------------------------------------------------
+# Valori da mettere nei modelli
+# --------------------------------------------------------------------------
+def frase_assegnatario(titolo, nome):
+    """'all'avv. Mario Rossi', 'al dott. Mario Rossi', 'a Mario Rossi' ..."""
+    titolo = (titolo or "").strip()
+    nome = (nome or "").strip()
+    prep = TITOLI.get(titolo.casefold(), "a")
+    if not titolo:
+        return ("a " + nome).strip() if nome else ""
+    if prep.endswith("’"):
+        return "%s%s %s" % (prep, titolo, nome)
+    return "%s %s %s" % (prep, titolo, nome)
+
+
+def righe_dotazione(item):
+    """Righe sotto il nome di un oggetto assegnato: S/N, IMEI, ICCID, numero."""
+    tipo = (item.get("tipo") or "").casefold()
+    codice = (item.get("codice") or "").strip() or BLANK
+    if "sim" in tipo:
+        return ["ICCID: " + ((item.get("iccid") or "").strip() or BLANK),
+                "Numero: " + ((item.get("numero") or "").strip() or BLANK)]
+    if "smartphone" in tipo or "cellulare" in tipo or "telefono" in tipo:
+        return ["IMEI: " + codice]
+    return ["S/N: " + codice]
+
+
+def _checks(selected, options, altro):
+    vals = {}
+    for i, label in enumerate(options, 1):
+        vals["C%d" % i] = CHECK_ON if label in (selected or []) else CHECK_OFF
+    vals["C%d" % (len(options) + 1)] = CHECK_ON if (altro or "").strip() else CHECK_OFF
+    return vals
+
+
+def valori_verbale(tipo, d, imp=None):
+    """Prepara i valori (e le liste) del verbale a partire dai dati del modulo."""
+    imp = imp or {}
+    s = lambda k: (d.get(k) or "").strip()
+    if tipo == "trasferimento":
+        v = {"DATA": s("data"), "TIPOLOGIA": s("tipologia"), "MARCA_MODELLO": s("marca_modello"),
+             "SERIALE": s("seriale"), "PROVENIENZA": s("provenienza"),
+             "DESTINAZIONE": s("destinazione"), "ASSEGNATARIO": s("assegnatario"),
+             "CONTATTI": s("contatti"), "ALTRO": s("altro"), "NOTE": s("note"),
+             "DATA_SPED": s("data_sped") or s("data")}
+        v.update(_checks(d.get("motivi"), MOTIVI_TRASFERIMENTO, s("altro")))
+        return v, {}
+    if tipo == "presa_in_carico":
+        v = {"DATA": s("data"), "TIPOLOGIA": s("tipologia"), "MARCA_MODELLO": s("marca_modello"),
+             "SERIALE": s("seriale"), "UTENTE": s("utente"), "INC": s("inc"), "RIC": s("ric"),
+             "ALTRO": s("altro")}
+        v.update(_checks(d.get("motivi"), MOTIVI_PRESA_IN_CARICO, s("altro")))
+        mat = [{"MATERIALE": x.strip()} for x in (d.get("materiale") or []) if x.strip()]
+        return v, {"MATERIALE": mat}
+    if tipo == "assegnazione":
+        nome = s("utente")
+        v = {"DATA": s("data"), "ASSEGNATARIO_FRASE": frase_assegnatario(s("titolo"), nome),
+             "MATRICOLA": s("matricola")}
+        dot = []
+        for it in d.get("dotazione") or []:
+            dot.append({"DOT_TIPO": (it.get("tipo") or "").strip(),
+                        "DOT_MODELLO": (it.get("modello") or "").strip(),
+                        "DOT_RIGHE": "\n".join(righe_dotazione(it))})
+        acc = [{"ACCESSORIO": x.strip()} for x in (d.get("accessori") or []) if x.strip()]
+        return v, {"DOT_TIPO": dot, "ACCESSORIO": acc}
+    if tipo == "censimento":
+        citta = s("sede_citta") or imp.get("sede_citta", "")
+        indirizzo = s("indirizzo") or imp.get("indirizzo", "")
+        cap = s("cap") or imp.get("cap", "")
+        col = s("col_codice") or "IMEI"
+        descr = s("descrizione") or (s("oggetto")[:1].lower() + s("oggetto")[1:])
+        righe = []
+        for i, r in enumerate(d.get("apparati") or [], 1):
+            righe.append({"N": str(i), "MARCA": (r.get("marca") or "").strip(),
+                          "MODELLO": (r.get("modello") or "").strip(),
+                          "CODICE": (r.get("codice") or "").strip()})
+        v = {"DATA": s("data"), "OGGETTO": s("oggetto"), "DESCRIZIONE": descr,
+             "SEDE1": ("Sede INAIL " + citta).strip() if citta else "", "SEDE2": indirizzo,
+             "SEDE3": ("%s, %s" % (cap, citta)).strip(", ") if (cap or citta) else "",
+             "CITTA": citta, "TECNICO": s("tecnico") or imp.get("tecnico", ""),
+             "COLLEGA": s("collega"), "TOTALE": str(len(righe)), "COL_CODICE": col}
+        return v, {"N": righe}
+    raise VerbaleError("Tipo di verbale sconosciuto: %s" % tipo)
+
+
+# --------------------------------------------------------------------------
+# Foto
+# --------------------------------------------------------------------------
+def prepara_foto(src, dest_dir, stem):
+    """Converte una foto in JPEG (ridotta, già ruotata) dentro dest_dir. Restituisce il percorso."""
+    try:
+        from PIL import Image, ImageOps
+    except ImportError as e:  # pragma: no cover
+        raise VerbaleError("Manca il componente per le immagini (Pillow): %s" % e)
+    os.makedirs(dest_dir, exist_ok=True)
+    try:
+        with Image.open(src) as im:
+            im = ImageOps.exif_transpose(im)
+            if max(im.size) > MAX_FOTO_PX:
+                im.thumbnail((MAX_FOTO_PX, MAX_FOTO_PX))
+            im = im.convert("RGB")
+            target = os.path.join(dest_dir, "%s.jpg" % stem)
+            im.save(target, "JPEG", quality=85)
+    except Exception as e:
+        raise VerbaleError("Non riesco a leggere la foto \"%s\" (%s)." % (os.path.basename(src), e))
+    return target
+
+
+def _aggiungi_foto(doc, photos):
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Cm, Pt
+    from PIL import Image
+    p = doc.add_paragraph()
+    p.paragraph_format.page_break_before = True
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = p.add_run("ALLEGATO FOTOGRAFICO")
+    r.bold = True
+    n = len(photos)
+    for i, path in enumerate(photos, 1):
+        with Image.open(path) as im:
+            w, h = im.size
+        ratio = w / float(h)
+        width = min(16.0, 10.0 * ratio)
+        pic = doc.add_paragraph()
+        pic.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        pic.add_run().add_picture(path, width=Cm(width))
+        cap = doc.add_paragraph()
+        cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        rc = cap.add_run("Foto %d di %d" % (i, n))
+        rc.italic = True
+        rc.font.size = Pt(9)
+
+
+# --------------------------------------------------------------------------
+# Firme
+# --------------------------------------------------------------------------
+def prepara_firma(src, dest_dir, stem):
+    """Ritaglia la firma (PNG con sfondo trasparente o scansione su bianco) e la ridimensiona.
+    Restituisce il percorso del PNG pronto."""
+    try:
+        from PIL import Image, ImageChops
+    except ImportError as e:  # pragma: no cover
+        raise VerbaleError("Manca il componente per le immagini (Pillow): %s" % e)
+    os.makedirs(dest_dir, exist_ok=True)
+    try:
+        with Image.open(src) as im:
+            im = im.convert("RGBA")
+            alpha = im.getchannel("A")
+            if alpha.getextrema() == (255, 255):         # niente trasparenza: tolgo il bianco
+                grey = im.convert("L")
+                alpha = grey.point(lambda v: 0 if v > 235 else 255)
+                im.putalpha(alpha)
+            box = alpha.getbbox()
+            if not box:
+                raise VerbaleError("La firma è vuota.")
+            m = 6
+            box = (max(0, box[0] - m), max(0, box[1] - m), min(im.width, box[2] + m),
+                   min(im.height, box[3] + m))
+            im = im.crop(box)
+            if max(im.size) > FIRMA_PX:
+                im.thumbnail((FIRMA_PX, FIRMA_PX))
+            target = os.path.join(dest_dir, "%s.png" % stem)
+            im.save(target, "PNG")
+    except VerbaleError:
+        raise
+    except Exception as e:
+        raise VerbaleError("Non riesco a leggere la firma (%s)." % e)
+    return target
+
+
+def _disegno_firma(doc, path):
+    """Immagine della firma 'fluttuante' (non sposta il testo), agganciata al punto del segnaposto
+    e alzata sopra la riga della firma."""
+    from docx.oxml import parse_xml
+    from docx.oxml.ns import nsdecls, qn
+    from docx.shared import Cm
+    from PIL import Image
+    with Image.open(path) as im:
+        w, h = im.size
+    width = FIRMA_LARG_CM
+    height = width * h / float(w)
+    if height > FIRMA_ALT_CM:
+        height = FIRMA_ALT_CM
+        width = height * w / float(h)
+    inline = doc.part.new_pic_inline(path, Cm(width), Cm(height))
+    cx, cy = int(Cm(width)), int(Cm(height))
+    up = -int(Cm(0.55))                      # parte nella riga vuota sopra e scende fino alla riga
+    anchor = parse_xml(
+        '<wp:anchor %s distT="0" distB="0" distL="0" distR="0" simplePos="0" '
+        'relativeHeight="251659264" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">'
+        '<wp:simplePos x="0" y="0"/>'
+        '<wp:positionH relativeFrom="character"><wp:posOffset>%d</wp:posOffset></wp:positionH>'
+        '<wp:positionV relativeFrom="paragraph"><wp:posOffset>%d</wp:posOffset></wp:positionV>'
+        '<wp:extent cx="%d" cy="%d"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/>'
+        '</wp:anchor>' % (nsdecls("wp"), int(Cm(0.25)), up, cx, cy))
+    for tag in ("wp:docPr", "wp:cNvGraphicFramePr", "a:graphic"):
+        anchor.append(inline.find(qn(tag)))
+    drawing = parse_xml("<w:drawing %s/>" % nsdecls("w"))
+    drawing.append(anchor)
+    return drawing
+
+
+def applica_firme(doc, firme, avvisi=None):
+    """firme = {"tecnico": percorso PNG, "utente": percorso PNG} (le chiavi mancanti = niente firma).
+    Mette le immagini al posto dei segnaposto {{FIRMA_...}} e toglie le righe che servono solo
+    quando c'è la firma. Restituisce quante firme ha messo."""
+    from lxml import etree
+    has = {k: bool(v) for k, v in (firme or {}).items()}
+    anyone = any(has.values())
+    placed, seen = 0, set()
+    for p in _all_paragraphs(doc):
+        if p.getparent() is None:
+            continue
+        names = FIRMA_RE.findall(paragraph_text(p))
+        if not names:
+            continue
+        drop = (("FIRMA_GAP_TECNICO" in names and not has.get("tecnico")) or
+                ("FIRMA_GAP_UTENTE" in names and not has.get("utente")) or
+                ("FIRMA_GAP_ANY" in names and not anyone) or
+                ("FIRMA_SOLO_UTENTE" in names and not has.get("utente")))
+        if drop:
+            p.getparent().remove(p)
+            continue
+        for t in _t_nodes(p):
+            txt = t.text or ""
+            if "{{FIRMA_" not in txt:
+                continue
+            parts = FIRMA_RE.split(txt)          # testo, nome, testo, nome, testo ...
+            _set_text(t, parts[0])
+            cur = t
+            for i in range(1, len(parts), 2):
+                name, after = parts[i], parts[i + 1]
+                who = {"FIRMA_TECNICO": "tecnico", "FIRMA_UTENTE": "utente"}.get(name)
+                if who:
+                    seen.add(who)
+                    if has.get(who):
+                        d = _disegno_firma(doc, firme[who])
+                        cur.addnext(d)
+                        cur = d
+                        placed += 1
+                if after:
+                    nt = etree.Element(_w("t"))
+                    _set_text(nt, after)
+                    cur.addnext(nt)
+                    cur = nt
+    if avvisi is not None:
+        for who, label in (("tecnico", "del tecnico"), ("utente", "dell'utente")):
+            if has.get(who) and who not in seen:
+                avvisi.append("Il modello Word non ha il posto per la firma %s: la firma non è stata "
+                              "inserita. Usa «Modelli Word > Ripristina i modelli originali»." % label)
+    return placed
+
+
+# --------------------------------------------------------------------------
+# Creazione del documento
+# --------------------------------------------------------------------------
+def nome_file_proposto(tipo, d):
+    titolo = TIPI[tipo][0]
+    chi = (d.get("assegnatario") or d.get("utente") or d.get("oggetto") or "").strip()
+    chi = re.sub(r"\s*\(.*?\)", "", chi).strip()
+    day = re.sub(r"[^0-9]", "-", (d.get("data") or "").strip())
+    day = "-".join(reversed([x for x in day.split("-") if x])) if day else ""
+    parts = ["Verbale " + titolo.lower()]
+    if chi:
+        parts.append(chi)
+    if day:
+        parts.append(day)
+    name = " - ".join(parts)
+    name = re.sub(r'[\\/:*?"<>|]+', " ", name)
+    return re.sub(r"\s+", " ", name).strip()[:120] + ".docx"
+
+
+def crea_verbale(tipo, d, out_path, templates_dir, photos=None, imp=None, firme=None,
+                 avvisi=None):
+    """Compila il modello e salva il Word in out_path. photos = elenco di file JPEG già pronti.
+    firme = {"tecnico": file immagine, "utente": file immagine} (facoltative).
+    avvisi = lista a cui aggiungere le segnalazioni (esempio: modello senza posto per la firma)."""
+    docx = _docx()
+    photos = list(photos or [])
+    if tipo not in TIPI:
+        raise VerbaleError("Tipo di verbale sconosciuto: %s" % tipo)
+    if TIPI[tipo][2] and not photos:
+        raise VerbaleError("Per il %s la foto è obbligatoria: allega almeno una foto." %
+                           TIPI[tipo][0].lower())
+    values, lists = valori_verbale(tipo, d, imp)
+    path = template_path(templates_dir, tipo)
+    try:
+        doc = docx.Document(path)
+    except Exception as e:
+        raise VerbaleError("Non riesco ad aprire il modello \"%s\":\n%s" % (path, e))
+
+    if tipo == "presa_in_carico":
+        following = _repeat_paragraph(doc, "MATERIALE", lists["MATERIALE"])
+        # ogni voce scritta prende il posto di una delle righe vuote da compilare a mano
+        n = min(len(lists["MATERIALE"]), 3)
+        while following is not None and n > 0 and following.tag == _w("p") and (
+                following.find(".//" + _w("drawing")) is not None or
+                following.find(".//" + _w("pict")) is not None):
+            nxt = following.getnext()
+            following.getparent().remove(following)
+            following, n = nxt, n - 1
+    elif tipo == "assegnazione":
+        _repeat_paragraph(doc, "DOT_TIPO", lists["DOT_TIPO"])
+        acc = lists["ACCESSORIO"]
+        proto = _find_paragraph(doc, "ACCESSORIO")
+        if proto is not None:
+            if not acc:
+                prev = proto.getprevious()   # il titolo "Accessori inclusi"
+                if prev is not None and prev.tag == _w("p"):
+                    prev.getparent().remove(prev)
+            _repeat_paragraph(doc, "ACCESSORIO", acc)
+    elif tipo == "censimento":
+        _repeat_table_row(doc, "N", lists["N"])
+
+    tmp = None
+    try:
+        pronte = {}
+        for chi, src in (firme or {}).items():
+            if src and os.path.isfile(src):
+                tmp = tmp or tempfile.mkdtemp(prefix="firme_")
+                pronte[chi] = prepara_firma(src, tmp, chi)
+        applica_firme(doc, pronte, avvisi)
+
+        for p in _all_paragraphs(doc):
+            if p.getparent() is None:
+                continue
+            if replace_markers(p, values):
+                p.getparent().remove(p)
+
+        if photos:
+            _aggiungi_foto(doc, photos)
+        out_dir = os.path.dirname(out_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        try:
+            doc.save(out_path)
+        except PermissionError:
+            raise VerbaleError("Non riesco a salvare \"%s\": il file è aperto in Word? "
+                               "Chiudilo e riprova." % out_path)
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+    return out_path
+
+
+def nuovo_codice():
+    return uuid.uuid4().hex[:10]
