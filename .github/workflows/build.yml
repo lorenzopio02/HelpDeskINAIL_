@@ -16,13 +16,23 @@ jobs:
           python-version: "3.12"
 
       - name: Installa le librerie
-        run: pip install -r requirements.txt pyinstaller
+        # Se per qualche motivo numpy/opencv (fotocamera) non si installano, il .exe si crea lo
+        # stesso, solo senza la lettura con la fotocamera.
+        run: |
+          pip install -r requirements.txt pyinstaller
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Librerie della fotocamera non installate: creo il .exe senza"
+            pip install openpyxl reportlab pillow python-docx pyinstaller
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
 
       - name: Crea il .exe
         run: >
           pyinstaller --noconfirm --onefile --windowed
           --name HelpDeskINAIL --icon icon.ico
           --add-data "logo.png;." --add-data "logo_header.png;." --add-data "icon.ico;."
+          --collect-data docx --hidden-import verbali --hidden-import verbali_modelli
+          --hidden-import codici
           helpdesk.py
 
       - name: Salva il .exe
