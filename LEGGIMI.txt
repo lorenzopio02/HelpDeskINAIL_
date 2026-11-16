@@ -1,18 +1,541 @@
-HELP DESK INAIL - Registro interventi, utenti, stampanti e toner
-================================================================
+HELP DESK INAIL - PC + app per iPhone
+=====================================
 
-SE HAI GIA' IL REPOSITORY SU GITHUB (aggiornamento)
-1. Apri il repository > clicca helpdesk.py > icona matita > cancella tutto e incolla il nuovo
-   helpdesk.py > Commit changes.
-   (oppure: Add file > Upload files, trascina i nuovi file e conferma: sostituisce quelli vecchi)
-2. Add file > Upload files: carica anche il NUOVO file printer_images.py. Commit changes.
-3. Il workflow (.github/workflows/build.yml) NON cambia.
-4. Scheda Actions: il .exe si ricrea da solo. Scarica il nuovo "HelpDeskINAIL" da Artifacts.
-I dati gia' inseriti restano: l'app li aggiorna da sola al primo avvio.
+NOVITA' DI QUESTA VERSIONE
+ - PERSONE, UFFICIO E DOTAZIONE (PC e telefono): ogni persona ora ha anche l'UFFICIO e la sua
+   DOTAZIONE (elenco libero: tipo, modello, seriale o IMEI - per esempio "Smartphone, Samsung A54,
+   IMEI ..." oppure "Monitor"). Si scrivono nella scheda della persona, e per chi e' gia' in elenco si
+   possono modificare quando vuoi. Nuovo anche il pulsante "Nuova persona..." dentro la stanza:
+   scrivi nome e cognome, ufficio, matricola, PC, IMEI e dotazione, e la persona si siede subito
+   nella stanza. Vedi "PERSONE, UFFICIO E DOTAZIONE".
+ - STAMPANTE E STANZA (PC e telefono): ogni stampante ha il campo "Stanza" (Modifica stampante); la
+   scheda dice "Stanza T12" e la finestra della stanza elenca le sue stampanti.
+ - IMPORTA ELENCO STANZE E PERSONE (solo PC): File > "Importa elenco stanze e persone...". Carica in
+   un colpo solo stanze, persone con ufficio, postazioni e stampanti da un file .json. Quello che
+   c'e' gia' non viene duplicato ne' sovrascritto. Vedi "IMPORTARE L'ELENCO DI STANZE E PERSONE".
+ - STAMPANTE FUORI SERVIZIO (PC e telefono): nella finestra "Modifica stampante" c'e' la spunta
+   "Fuori servizio (stampante rotta)". La stampante resta in elenco, con la scheda in rosso: sul PC
+   una croce rossa sopra la foto e la scritta FUORI SERVIZIO, sul telefono foto sbiadita, bollino
+   rosso con la X e la scritta. Quando viene riparata togli la spunta. Si imposta solo dal PC
+   (Stampanti > Edificio e stampanti > Modifica stampante) e arriva sul telefono con il file di
+   scambio. Vedi "STAMPANTE FUORI SERVIZIO".
+ - FOTO E NOMI DELLE STAMPANTI (PC e telefono): le due foto delle stampanti ora sono le tue (ritagliate
+   senza sfondo): la piccola "bizhub C3350i" e la grande "bizhub C250i". I nomi vecchi sbagliati
+   ("bizhub C3351i" e "bizhub C360i") sono stati tolti dall'elenco dei modelli. Vedi "CORREGGERE
+   IL NOME DEL MODELLO".
+ - STANZE CON LE POSTAZIONI (PC e telefono): in "Incolla piu' stanze" ora puoi scrivere anche quante
+   postazioni ha ogni stanza, una stanza per riga: "T12; 3" oppure "T12 - 3" (oppure due colonne
+   copiate da Excel). Vedi "PIANI E STANZE".
+ - NUMERO DI SERIE DELLE STAMPANTI (PC e telefono): ogni stampante ha il suo "Numero di serie" (lo
+   scrivi o lo leggi con la fotocamera dall'etichetta). Si vede nella scheda della stampante, sul PC
+   e sul telefono. Si inserisce solo dal PC (Stampanti > Edificio e stampanti > Modifica stampante) e
+   arriva sul telefono con il file di scambio.
+ - LETTURA DEI CODICI CON LA FOTOCAMERA (PC e telefono): accanto ai campi "Seriale" e "IMEI" c'e' il
+   pulsante "Fotocamera..." (sul telefono la macchina fotografica). Inquadri il codice dell'etichetta
+   e il numero va nel campo.
+     * PC: usa la webcam del portatile (o una USB). Legge i codici a barre (Code 128 e Code 39) e
+       anche i QR code. Se la webcam non basta o non c'e': "Scegli una foto...", "Incolla immagine"
+       (per esempio una foto o uno screenshot copiato) oppure "Scrivi a mano".
+     * Telefono (anche iPhone): fotocamera in diretta, senza rete e senza programmi in piu'. Codici
+       a barre si', QR code NO (Safari su iPhone non ha il lettore di QR e non l'ho aggiunto).
+     * Dove: Nuovo intervento (seriale PC, IMEI), scheda utente (seriale PC, IMEI), Utenti > Cerca
+       (trovi la persona dal seriale o dall'IMEI) e Verbali (numero di serie, codice della dotazione,
+       codici del censimento).
+     * Il campo IMEI accetta solo un IMEI valido (15 cifre che tornano). Censimento: lettura a
+       catena, un codice dopo l'altro, senza doppioni.
+     * NON provato con una fotocamera vera, ne' con un iPhone vero, ne' con una finestra vera di
+       Windows: vedi la sezione "LETTURA DEI CODICI". Sul PC serve il NUOVO .exe (vedi sotto).
+ - PC E TELEFONO ADESSO HANNO LE STESSE COSE: mappa della Toscana, piani e stanze con le postazioni
+   dei dipendenti, firme (a mano a tutto schermo; l'immagine della firma solo per il tecnico),
+   duplica intervento, bollini e lettura dei codici. Sul PC tutte queste novita' arrivano con il
+   NUOVO .exe creato da GitHub (Actions): finche' usi il vecchio .exe non le vedi.
+ - MAPPA DELLA TOSCANA (PC e telefono): dove sono le sedi e quanti interventi hanno.
+     * PC: File > "Mappa della Toscana..." oppure il pulsante "Mappa della Toscana..." nel Registro.
+     * Telefono: Registro > in alto tocca "Mappa della Toscana" (accanto a "Elenco").
+     * Ogni sede e' un pallino col NUMERO DEGLI INTERVENTI. Pallino rosso = ce ne sono ancora da
+       seguire (aperti o in attesa, di qualsiasi data). Grigio = nessun intervento. Il numero si
+       puo' limitare a: Sempre / Quest'anno / Questo mese / Ultimi 30 giorni.
+     * Tocca un pallino: vedi interventi, da seguire, utenti e stampanti di quella sede, con i
+       pulsanti "Vedi gli interventi" e "Solo da seguire" (ti portano nel Registro, gia' filtrato).
+     * Le sedi si riconoscono dal nome (Firenze, Pisa, "Sede di Siena", "DR Toscana" = Firenze...);
+       ci sono circa 120 comuni toscani. Le sedi dell'elenco di base (Arezzo, Carrara, DR Toscana,
+       Firenze, Grosseto, Livorno, Lucca, Massa, Pisa, Pistoia, Prato, Siena) compaiono anche a zero.
+     * Una sede che non riconosco finisce in "Sedi senza posizione": la tocchi, premi "Posiziona" e
+       tocchi la mappa. Con "Sposta sulla mappa" correggi anche una sede gia' riconosciuta.
+       ATTENZIONE: la posizione scelta a mano resta SOLO sul dispositivo dove l'hai scelta
+       (PC e telefono non se la scambiano).
+     * Il contorno della Toscana e' SEMPLIFICATO: l'ho disegnato io da punti di riferimento, non e'
+       un confine ufficiale. Le sedi sono messe dove sta il comune. Serve per orientarsi, non per
+       misurare.
+ - PIANI E STANZE (PC e telefono): dentro Stampanti c'e' la sezione nuova "Piani e stanze" (nessuna
+   scheda nuova in basso). Parte dall'edificio di Firenze (via delle Porte Nuove, 5 piani) ma
+   funziona con qualunque edificio. Le stanze NON le invento: le scrivi tu.
+     * Stanze: codice anche con lettere (es. T12). "+ Nuova stanza" oppure "Incolla piu' stanze"
+       (una stanza per riga, anche copiata da Excel); i doppioni sullo stesso piano non si creano.
+       Per indicare anche le postazioni scrivi "T12; 3" oppure "T12 - 3" (vedi sotto).
+     * Postazioni: le numera l'app, tu non scegli nessun numero. "Aggiungi persona" mette la persona
+       alla prima postazione libera ("Postazione 1", poi 2, 3...). Se la togli, le altre si
+       rinumerano da sole. Una persona non puo' stare in due stanze: se la sposti l'app ti avvisa.
+     * Scheda stanza: chi siede dove con telefono, seriale PC e IMEI; scrivanie totali
+       (facoltativo: se lo scrivi vedi "occupate 2/3" e un avviso quando le persone sono di piu');
+       "Come arrivarci"; note; foto e panorami; stampanti del piano.
+     * Sulla pianta e negli elenchi la stanza si legge cosi': "T12 - 3" (codice e numero di persone).
+     * Pianta del piano: carichi la foto della pianta e segni le stanze toccando il punto sulla foto
+       (passa da sola alla stanza successiva); oppure la vista a SCHEMA (una casella per stanza), che
+       c'e' sempre. Le stampanti del piano compaiono sotto, con i bollini rosso/giallo.
+     * Dalla vista Edificio: tocca il nome del piano (a sinistra) > "Apri pianta".
+     * Scheda utente: "Dove si siede: T12 - Postazione 2" e "Apri la stanza".
+     * Elenco "Persone del piano" con telefono, seriale PC e IMEI.
+     * VIDEO: non ci sono (pesano troppo per il file di scambio). Restano solo sul telefono.
+     * Il file di scambio porta stanze, persone alle postazioni, foto e piante (telefono versione 6,
+       PC versione 7): i file vecchi si leggono lo stesso. Vedi "PIANI E STANZE" piu' sotto.
+ - BOLLINI E "GIORNI FA" SULLE STAMPANTI (Stampanti > Edificio, PC e telefono):
+     * Bollino ROSSO sulla stampante = c'e' un ticket del tecnico Konica ancora aperto (intervento
+       "Richiesto"); il numero nel bollino dice quanti. Sparisce quando lo segni "Eseguito".
+     * Bollino GIALLO "!" = la scorta toner di quel modello e' in esaurimento o finita (sotto la
+       soglia). Vale per tutte le stampanti dello stesso modello, perche' il magazzino e' per
+       modello. Sotto la stampante c'e' scritto anche quali colori ("scorta bassa: Nero (1)").
+     * Sotto ogni stampante, colore per colore: da quanti giorni e' stato cambiato (oggi, ieri,
+       "12 gg fa", "mai" se non c'e' nessun cambio registrato). Nella scheda della stampante
+       la frase intera: "Nero: cambiato 12 giorni fa (03/11/2026 10:00)".
+     * Sul telefono i bollini tengono conto anche dei cambi che registri li' dopo l'ultimo scambio.
+     * Nessun dato nuovo da mandare: i bollini si calcolano da cambi toner, interventi del tecnico
+       e scorta che ci sono gia'.
+ - DUPLICA INTERVENTO (PC e telefono): per un problema che si ripete non riscrivi tutto.
+     * PC: nel Registro scegli l'intervento e tocca "Duplica". Si apre "Nuovo intervento (copia)":
+       stesso utente e postazione, stesso ticket, stesso stato, stessi testi; data e ora sono
+       quelle di adesso. Cambi solo cio' che serve e tocchi "Salva la copia". "Annulla copia"
+       torna al modulo vuoto senza salvare niente.
+     * Telefono: Registro > tocca l'intervento > "Duplica intervento". Stessa cosa.
+     * Le FOTO non vengono copiate (restano all'intervento originale) e l'originale non cambia
+       mai. Controlla il numero del ticket: viene copiato, cambialo se la nuova richiesta ha un
+       ticket diverso.
+ - FIRME DEI VERBALI (PC e telefono):
+     * Firma col dito A TUTTO SCHERMO e in orizzontale. Se giri il telefono il riquadro prende
+       tutto lo schermo. Se l'iPhone ha il blocco rotazione attivo tocca "Ruota in orizzontale":
+       il riquadro si gira di 90 gradi (se e' dall'altra parte "Gira dall'altra parte", poi
+       "Torna in verticale"). La firma si salva sempre dritta e orizzontale.
+     * "Firmera' a mano (cartaceo)": per ogni posto firma c'e' la casella. Nel Word/PDF la riga
+       resta vuota (impaginato originale) e il verbale NON risulta incompleto; nell'elenco
+       compare "firma cartacea".
+     * IMMAGINE DELLA FIRMA, SOLO PER TE (il tecnico): carichi una foto o scansione della tua
+       firma, l'app toglie lo sfondo, ritaglia i margini e la mette nel tuo posto firma; puoi
+       ricordarla come "la mia firma". Per l'utente e per le altre persone NON esiste nessun
+       caricamento di immagine (ne' sul telefono ne' sul PC): firmano col dito o a mano.
+     * PC: in "Dati per i verbali..." scegli l'immagine della tua firma; nel modulo del verbale,
+       riquadro "Firme": nessuna / firma gia' presente / mia firma salvata / a mano. Nell'elenco
+       Verbali il pulsante "Firme..." cambia le firme di un verbale gia' fatto.
+     * Il file di scambio porta anche "cartaceo" (telefono versione 5, PC versione 6): i file
+       vecchi si leggono lo stesso.
+     Vedi "FIRME DEI VERBALI" piu' sotto.
+ - VERBALI COMPILATI DA SOLI (PC e telefono, tutti e quattro i verbali): gli utenti gia' inseriti si
+   scelgono dall'elenco (anche "Indicazioni ricevute da" nel censimento) e tutto il resto si
+   propone da solo, partendo da quello che hai scritto nei verbali precedenti e dalla scheda utente.
+   Vedi "VERBALI COMPILATI DA SOLI" piu' sotto.
+ - VERBALI SUL TELEFONO CON FIRMA COL DITO: nuova scheda "Verbali" nell'app iPhone. Compili il
+   verbale (con le foto), lo fai firmare sullo schermo con il dito, lo mandi al PC e li'
+   "Crea il Word..." mette le firme gia' dentro il documento.
+   Vedi "VERBALI SUL TELEFONO E FIRMA" piu' sotto.
+ - VERBALI WORD (programma del PC): nuova scheda "Verbali". Compili un modulo e il programma
+   crea il Word con il tuo modello (loghi e impaginazione identici). Quattro verbali:
+     * Trasferimento apparato informatico
+     * Consegna e presa in carico dispositivo
+     * Assegnazione materiale informatico
+     * Censimento materiale (la FOTO e' obbligatoria; negli altri tre e' facoltativa)
+   Le foto vengono messe in fondo, in una pagina "Allegato fotografico".
+   Se c'e' la firma (fatta sul telefono) compare sopra la riga della firma.
+   Vedi "VERBALI WORD" piu' sotto.
+ - Matricola aziendale accanto al nome dell'utente: nel modulo "Nuovo intervento", nell'elenco
+   utenti, nel registro, nei PDF/Excel e in "Copia dati utente". Scrivi la matricola e il nome
+   si compila da solo (e viceversa).
+ - Stato dell'intervento: Aperto / In attesa / Risolto. Nel riquadro "Da seguire" (in alto)
+   vedi quanti sono ancora da richiamare; toccalo per vederli. Nel registro c'e' il filtro per
+   stato e il tasto "Segna come risolto". I vecchi interventi diventano "Risolto".
+ - Stampanti > cambio toner: oltre ai 4 colori c'e' anche la VASCHETTA (recupero toner).
+ - Stampanti > "Interventi tecnico": ogni volta che apri un ticket e viene il tecnico Konica lo
+   registri per stampante (data richiesta, n. ticket, data in cui e' venuto, nome del tecnico,
+   problema, cosa ha fatto). Stato Richiesto / Eseguito. Storico per stampante, filtri, PDF/Excel.
+ - Stampanti > "Scorta toner": quanti toner/vaschette hai in magazzino. Ogni cambio registrato
+   scala di 1; sotto la soglia (di solito 1) compare l'avviso "da ordinare". Se togli un cambio
+   per errore, il pezzo torna in magazzino.
 
-PRIMA INSTALLAZIONE
-Carica tutti i file di questa cartella (compresa .github/workflows/build.yml) in un repository.
+1) AGGIORNARE IL PROGRAMMA DEL PC
+ - Nel repository: Add file > Upload files.
+ - Trascina helpdesk.py (sostituisce il vecchio), printer_images.py, verbali.py, verbali_modelli.py,
+   requirements.txt (sostituisce il vecchio: ora comprende numpy e opencv per la fotocamera) e,
+   NUOVO, codici.py (la lettura dei codici con la fotocamera).
+ - Cambia anche build.yml (serve per i verbali e per la fotocamera): su GitHub apri
+   .github/workflows/build.yml, tasto matita, cancella tutto e incolla il contenuto del build.yml
+   di questo zip, poi Commit. (Oppure trascina la cartella .github di questo zip.)
+ - Commit changes. Dopo 2-3 minuti, in Actions, scarica il nuovo .exe dagli Artifacts.
+ - NON modificare helpdesk.py a mano su GitHub.
+ - I dati gia' presenti si aggiornano da soli al primo avvio (non si perde nulla).
 
-DOVE SONO I DATI
-%APPDATA%\HelpDeskINAIL  (da programma: File > Apri la cartella dei dati).
-Backup: File > Salva una copia di backup.
+2) PUBBLICARE L'APP PER L'IPHONE (aggiornamento: si ripete a ogni versione)
+ - Nel repository: Add file > Upload files.
+ - Trascina l'INTERA cartella "docs" di questo zip (se non si carica la cartella, carica
+   i file che ci sono dentro e scrivi "docs/" davanti al nome quando GitHub lo chiede).
+   File nuovi rispetto a prima: verbali.js (scheda Verbali), stanze.js (Piani e stanze), toscana.js
+   (Mappa della Toscana), barcode.js e scan.js (lettura dei codici con la fotocamera).
+ - Commit changes.
+ - La prima volta: Settings > Pages > "Build and deployment": Source = "Deploy from a branch",
+   Branch = main, cartella = /docs > Save.
+ - Dopo 1-2 minuti l'app e' aggiornata. Sull'iPhone chiudi l'app e riaprila (se vedi ancora la
+   vecchia, riaprila una seconda volta con il telefono connesso). I dati del telefono restano.
+
+3) INSTALLARE SULL'IPHONE (solo la prima volta)
+ - Apri l'indirizzo con SAFARI (non con Chrome).
+ - Tasto Condividi > "Aggiungi alla schermata Home" > Aggiungi.
+ - Da quel momento si apre dall'icona INAIL, a tutto schermo. Funziona anche senza campo.
+
+4) SCAMBIO DATI
+ - Telefono > PC: app > Scambio > "Prepara file per il PC" e invialo al PC.
+   Nel programma: File > Importa dati dal telefono. Si puo' ripetere senza creare doppioni.
+   Arrivano interventi (con stato e matricola), utenti, cambi toner, interventi del tecnico e
+   VERBALI (con foto e firme).
+   Se un cambio toner fa scendere la scorta sotto soglia, il programma te lo dice.
+ - PC > telefono: programma > File > Esporta dati per il telefono (utenti e interventi,
+   con le foto se rispondi Si'), mandalo al telefono, app > Scambio > "Ricevi dal PC".
+   Arrivano anche edificio, stampanti, cambi toner, interventi del tecnico, scorta toner e i
+   verbali (anche quelli fatti sul PC, per farli firmare sul telefono).
+   Si puo' ripetere senza creare doppioni.
+ - La SCORTA TONER si imposta sul PC (Stampanti > Scorta toner > "Ho ricevuto toner..." oppure
+   "Modifica quantita' e avviso...").
+   Sul telefono la vedi (aggiornata ai cambi che registri li') dopo ogni "Ricevi dal PC".
+   Per averla giusta sul telefono, esporta dal PC dopo aver caricato i nuovi toner arrivati.
+ - Se sul PC elimini una stampante o un intervento, sul telefono resta finche' non lo togli a mano
+   (e viceversa). Le STANZE invece si eliminano su entrambi (e con loro le foto della stanza).
+ - Stanze e persone: vince sempre la modifica piu' recente. Importa SEMPRE il file del telefono prima
+   di cambiare le stanze sul PC, altrimenti una modifica fatta sul PC un'ora dopo puo' coprire i
+   segni sulla pianta appena fatti sul telefono.
+ - Ogni tanto fai un invio "Tutto": e' anche la copia di sicurezza dei dati del telefono.
+ - ATTENZIONE: i file contengono nomi, matricole e numeri di telefono dei colleghi. Per
+   scambiarli usa solo i canali ammessi da INAIL e non lasciarli in giro (cancellali dopo l'uso).
+
+VERBALI COMPILATI DA SOLI (stesso comportamento sul PC e sul telefono)
+ - Ogni campo di testo ha il suo elenco con quello che hai gia' scritto nei verbali precedenti
+   (tipologia, marca/modello, seriali, provenienza/destinazione, contatti, titolo, oggetto,
+   descrizione, citta', indirizzo, CAP, tecnico, marche e modelli dei censimenti...). Sul telefono
+   tocca il campo e scegli; se il campo ha gia' un valore, toccandolo vedi tutta la lista.
+ - Trasferimento e Presa in carico: scegli l'utente e si compilano tipologia, marca/modello e
+   seriale del suo apparato (dai verbali fatti prima o, se non ci sono, dalla sua scheda utente:
+   seriale PC e IMEI). Se la persona ha piu' apparati li trovi in "Apparato gia' noto" (PC) o nei
+   pulsanti sotto il nome (telefono). Puoi anche partire dal seriale: scrivi o scegli il seriale e
+   si compilano tipologia, modello e utente. Se cambi la tipologia (Notebook <-> Smartphone) il
+   seriale si cambia con quello giusto della persona.
+ - Assegnazione: scegli l'utente e si compilano matricola e titolo (quello usato l'altra volta),
+   e per Notebook/Smartphone viene proposto il seriale/IMEI della persona (devi comunque toccare
+   "Aggiungi": non viene aggiunto da solo). Modelli e accessori gia' usati si scelgono dall'elenco.
+ - Presa in carico: le voci del "materiale consegnato" usate in passato si aggiungono con un tocco.
+ - Censimento: oggetto -> descrizione; citta' -> indirizzo e CAP (se cambi citta' quelli della
+   citta' di prima vengono sostituiti; quello che scrivi tu non viene mai toccato); modello -> marca;
+   tecnico e "Indicazioni ricevute da" si scelgono dall'elenco.
+ - Quello che scrivi tu non viene mai sostituito da un valore proposto. I campi restano modificabili.
+ - Il telefono usa i verbali che ha: per averli tutti anche li', portali dal PC (File > Esporta dati
+   per il telefono) e importali con "Ricevi dal PC".
+
+VERBALI WORD
+ - Scheda "Verbali": 4 pulsanti per creare un verbale. Dalla scheda "Utenti" c'e' anche
+   "Crea verbale per questo utente..." (nome, matricola e telefono si compilano da soli) e
+   "Suoi verbali".
+ - Nel modulo: i campi in piu' o vuoti restano righe da compilare a mano nel Word (______).
+   Scegli l'utente in lista e si riempiono matricola/telefono; scrivendo "Notebook" propone il
+   seriale PC della scheda utente, scrivendo "Smartphone" propone l'IMEI.
+ - Censimento: scrivi marca e modello una volta, poi solo il codice (IMEI) e Invio per ogni
+   apparecchio; oppure "Incolla elenco..." (da Excel). Il programma avverte se un IMEI non e'
+   valido (15 cifre), e' ripetuto o manca. Tecnico e sede si ricordano per la volta dopo
+   ("Dati per i verbali...").
+ - Foto: "Aggiungi foto..." oppure "Incolla immagine" (screenshot copiato). Vengono ridotte e
+   messe in fondo al Word.
+   Le foto HEIC dell'iPhone possono non aprirsi: mandale come JPEG (iPhone > Impostazioni > Foto >
+   "Trasferisci su Mac o PC" = Automatico) oppure fai uno screenshot e incollalo.
+ - Dopo "Crea il Word..." scegli dove salvarlo (la cartella si ricorda) e il programma propone
+   di aprirlo. L'elenco della scheda Verbali tiene traccia di tutto: Apri il Word, Apri la
+   cartella, "Modifica e ricrea..." (correggi un dato e rifai il Word, stessa riga) e
+   "Togli dall'elenco" (NON cancella il Word).
+ - I MODELLI WORD sono in %APPDATA%\HelpDeskINAIL\Modelli verbali (scheda Verbali > "Modelli
+   Word" > Apri la cartella). Si possono modificare con Word: dove c'e' {{NOME}} il programma
+   scrive il dato. Non cancellare e non riscrivere a mano le parentesi {{ }}. Se rovini un
+   modello: "Modelli Word" > "Ripristina i modelli originali" (tiene una copia del tuo).
+   Segnaposto: {{NOME}} (vuoto = riga ______), {{?NOME}} (vuoto = la riga sparisce),
+   {{-NOME}} (vuoto = niente).
+ - Il backup (File > Salva una copia di backup) contiene anche dati e foto dei verbali, non i
+   file Word: quelli restano dove li hai salvati.
+   Segnaposto firma: {{FIRMA_TECNICO}} e {{FIRMA_UTENTE}} stanno davanti alla riga della firma e
+   mettono l'immagine della firma, se c'e'. Non toglierli, altrimenti la firma non compare
+   (il programma te lo segnala).
+ - I modelli incorporati non contengono nomi, matricole o IMEI: tutti i dati arrivano dal modulo.
+   Tieni privato il repository GitHub.
+
+VERBALI SUL TELEFONO E FIRMA
+ - Scheda "Verbali" dell'app: 4 pulsanti (Trasferimento, Consegna e presa in carico,
+   Assegnazione, Censimento). Dalla scheda "Utenti" c'e' anche "Nuovo verbale per questo
+   utente". I campi sono gli stessi del PC: scegli l'utente in lista e si compilano
+   matricola e contatti; scrivendo "Notebook" propone il seriale PC, "Smartphone" l'IMEI.
+ - Censimento: scrivi marca e modello una volta, poi solo il codice e Invio per ogni
+   apparecchio (oppure "Incolla un elenco..."). L'app avverte se un IMEI non e' valido, e'
+   ripetuto o manca. La foto e' obbligatoria solo nel censimento.
+ - Dopo "Salva verbale" si apre la pagina del verbale con il testo, come sara' nel Word.
+   Fai leggere, poi tocca "Firma qui": si apre un riquadro a tutto schermo, la persona firma
+   con il dito e tocca "Conferma la firma". Per la firma dell'utente passa il telefono a lui.
+ - Chi firma, per tipo di verbale:
+     Consegna e presa in carico: utente + tecnico
+     Trasferimento e Censimento: tecnico
+     Assegnazione: tecnico (e, se vuoi, l'utente "per ricevuta")
+ - La firma del tecnico si puo' salvare ("Ricorda come mia firma"): le volte dopo basta
+   "Usa la mia firma". La gestisci in Verbali > "I miei dati e la mia firma", dove metti anche
+   nome del tecnico, sede, indirizzo e CAP che si propongono nei censimenti.
+ - Se cambi i dati di un verbale gia' firmato l'app chiede se togliere le firme: vanno
+   rifatte sul testo nuovo.
+ - "Crea PDF" fa una copia del verbale con le firme, da tenere sul telefono o mandare subito.
+   NON e' il documento ufficiale: quello e' il Word creato sul PC.
+ - Per portare il verbale sul PC: app > Scambio > "Prepara file per il PC"; nel programma
+   File > Importa dati dal telefono. Nella scheda "Verbali" del PC la riga ha la colonna
+   Firme (esempio "utente + tecnico"); "Crea il Word..." mette le firme nel documento.
+   Se correggi qualcosa sul telefono e rimandi il file, la riga diventa "Da rifare".
+ - Dal PC al telefono: File > Esporta dati per il telefono porta anche i verbali fatti sul PC
+   (con le firme gia' presenti) e il nome del tecnico/sede: li fai firmare sul telefono e li
+   rimandi indietro.
+ - Se cancelli un verbale da una parte, dall'altra resta.
+ - Le firme compaiono nel Word solo dove il modello ha il posto per la firma (vedi sopra).
+   Se hai modificato i modelli e la firma non compare: "Modelli Word" > "Ripristina i modelli
+   originali".
+ - ATTENZIONE: i file con i verbali contengono nomi, matricole, IMEI, foto e firme. Stesse
+   regole dei dati dei colleghi: canali ammessi da INAIL e cancella i file dopo l'uso.
+
+FIRME DEI VERBALI
+ - Posto firma del TECNICO (tu): tre modi. (1) col dito, a tutto schermo e in orizzontale;
+   (2) a mano sul foglio stampato; (3) immagine della tua firma.
+ - Posto firma dell'UTENTE o di ogni altra persona: solo due modi. (1) col dito; (2) a mano sul
+   foglio. L'immagine non si puo' caricare: e' una regola voluta.
+ - Telefono: nella pagina del verbale ogni posto ha "Firma col dito", la casella "Firmera' a mano
+   (cartaceo)" e, solo nel tuo, "Carica immagine firma" (e "Usa la mia firma" se l'hai salvata).
+   Caricando l'immagine vedi l'anteprima (sfondo trasparente) prima di usarla. Serve una foto con
+   la firma scura su foglio chiaro, scattata bene; se l'app dice che non vede la firma o che ci
+   sono troppi segni, rifai la foto. Anche in Verbali > "I miei dati e la mia firma" puoi caricare
+   l'immagine della tua firma una volta per tutte.
+ - Cartaceo: se un posto e' "a mano" la sua riga resta vuota nel Word e nel PDF; se poi lo firmi
+   col dito o con l'immagine, "a mano" si toglie da solo. Un verbale con firme a mano risulta
+   completo ("Firma cartacea" oppure "Firmato + cartacea").
+ - PC: "Dati per i verbali..." > "La mia firma (immagine del tecnico)" > "Scegli l'immagine...".
+   L'immagine salvata resta nella cartella dei dati (e nel backup); ogni verbale ne tiene una
+   copia, quindi cambiarla dopo non tocca i verbali gia' fatti. Nel modulo, riquadro "Firme": per
+   il tecnico "Metti la mia firma salvata (immagine)"; per l'utente solo "Tieni la firma gia'
+   presente" (fatta sul telefono), "a mano" o nessuna.
+ - PC, scheda Verbali: "Firme..." cambia le firme di un verbale gia' nell'elenco (togli una firma,
+   segna "a mano", metti la mia firma) senza riaprire il modulo; poi "Crea il Word..." lo rifa'.
+ - Quando il PC manda i verbali al telefono, le firme tolte o segnate "a mano" sul PC valgono
+   anche sul telefono (file versione 6 in poi).
+ - NON provato qui: iPhone vero, rotazione vera dello schermo, Word vero, finestre vere del PC.
+   Provati con simulazioni: schermo verticale, orizzontale e riquadro ruotato nei due versi.
+
+PIANI E STANZE
+ - Dove: PC = Stampanti > "Piani e stanze". Telefono = Stampanti > "Piani e stanze" (in alto, dopo
+   Scorta). Scegli l'edificio e il piano: vedi stanze, persone, pianta e stampanti di quel piano.
+ - Creare le stanze: "Nuova stanza" (codice + scrivanie totali, facoltative) oppure "Incolla piu'
+   stanze" (una stanza per riga). Il codice puo' avere lettere e numeri (T12, A 3...), massimo 24
+   caratteri; T2 viene prima di T12. Lo stesso codice puo' esserci su piani diversi. Si puo'
+   rinominare dalla scheda della stanza.
+ - Incolla piu' stanze CON le postazioni (le "scrivanie totali"): una stanza per riga, con il numero
+   dopo un separatore chiaro. Vanno bene:
+       T12; 3        T12 - 3        T12: 3        T12 = 3        T12 (3)        T12 (3 postazioni)
+   e le DUE COLONNE copiate da Excel (codice, numero). Senza numero crei solo la stanza. Piu' codici
+   sulla stessa riga si separano con la virgola o il punto e virgola ("T1, T2, T3"). Attenzione:
+   un codice con lo spazio ("A 3") resta un codice solo; per dare le postazioni a "A 3" scrivi
+   "A 3; 2". Se la stanza c'e' gia' su quel piano non si duplica: se il numero di postazioni e'
+   diverso lo aggiorno (note, "come arrivarci" e persone sedute restano com'erano). Se due righe
+   hanno lo stesso codice vale l'ultima. Nella finestra del telefono vedi subito quante stanze
+   nascono, quante hanno le postazioni e quante vengono aggiornate; sul PC lo dice il messaggio
+   finale.
+ - Persone e postazioni: nella scheda della stanza "Aggiungi persona" (cerchi tra gli utenti; se non
+   c'e' puoi crearlo li', scrivendo nome e cognome). La postazione la sceglie l'app. "Togli" libera
+   la postazione e rinumera le altre. Per spostare una persona la aggiungi alla nuova stanza (l'app
+   ti avvisa e la toglie dalla vecchia). Eliminando una stanza le persone restano utenti, senza stanza.
+ - Scrivanie totali: facoltative (vuote di base). Se le scrivi compare "occupate 2/3" e, se le persone
+   superano le scrivanie, un avviso in rosso.
+ - Pianta: "Carica la foto della pianta" (una per piano, ridotta a 1600 px). Con "Segna le stanze sulla
+   foto" scegli una stanza e tocchi il punto sulla foto; il segno mostra "T12 - 3". Toccando un segno
+   (senza "Segna") si apre la stanza. Sul telefono ci sono i pulsanti per ingrandire la pianta.
+   Senza foto (o con "Schema") vedi una casella per ogni stanza. "Togli la foto" vale solo su quel
+   dispositivo e i segni restano salvati.
+ - Foto e panorami della stanza: sul telefono "Aggiungi foto" / "Aggiungi panorama" (per il panorama
+   usa la modalita' "Pano" della fotocamera); sul PC "Aggiungi foto..." / "Aggiungi panorama...".
+   Vengono ridotte (foto 1600 px, panorama 2600 px) per tenere leggero il file. Niente video.
+ - Scambio col PC: stanze, persone alle postazioni, piante e foto viaggiano nel file di scambio.
+   Vince la modifica piu' recente. Se la stessa stanza (stesso piano e codice) e' stata creata due
+   volte, resta una sola. Una stanza eliminata da una parte viene eliminata anche dall'altra.
+   Se rinomini un utente sul telefono, la sua postazione passa al nuovo nome.
+ - Le stampanti restano del PIANO: sotto la pianta compaiono con i loro bollini. In piu' puoi dire in
+   quale stanza stanno (campo "Stanza" in "Modifica stampante": scegli tra le stanze di quel piano,
+   oppure lascia vuoto, per esempio per una stampante in corridoio). Nella scheda della stanza
+   (PC) leggi "Stampanti in questa stanza".
+ - NON provato qui: iPhone vero, fotocamera, rotazione vera dello schermo, finestre vere del PC.
+   Provati con simulazioni: telefono (schermo 390 e 320 px), pianta sintetica, PC con schermo finto.
+
+PERSONE, UFFICIO E DOTAZIONE
+ - Scheda persona (PC: Utenti > doppio clic sulla persona; telefono: Utenti > tocca la persona, oppure
+   dentro la stanza tocca il nome): nome e cognome, UFFICIO, matricola, sede, telefono, seriale PC,
+   IMEI e DOTAZIONE.
+ - Dotazione = elenco libero di apparecchi per persona. Ogni riga ha tipo (Notebook, Smartphone,
+   Monitor, ... o quello che scrivi tu), modello e seriale/IMEI (sul PC c'e' anche il pulsante
+   "Fotocamera..."). Sul PC: scrivi i tre campi e premi "Aggiungi alla dotazione"; per cambiare una
+   riga la scegli nell'elenco, correggi e premi il pulsante (ora dice "Salva la riga"); "Togli la
+   riga scelta" la cancella. Se scrivi una riga e salvi la scheda senza premere il pulsante, la
+   riga viene aggiunta lo stesso. Sul telefono: "+ Aggiungi un apparecchio" e "Togli" su ogni riga.
+ - Si vedono nell'elenco utenti (colonne Ufficio e Dotazione), nella ricerca (trovi una persona
+   anche dall'ufficio o da un apparecchio) e nelle esportazioni Excel/PDF degli utenti.
+ - Nuova persona dalla stanza: PC = scheda della stanza > "Nuova persona..." (scheda completa; per
+   cambiare una persona gia' seduta: doppio clic sulla sua riga). La persona viene seduta nella
+   prima postazione libera. Telefono = scheda della stanza > "Aggiungi persona", scrivi il nome e
+   tocca "Crea ... come nuovo utente"; poi tocca il nome nella stanza per completare ufficio,
+   matricola e dotazione.
+ - Cambiare ufficio, nome o dotazione a chi hai gia': scheda persona > modifica > Salva. La
+   postazione resta com'e'.
+ - Scambio col telefono: ufficio e dotazione viaggiano nei file di scambio nei due sensi. Vince la
+   modifica piu' recente. Un file vecchio (senza ufficio e dotazione) non cancella quello che c'e'.
+
+IMPORTARE L'ELENCO DI STANZE E PERSONE (solo PC)
+ - Serve un file .json "elenco stanze e persone" (te lo preparo io dalle targhette delle porte).
+   Dentro: le stanze di ogni piano con le scrivanie, le persone con il loro ufficio e le stampanti
+   con la stanza.
+ - PC: File > "Importa elenco stanze e persone...", scegli il file, rispondi Si. Le stanze e le
+   persone vanno nell'edificio che hai scelto nella scheda Stampanti.
+ - Non duplica e non sovrascrive: una stanza che c'e' gia' su quel piano resta (si aggiornano solo
+   le scrivanie se differiscono), una persona che c'e' gia' non viene ricreata, se ha l'ufficio
+   vuoto lo riceve; se siede gia' in un'altra stanza la lascio dov'e' e te lo dico nel messaggio
+   finale. Si puo' ripetere senza danni.
+ - Alla fine un messaggio riassume: stanze nuove, persone nuove, persone sedute, uffici scritti,
+   stampanti nuove e quello che non e' stato importato.
+ - Sul telefono arriva tutto con il solito scambio: File > Esporta dati per il telefono, poi sul
+   telefono Scambio > Ricevi dal PC.
+ - Il file contiene nomi di persone: non pubblicarlo su GitHub e non lasciarlo in giro.
+
+LETTURA DEI CODICI CON LA FOTOCAMERA (PC E TELEFONO)
+ - Dove trovi il pulsante ("Fotocamera..." sul PC, macchina fotografica sul telefono): Nuovo
+   intervento (Seriale del PC, IMEI cellulare), scheda utente (Seriale PC, IMEI), Utenti > Cerca,
+   Verbali (Numero di serie del trasferimento e della presa in carico, codice della dotazione
+   nell'assegnazione, codice degli apparecchi nel censimento) e, solo sul PC, "Numero di serie" della
+   stampante. Per il resto e' lo stesso sul PC e sul telefono.
+ - Come si usa: tocchi il pulsante, inquadri il codice a barre e lo tieni fermo nel riquadro. Appena
+   lo legge (suono, e vibrazione dove il telefono la ha) il codice va nel campo e la schermata si
+   chiude. La prima volta Safari chiede il permesso della fotocamera: rispondi "Consenti". Se avevi
+   negato, si cambia nelle impostazioni di Safari (o dell'app sulla schermata Home).
+ - Se non parte: "Scatta una foto" (scatti una foto al codice o scegli una foto dalla libreria; il
+   codice puo' essere anche storto o girato) oppure "Scrivi a mano" (chiude e mette il cursore nel
+   campo). Se la fotocamera e' bloccata o non c'e', la schermata lo dice e restano questi due.
+ - Campo IMEI: accetta SOLO un IMEI valido (15 cifre che passano il controllo). Sulla scatola di un
+   telefono ci sono piu' codici: quelli che non sono un IMEI vengono scartati e l'app te lo dice.
+   Un campo "seriale" accetta qualunque codice di almeno 4 caratteri. Nella dotazione e nel
+   censimento il campo cerca un IMEI se l'oggetto e' uno smartphone / la colonna e' "IMEI", altrimenti
+   un seriale.
+ - Censimento (Verbali): "lettura a catena". La fotocamera resta accesa: ogni codice NUOVO viene
+   aggiunto all'elenco (marca e modello restano quelli gia' scritti) e il pulsante diventa
+   "Fine (3)". Lo stesso codice lasciato in vista non si aggiunge due volte.
+ - Trasferimento e presa in carico: se il seriale letto e' gia' in una scheda utente, tipologia e
+   utente (se ancora vuoto) si compilano da soli, come quando scrivi il seriale a mano.
+ - Utenti > Cerca: leggi il seriale o l'IMEI di un apparecchio e vedi a chi e' assegnato.
+ - Che codici legge: i codici a barre classici che si trovano su seriali, IMEI ed etichette
+   (Code 128 e Code 39). Il PC legge anche i QR code. Il telefono NO (solo se il browser ha un suo
+   lettore, nel campo Cerca di Utenti, quelli li legge). Dal QR il PC prende il numero di serie se
+   c'e' nel testo ("S/N: ...", "serial=..." o l'ultimo pezzo dell'indirizzo): e' un'euristica, se
+   il QR contiene solo un indirizzo senza seriale non scrive niente e te lo dice.
+ - Come e' fatto: su iPhone Safari tiene SPENTO il lettore di codici del browser, quindi l'app ha un
+   lettore suo (barcode.js, scritto per questa app, nessuna libreria esterna, funziona senza rete).
+   Dove il browser ha il suo lettore, l'app usa quello e, se non trova niente, prova anche il suo.
+   Servono https e il permesso della fotocamera: da GitHub Pages va bene.
+ - Consigli: luce buona, codice dritto e fermo, a 15-25 cm. Se e' piccolo, rovinato o su una
+   superficie curva, scatta una foto da vicino. Nei verbali la foto e' meglio del diretto per i
+   codici lunghi (IMEI): l'app prova piu' ingrandimenti.
+ - Quanto e' affidabile (provato con immagini di codici generate al computer e poi rovinate con
+   sfocatura, rumore, ombre, inclinazione fino a 45 gradi e rotazione): tutti i codici nitidi letti
+   (150 su 150), circa 9 su 10 con sfocatura e rumore medi, circa 6 su 10 con foto davvero brutte
+   (sulle stesse immagini brutte un lettore molto usato, zbar, ne legge circa 3 su 10).
+   Su 204 immagini SENZA codice (testo, strisce a caso, rumore, codici sbagliati) non ha letto
+   niente. In piu' un codice Code 128 ha il suo controllo interno e il campo IMEI controlla le cifre:
+   una lettura storta viene scartata, non scritta nel campo.
+ - NON provato qui: iPhone vero, fotocamera vera (provata solo una fotocamera simulata che mostra
+   immagini di codici), etichette vere dell'INAIL, luce vera, tremolio della mano. Se una etichetta
+   non si legge, scrivimi che tipo di codice e' (oppure una foto) e lo aggiungo.
+
+SUL PC: LA FINESTRA DELLA FOTOCAMERA
+ - Premi "Fotocamera..." accanto al campo: si apre una finestra con l'immagine della webcam e un
+   riquadro. Metti il codice nel riquadro, dritto e fermo. Appena lo legge il numero va nel campo e
+   la finestra si chiude. Nel censimento resta aperta e legge un codice dopo l'altro ("Fine (3)").
+ - "Altra fotocamera": se hai piu' webcam (o quella sbagliata) prova la successiva.
+ - "Scegli una foto...": scegli un file (foto fatta col telefono, scansione). "Incolla immagine":
+   usa l'immagine o il file che hai copiato (Win+Maiusc+S per uno screenshot, oppure copia una
+   foto). "Scrivi a mano": chiude e mette il cursore nel campo.
+ - Le webcam dei portatili spesso hanno il fuoco fisso e sono pensate per il viso, non per un
+   codice piccolo a 15 cm: se non lo legge, allontana un po' l'etichetta (30-40 cm) oppure fai una
+   foto col telefono e usa "Scegli una foto...". Luce buona, niente riflessi sull'etichetta.
+ - Il programma legge i codici con la libreria OpenCV (webcam e QR) e con un lettore di codici a
+   barre scritto per questa app (lo stesso dell'iPhone, provato su 80 immagini con gli stessi
+   risultati). Il .exe diventa piu' grande (circa +40/60 MB) e la PRIMA apertura della finestra
+   puo' metterci qualche secondo in piu'; l'avvio normale del programma non cambia. Se per un
+   problema le librerie non si installassero nella creazione del .exe, il .exe viene creato lo stesso
+   senza fotocamera e la finestra dice che non e' disponibile (restano foto e scrittura a mano).
+ - NON provato qui: una webcam vera, una finestra vera di Windows, il .exe costruito con OpenCV
+   (la creazione del .exe avviene su GitHub e non l'ho potuta eseguire). Provato con una webcam
+   simulata (video di codici), con finestre finte e con foto. Se dopo l'aggiornamento il programma
+   non parte o la finestra della fotocamera da' errore, dimmelo con il messaggio che compare.
+
+NUMERO DI SERIE DELLE STAMPANTI
+ - Dove si scrive: PC > Stampanti > Edificio e stampanti > scegli la stampante > "Modifica
+   stampante" > "Numero di serie" (accanto c'e' "Fotocamera..." per leggerlo dall'etichetta con la
+   webcam, con una foto o dagli appunti). Vale anche per una stampante nuova.
+ - Dove si vede: scheda della stampante sul PC ("Numero di serie: ...") e sul telefono ("N. di
+   serie: ..."). Sul telefono non si modifica: arriva dal PC con il file di scambio (File >
+   Esporta dati per il telefono, poi sul telefono Scambio > Ricevi dal PC).
+ - Se scrivi un numero di serie che e' gia' di un'altra stampante il programma ti avvisa e ti
+   chiede se salvare lo stesso (di solito e' un errore di lettura o di battitura).
+ - Le stampanti che hai gia' restano come erano, con il seriale vuoto. Un file del PC vecchio
+   (senza seriali) non cancella i seriali gia' arrivati sul telefono.
+ - Non ho aggiunto il seriale agli elenchi Excel/PDF dei cambi toner e degli interventi del tecnico:
+   se ti serve, dimmelo.
+
+STAMPANTE FUORI SERVIZIO
+ - PC: apri la stampante (clic sulla sua foto) > Modifica > spunta "Fuori servizio (stampante rotta)" >
+   Salva. Se la stampante e' nuova, la spunta c'e' gia' nella finestra "Nuova stampante".
+ - Nella scheda della stampante la prima riga diventa "FUORI SERVIZIO (stampante rotta)".
+ - Le stampanti che hai gia' restano in servizio; la spunta si mette una per una.
+ - Una stampante fuori servizio conta come le altre: i cambi toner e gli interventi del tecnico
+   restano registrati e i bollini (ticket aperti, scorta bassa) funzionano come prima.
+ - Telefono: File > Esporta dati per il telefono, poi sul telefono Scambio > Ricevi dal PC. Un file
+   mandato dal telefono al PC non cambia mai questo stato.
+
+CORREGGERE IL NOME DEL MODELLO
+ - La prima volta che apri il programma, se ci sono stampanti (o scorta toner) chiamate "bizhub C3351i"
+   o "bizhub C360i", il programma te lo chiede: rispondi Si per cambiarle in "bizhub C3350i" e "bizhub
+   C250i" (anche nella scorta toner: se il nome nuovo c'era gia' le quantita' si sommano). Chiede una
+   volta sola. Se rispondi No, nessun dato viene toccato.
+ - In qualsiasi momento: File > Correggi il nome di un modello stampante... (scegli il nome da
+   correggere, scrivi quello giusto, conferma). Vale per tutte le stampanti di quel modello.
+ - Se UNA sola stampante ha un modello diverso, cambialo dalla sua scheda: Modifica stampante > Modello.
+ - La foto sulla scheda dipende dal nome: se nel modello c'e' 3350, 3351 o 3320 compare la piccola,
+   altrimenti la grande.
+ - Sul telefono i nomi si aggiornano da soli con il file di scambio: File > Esporta dati per il
+   telefono, poi sul telefono Scambio > Ricevi dal PC. Le foto nuove arrivano con l'aggiornamento
+   dell'app (se vedi ancora le vecchie: chiudi l'app dal selettore e riaprila).
+
+DOVE SONO I DATI DEL PC
+%APPDATA%\HelpDeskINAIL (File > Apri la cartella dei dati). Backup: File > Salva una copia di backup.
+Prima di aggiornare conviene fare un backup.
+
+SULL'IPHONE (schede in basso)
+ - Nuovo: inserisce un intervento (foto, matricola, stato, "Copia dati utente" per incollare
+   nel ticket). In alto "Da seguire" = interventi ancora aperti o in attesa.
+ - Registro: filtri completi (utente/matricola, sede, ticket, stato, numero, date, testo) ed
+   esportazione PDF/Excel. Dal dettaglio: "Segna come risolto", "Modifica", "Duplica intervento".
+   In alto "Elenco" / "Mappa della Toscana" (le sedi sulla mappa con i numeri degli interventi).
+ - Utenti: elenco con matricola, schede, nuovo utente, esportazione dei dati scelti
+   (matricola, IMEI, seriale, ...).
+ - Stampanti: 5 sezioni
+     Edificio: palazzo per piani con bollini rosso/giallo e "giorni fa" per ogni colore; tocca
+               una stampante per registrare il cambio (toner o vaschetta)
+               e vedere/aggiungere gli interventi del tecnico;
+     Cambi toner: registro con filtri ed esportazione PDF/Excel;
+     Tecnico: interventi di manutenzione Konica per stampante, con filtri ed esportazione;
+     Scorta: toner e vaschette in magazzino con avviso "da ordinare";
+     Piani e stanze: stanze, persone alle postazioni, foto e panorami, pianta o schema del piano.
+ - Verbali: i quattro verbali con foto e firma col dito, elenco, PDF, invio al PC.
+ - Scambio: file da e verso il PC, copia di sicurezza.
