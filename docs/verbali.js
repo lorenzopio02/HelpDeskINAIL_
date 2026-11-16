@@ -100,7 +100,24 @@
   }
   const slotsOf = tipo => TIPI[tipo].firme;
   const needSigned = tipo => slotsOf(tipo).filter(s => s[2]).map(s => s[0]);
-  const isSigned = v => needSigned(v.tipo).every(k => v.firme && v.firme[k]);
+  /* un posto firma è a posto se c'è la firma (col dito o immagine del tecnico) oppure se si firma a mano sul foglio (cartaceo) */
+  const hasImg = (v, k) => !!(v.firme && v.firme[k]);
+  const isPaper = (v, k) => !hasImg(v, k) && !!(v.cartaceo && v.cartaceo[k]);
+  const slotDone = (v, k) => hasImg(v, k) || isPaper(v, k);
+  const isSigned = v => needSigned(v.tipo).every(k => slotDone(v, k));
+  const anyPaper = v => slotsOf(v.tipo).some(s => isPaper(v, s[0]));
+  /* testo di stato: Firmato / Firma cartacea (tutte a mano) / Firmato + cartacea (miste) / Da firmare */
+  function sigLabel(v) {
+    if (!isSigned(v)) return "Da firmare";
+    const req = needSigned(v.tipo), paper = req.filter(k => isPaper(v, k)).length;
+    if (!paper) return anyPaper(v) ? "✍ Firmato + cartacea" : "✍ Firmato";
+    return paper === req.length ? "✍ Firma cartacea" : "✍ Firmato + cartacea";
+  }
+  /* firma fatta o cambiata: tolgo l'eventuale «a mano» dello stesso posto */
+  function setFirma(cur, k, data) {
+    cur.firme = { ...(cur.firme || {}), [k]: data };
+    const c = { ...(cur.cartaceo || {}) }; delete c[k]; cur.cartaceo = c;
+  }
 
   /* dati puliti (come fa il PC quando riceve un verbale) */
   function cleanDati(d) {
@@ -285,70 +302,210 @@
       if (b.t === "list") return `<ul>${b.items.map(i => `<li>${esc(i)}</li>`).join("")}</ul>`;
       if (b.t === "table") return `<table class="dtb"><tr>${b.head.map(h => `<th>${esc(h)}</th>`).join("")}</tr>${b.rows.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</table>`;
       if (b.t === "sigs") return `<div class="dk" style="margin-top:12px"><b>${esc(b.left)}</b></div><div class="sg">${sl.map(([k, label, req]) => {
-        const img = v.firme && v.firme[k];
-        return `<div class="slot" data-k="${k}"><div class="sgl">${esc(label)}</div>${img ? `<img src="${img}" alt="firma">` : `<div class="sgn">${req ? "da firmare" : "facoltativa"}</div>`}
-          <button class="btn navy sm" type="button" data-sign="${k}">${img ? "Rifai la firma" : "✍ Firma qui"}</button>
-          ${k === "tecnico" && !img && myFirma ? `<button class="btn sm" type="button" data-mine="1">Usa la mia firma</button>` : ""}
+        const img = hasImg(v, k), paper = isPaper(v, k), mine = k === "tecnico";
+        /* il caricamento di un'immagine esiste SOLO nel posto del tecnico */
+        return `<div class="slot${paper ? " paper" : ""}" data-k="${k}"><div class="sgl">${esc(label)}</div>${img ? `<img src="${v.firme[k]}" alt="firma">` : paper ? `<div class="sgn pp">📄 Firma cartacea<br><small>firmerà a mano sul foglio</small></div>` : `<div class="sgn">${req ? "da firmare" : "facoltativa"}</div>`}
+          <button class="btn navy sm" type="button" data-sign="${k}">${img ? "Rifai la firma" : "✍ Firma col dito"}</button>
+          ${mine && !img && myFirma ? `<button class="btn sm" type="button" data-mine="1">Usa la mia firma</button>` : ""}
+          ${mine ? `<button class="btn sm" type="button" data-upload="${k}">🖼 Carica immagine firma</button>` : ""}
+          <label class="chk"><input type="checkbox" data-paper="${k}" ${paper ? "checked" : ""}> Firmerà a mano (cartaceo)</label>
           ${img ? `<button class="btn sm" type="button" data-unsign="${k}">Togli</button>` : ""}</div>`;
       }).join("")}</div>`;
       return "";
     }).join("");
   }
 
-  /* ---------- finestra della firma ---------- */
+  /* ---------- finestra della firma: a tutto schermo, in orizzontale ---------- */
+  /* Col telefono girato in orizzontale il riquadro prende tutto lo schermo. Se l'iPhone ha il blocco
+     rotazione, il pulsante «Ruota in orizzontale» ruota il riquadro di 90 gradi (la firma si salva
+     comunque dritta, come immagine orizzontale). L'inchiostro è tenuto come tratti, così non si
+     perde se lo schermo cambia misura. */
   function signPad(who, label) {
     return new Promise(resolve => {
       const ov = document.createElement("div");
       ov.className = "sigm";
-      ov.innerHTML = `<div class="sigc"><h3>${esc(label)}</h3>
-        <div class="hint" style="margin-top:0">${who === "utente" ? "Passa il telefono a chi deve firmare. " : ""}Firma con il dito dentro il riquadro.</div>
-        <div class="sigbox"><canvas></canvas><span class="sigline"></span><span class="sigx">✕</span></div>
-        ${who === "tecnico" ? `<label class="chk"><input type="checkbox" id="sgKeep" ${myFirma ? "" : "checked"}> Ricorda come mia firma (poi basta un tocco)</label>` : ""}
-        <div id="sgMsg"></div>
-        <div class="row"><div><button class="btn" type="button" id="sgClear">Cancella</button></div><div><button class="btn" type="button" id="sgCancel">Annulla</button></div></div>
-        <button class="btn green" type="button" id="sgOk">✔ Conferma la firma</button></div>`;
+      ov.innerHTML = `<div class="sigr"><div class="sigp"><div class="sigbox"><canvas></canvas><span class="sigline"></span><span class="sigx">✕</span></div></div>
+        <div class="sigs"><div class="sgt">${esc(label)}</div>
+          <div class="sgh">${who === "utente" ? "Passa il telefono a chi deve firmare. " : ""}Firma con il dito sulla riga.</div>
+          <div class="sgm2" id="sgMsg"></div>
+          <button class="btn green" type="button" id="sgOk">✔ Conferma</button>
+          <button class="btn" type="button" id="sgClear">Cancella</button>
+          <button class="btn" type="button" id="sgRot">↻ Ruota in orizzontale</button>
+          <button class="btn" type="button" id="sgCancel">Annulla</button>
+          ${who === "tecnico" ? `<label class="chk"><input type="checkbox" id="sgKeep" ${myFirma ? "" : "checked"}> Ricorda come mia firma</label>` : ""}
+        </div></div>`;
       document.body.appendChild(ov);
-      const c = ov.querySelector("canvas"), box = ov.querySelector(".sigbox"), g = c.getContext("2d");
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const r = box.getBoundingClientRect();
-      c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr);
-      g.scale(dpr, dpr); g.lineCap = "round"; g.lineJoin = "round"; g.strokeStyle = "#0b1f4b";
-      let drawing = false, last = null, mid = null, ink = 0, bb = null, pid = null;
-      const pos = e => { const q = c.getBoundingClientRect(); return { x: e.clientX - q.left, y: e.clientY - q.top }; };
-      const grow = (p, w) => { bb = bb ? { a: Math.min(bb.a, p.x - w), b: Math.min(bb.b, p.y - w), c: Math.max(bb.c, p.x + w), d: Math.max(bb.d, p.y + w) } : { a: p.x - w, b: p.y - w, c: p.x + w, d: p.y + w }; };
+      const wrap = ov.querySelector(".sigr"), box = ov.querySelector(".sigbox"), c = ov.querySelector("canvas"), g = c.getContext("2d");
+      const rotBtn = ov.querySelector("#sgRot"), msg = ov.querySelector("#sgMsg");
+      const dpr = Math.min(2, window.devicePixelRatio || 1), INK = "#0b1f4b";
+      let rot = 0, size = { w: 0, h: 0 }, strokes = [], cur = null, pid = null, ink = 0;
+
+      /* misura e rotazione del riquadro (rot: 0 dritto, 90 o -90 ruotato) */
+      function layout() {
+        const W = window.innerWidth, H = window.innerHeight;
+        wrap.style.width = (rot ? H : W) + "px"; wrap.style.height = (rot ? W : H) + "px";
+        wrap.style.transform = rot === 90 ? `translateX(${W}px) rotate(90deg)` : rot === -90 ? `translateY(${H}px) rotate(-90deg)` : "none";
+        const lw = rot ? H : W, lh = rot ? W : H;
+        wrap.classList.toggle("land", lw > lh * 1.15);
+        const natural = W > H * 1.15;                       // telefono già girato: il pulsante serve solo per tornare indietro
+        rotBtn.hidden = natural && rot === 0;
+        rotBtn.textContent = rot === 0 ? "↻ Ruota in orizzontale" : rot === 90 ? "⇄ Gira dall'altra parte" : "↺ Torna in verticale";
+        fit();
+      }
+      function fit() {
+        const bw = box.clientWidth, bh = box.clientHeight;
+        if (!bw || !bh) return;
+        if (size.w && strokes.length && (Math.abs(size.w - bw) > 1 || Math.abs(size.h - bh) > 1)) {
+          const k = Math.min(bw / size.w, bh / size.h), ox = (bw - size.w * k) / 2, oy = (bh - size.h * k) / 2;
+          for (const st of strokes) for (const p of st) { p.x = p.x * k + ox; p.y = p.y * k + oy; p.w *= k; }
+        }
+        size = { w: bw, h: bh };
+        c.width = Math.round(bw * dpr); c.height = Math.round(bh * dpr);
+        g.setTransform(dpr, 0, 0, dpr, 0, 0); g.lineCap = "round"; g.lineJoin = "round"; g.strokeStyle = INK; g.fillStyle = INK;
+        redraw();
+      }
+      const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      function seg(st, i) {                                  // tratto liscio fino al punto i
+        const a = st[i - 1], b = st[i], m0 = i >= 2 ? mid(st[i - 2], a) : a, m1 = mid(a, b);
+        g.lineWidth = b.w; g.beginPath(); g.moveTo(m0.x, m0.y); g.quadraticCurveTo(a.x, a.y, m1.x, m1.y); g.stroke();
+      }
+      function dot(p) { g.beginPath(); g.arc(p.x, p.y, p.w / 2, 0, 7); g.fill(); }
+      function tail(st) { if (st.length < 2) return; const a = st[st.length - 2], b = st[st.length - 1], m = mid(a, b); g.lineWidth = b.w; g.beginPath(); g.moveTo(m.x, m.y); g.lineTo(b.x, b.y); g.stroke(); }
+      function redraw() {
+        g.clearRect(0, 0, size.w, size.h);
+        for (const st of strokes) { dot(st[0]); for (let i = 1; i < st.length; i++) seg(st, i); tail(st); }
+      }
+      /* dal punto toccato sullo schermo al punto del riquadro (anche quando è ruotato) */
+      function pos(e) {
+        const q = c.getBoundingClientRect();
+        if (!rot) return { x: e.clientX - q.left, y: e.clientY - q.top };
+        const cx = q.left + q.width / 2, cy = q.top + q.height / 2;
+        return rot === 90 ? { x: size.w / 2 + (e.clientY - cy), y: size.h / 2 + (cx - e.clientX) }
+                          : { x: size.w / 2 + (cy - e.clientY), y: size.h / 2 + (e.clientX - cx) };
+      }
       const width = e => e.pointerType === "pen" && e.pressure ? 1.6 + e.pressure * 2.2 : 2.7;
       c.addEventListener("pointerdown", e => {
-        e.preventDefault(); drawing = true; pid = e.pointerId; { const mg = ov.querySelector("#sgMsg"); if (mg) mg.innerHTML = ""; } try { c.setPointerCapture(pid); } catch (x) { /* niente */ }
-        last = pos(e); mid = last; g.lineWidth = width(e);
-        g.beginPath(); g.arc(last.x, last.y, g.lineWidth / 2, 0, 7); g.fillStyle = "#0b1f4b"; g.fill(); grow(last, 3); ink += 2;
+        e.preventDefault(); pid = e.pointerId; msg.innerHTML = "";
+        try { c.setPointerCapture(pid); } catch (x) { /* niente */ }
+        const p = pos(e); p.w = width(e); cur = [p]; strokes.push(cur); dot(p); ink += 2;
       });
       c.addEventListener("pointermove", e => {
-        if (!drawing || e.pointerId !== pid) return;
+        if (!cur || e.pointerId !== pid) return;
         e.preventDefault();
         const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
         for (const ev of (evs.length ? evs : [e])) {
-          const p = pos(ev), m = { x: (last.x + p.x) / 2, y: (last.y + p.y) / 2 };
-          g.lineWidth = width(ev);
-          g.beginPath(); g.moveTo(mid.x, mid.y); g.quadraticCurveTo(last.x, last.y, m.x, m.y); g.stroke();
-          ink += Math.hypot(p.x - last.x, p.y - last.y); grow(p, 3);
-          last = p; mid = m;
+          const p = pos(ev); p.w = width(ev); const l = cur[cur.length - 1];
+          cur.push(p); seg(cur, cur.length - 1); ink += Math.hypot(p.x - l.x, p.y - l.y);
         }
       });
-      const end = e => { if (!drawing || (e && e.pointerId !== pid)) return; drawing = false; try { c.releasePointerCapture(pid); } catch (x) { /* niente */ } g.beginPath(); g.moveTo(mid.x, mid.y); g.lineTo(last.x, last.y); g.stroke(); };
+      const end = e => { if (!cur || (e && e.pointerId !== pid)) return; tail(cur); cur = null; try { c.releasePointerCapture(pid); } catch (x) { /* niente */ } };
       c.addEventListener("pointerup", end); c.addEventListener("pointercancel", end); c.addEventListener("pointerleave", end);
       ["touchstart", "touchmove"].forEach(n => c.addEventListener(n, e => e.preventDefault(), { passive: false }));
-      const done = v => { ov.remove(); resolve(v); };
-      ov.querySelector("#sgClear").onclick = () => { g.clearRect(0, 0, c.width / dpr, c.height / dpr); ink = 0; bb = null; $("sgMsg").innerHTML = ""; };
+
+      const onSize = () => layout();
+      window.addEventListener("resize", onSize); window.addEventListener("orientationchange", onSize);
+      try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock("landscape").catch(() => {}); } catch (x) { /* iPhone: non si può, c'è il pulsante */ }
+      const done = v => {
+        window.removeEventListener("resize", onSize); window.removeEventListener("orientationchange", onSize);
+        try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (x) { /* niente */ }
+        ov.remove(); resolve(v);
+      };
+      rotBtn.onclick = () => { rot = rot === 0 ? 90 : rot === 90 ? -90 : 0; layout(); };
+      ov.querySelector("#sgClear").onclick = () => { strokes = []; cur = null; ink = 0; msg.innerHTML = ""; redraw(); };
       ov.querySelector("#sgCancel").onclick = () => done(null);
       ov.querySelector("#sgOk").onclick = () => {
-        if (!bb || ink < 45) return show(ov.querySelector("#sgMsg"), "La firma è troppo breve: firma dentro il riquadro.", true);
-        const m = 6, sx = Math.max(0, Math.floor((bb.a - m) * dpr)), sy = Math.max(0, Math.floor((bb.b - m) * dpr));
-        const sw = Math.min(c.width - sx, Math.ceil((bb.c - bb.a + 2 * m) * dpr)), sh = Math.min(c.height - sy, Math.ceil((bb.d - bb.b + 2 * m) * dpr));
+        const pts = strokes.flat();
+        if (!pts.length || ink < 45) return show(msg, "La firma è troppo breve: firma dentro il riquadro.", true);
+        let a = 1e9, b2 = 1e9, c2 = -1e9, d = -1e9;
+        for (const p of pts) { const w = p.w / 2 + 1; a = Math.min(a, p.x - w); b2 = Math.min(b2, p.y - w); c2 = Math.max(c2, p.x + w); d = Math.max(d, p.y + w); }
+        const m = 6, sx = Math.max(0, Math.floor((a - m) * dpr)), sy = Math.max(0, Math.floor((b2 - m) * dpr));
+        const sw = Math.min(c.width - sx, Math.ceil((c2 - a + 2 * m) * dpr)), sh = Math.min(c.height - sy, Math.ceil((d - b2 + 2 * m) * dpr));
         const o = document.createElement("canvas"); o.width = Math.max(1, sw); o.height = Math.max(1, sh);
         o.getContext("2d").drawImage(c, sx, sy, sw, sh, 0, 0, sw, sh);
         const keep = who === "tecnico" && ov.querySelector("#sgKeep") && ov.querySelector("#sgKeep").checked;
         done({ data: o.toDataURL("image/png"), keep });
       };
+      layout();
+    });
+  }
+
+  /* ---------- immagine della firma (SOLO per il tecnico) ---------- */
+  /* Da una foto o scansione della firma su foglio chiaro: toglie il fondo (anche con ombre), ritaglia
+     i margini e ridimensiona. Restituisce l'immagine PNG con sfondo trasparente. */
+  async function imgToSignature(file) {
+    const url = URL.createObjectURL(file);
+    let img;
+    try {
+      img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error("Non riesco ad aprire questa immagine: scegli una foto o un file JPG o PNG.")); i.src = url; });
+    } finally { URL.revokeObjectURL(url); }
+    const nw = img.naturalWidth, nh = img.naturalHeight;
+    if (!nw || !nh) throw new Error("L'immagine è vuota.");
+    const sc = Math.min(1, 1400 / Math.max(nw, nh)), w = Math.max(1, Math.round(nw * sc)), h = Math.max(1, Math.round(nh * sc));
+    const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+    const cx = cv.getContext("2d", { willReadFrequently: true });
+    cx.fillStyle = "#fff"; cx.fillRect(0, 0, w, h); cx.drawImage(img, 0, 0, w, h);
+    const id = cx.getImageData(0, 0, w, h), px = id.data, n = w * h, lum = new Uint8Array(n);
+    for (let i = 0, j = 0; i < n; i++, j += 4) lum[i] = (px[j] * 299 + px[j + 1] * 587 + px[j + 2] * 114) / 1000;
+    /* luminosità del foglio in ogni zona (il massimo dei blocchi vicini): così un'ombra non diventa "inchiostro" */
+    const bs = Math.max(12, Math.round(Math.max(w, h) / 48)), gw = Math.ceil(w / bs), gh = Math.ceil(h / bs);
+    const bm = new Uint8Array(gw * gh);
+    for (let y = 0, i = 0; y < h; y++) for (let x = 0; x < w; x++, i++) { const k = ((y / bs) | 0) * gw + ((x / bs) | 0); if (lum[i] > bm[k]) bm[k] = lum[i]; }
+    const bd = new Uint8Array(gw * gh);
+    for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) {
+      let m = 0;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { const yy = gy + dy, xx = gx + dx; if (yy >= 0 && yy < gh && xx >= 0 && xx < gw && bm[yy * gw + xx] > m) m = bm[yy * gw + xx]; }
+      bd[gy * gw + gx] = m;
+    }
+    const rows = new Uint32Array(h), cols = new Uint32Array(w);
+    let inkPx = 0;
+    for (let y = 0, i = 0; y < h; y++) for (let x = 0; x < w; x++, i++) {
+      const d = bd[((y / bs) | 0) * gw + ((x / bs) | 0)] - lum[i], a = d <= 24 ? 0 : d >= 90 ? 255 : Math.round((d - 24) * 255 / 66), j = i * 4;
+      px[j] = 11; px[j + 1] = 31; px[j + 2] = 75; px[j + 3] = a;
+      if (a > 40) { inkPx++; rows[y]++; cols[x]++; }
+    }
+    if (inkPx < 30) throw new Error("Non vedo nessuna firma: usa una foto con la firma scura su un foglio chiaro.");
+    if (inkPx > n * 0.45) throw new Error("L'immagine ha troppi segni scuri: usa una foto con la sola firma su un foglio chiaro, senza altro intorno.");
+    let x0 = 0, x1 = w - 1, y0 = 0, y1 = h - 1;
+    while (x0 < w - 1 && cols[x0] < 2) x0++; while (x1 > x0 && cols[x1] < 2) x1--;
+    while (y0 < h - 1 && rows[y0] < 2) y0++; while (y1 > y0 && rows[y1] < 2) y1--;
+    cx.putImageData(id, 0, 0);
+    const m = 6; x0 = Math.max(0, x0 - m); y0 = Math.max(0, y0 - m); x1 = Math.min(w - 1, x1 + m); y1 = Math.min(h - 1, y1 + m);
+    const cw = x1 - x0 + 1, ch = y1 - y0 + 1, k = Math.min(1, 900 / Math.max(cw, ch));
+    const out = document.createElement("canvas"); out.width = Math.max(1, Math.round(cw * k)); out.height = Math.max(1, Math.round(ch * k));
+    out.getContext("2d").drawImage(cv, x0, y0, cw, ch, 0, 0, out.width, out.height);
+    return { data: out.toDataURL("image/png"), w: out.width, h: out.height };
+  }
+  /* finestra per caricare l'immagine della firma. who deve essere "tecnico": per ogni altra persona NON esiste. */
+  function sigUpload(who, opts) {
+    if (who !== "tecnico") return Promise.resolve(null);
+    opts = opts || {};
+    return new Promise(resolve => {
+      const ov = document.createElement("div");
+      ov.className = "sigm up";
+      ov.innerHTML = `<div class="sigc"><h3>Immagine della mia firma</h3>
+        <div class="hint" style="margin-top:0">Scegli una foto (o un file) della tua firma scritta scura su un foglio chiaro. Ritaglio io i margini e tolgo lo sfondo.</div>
+        <label class="btn-like" for="upFile" style="display:block;background:var(--navy);color:#fff;text-align:center;border-radius:10px;padding:13px 16px;font-weight:700;margin:8px 0">🖼 Scegli foto o file…</label>
+        <input type="file" id="upFile" accept="image/*" style="position:absolute;left:-9999px;width:1px;height:1px">
+        <div id="upMsg"></div><div id="upPrev"></div>
+        ${opts.forceKeep ? "" : `<label class="chk"><input type="checkbox" id="upKeep" ${myFirma ? "" : "checked"}> Ricorda come mia firma (poi basta un tocco)</label>`}
+        <button class="btn green" type="button" id="upOk" disabled>✔ Usa questa firma</button>
+        <button class="btn" type="button" id="upCancel">Annulla</button></div>`;
+      document.body.appendChild(ov);
+      let result = null;
+      const inp = ov.querySelector("#upFile"), okb = ov.querySelector("#upOk");
+      inp.onchange = async () => {
+        const f = inp.files && inp.files[0]; inp.value = ""; if (!f) return;
+        result = null; okb.disabled = true; ov.querySelector("#upPrev").innerHTML = "";
+        show(ov.querySelector("#upMsg"), "Preparo la firma…");
+        try {
+          result = await imgToSignature(f);
+          show(ov.querySelector("#upMsg"), "");
+          ov.querySelector("#upPrev").innerHTML = `<div class="upprev"><img src="${result.data}" alt="anteprima firma"></div><div class="hint">Controlla che la firma sia leggibile. Se no, scegli un'altra foto.</div>`;
+          okb.disabled = false;
+        } catch (err) { show(ov.querySelector("#upMsg"), err.message, true); }
+      };
+      ov.querySelector("#upCancel").onclick = () => { ov.remove(); resolve(null); };
+      okb.onclick = () => { if (!result) return; const k = ov.querySelector("#upKeep"); const keep = opts.forceKeep || !!(k && k.checked); ov.remove(); resolve({ data: result.data, keep }); };
     });
   }
 
@@ -384,7 +541,7 @@
       return `<div class="card" data-u="${esc(v.uid)}"><h3>${esc(s || TIPI[v.tipo].titolo)}</h3>
         <div class="meta">${esc(TIPI[v.tipo].titolo)} · ${esc(fmtD(v.dati.data))}</div>
         ${dt ? `<div>${esc(dt)}</div>` : ""}
-        <div style="margin-top:5px"><span class="tag st-${signed ? "Risolto" : "Aperto"}">${signed ? "✍ Firmato" : "Da firmare"}</span>${n ? `<span class="tag">📷 ${n}</span>` : ""}${isNewV(v, last) ? `<span class="tag st-In-attesa">Da inviare al PC</span>` : `<span class="tag">Già nel PC</span>`}</div></div>`;
+        <div style="margin-top:5px"><span class="tag st-${signed ? "Risolto" : "Aperto"}">${esc(sigLabel(v))}</span>${n ? `<span class="tag">📷 ${n}</span>` : ""}${isNewV(v, last) ? `<span class="tag st-In-attesa">Da inviare al PC</span>` : `<span class="tag">Già nel PC</span>`}</div></div>`;
     }).join("") || `<div class="hint">Nessun verbale${cache.length ? " con questi filtri" : " ancora: usa uno dei quattro pulsanti qui sopra"}.</div>`;
     $("vList").querySelectorAll(".card").forEach(c => c.onclick = () => showVer(c.dataset.u));
     renderSet();
@@ -403,6 +560,10 @@
   SET_KEYS.forEach(k => $("vs_" + k).addEventListener("change", async () => { settings[k] = $("vs_" + k).value.trim(); await saveSettings(); }));
   $("vsSign").onclick = async () => {
     const r = await signPad("tecnico", "La mia firma (tecnico)");
+    if (r) { myFirma = r.data; await setMeta("firmaTecnico", myFirma); renderSet(); }
+  };
+  $("vsUp").onclick = async () => {
+    const r = await sigUpload("tecnico", { forceKeep: true });
     if (r) { myFirma = r.data; await setMeta("firmaTecnico", myFirma); renderSet(); }
   };
   $("vsDel").onclick = async () => { if (confirm("Togliere la firma salvata dal telefono?")) { myFirma = ""; await setMeta("firmaTecnico", ""); renderSet(); } };
@@ -443,17 +604,17 @@
     const T = (k, label, hint, rows) => `<label for="v_${k}">${label}</label><textarea id="v_${k}" style="min-height:${rows || 70}px">${esc(Array.isArray(d[k]) ? d[k].join("\n") : (d[k] || ""))}</textarea>${hint ? `<div class="hint">${hint}</div>` : ""}`;
     const motivi = opts => `<label>Motivazione</label>` + opts.map((o, i) => `<label class="chk"><input type="checkbox" data-m="${i}" ${(d.motivi || []).includes(o) ? "checked" : ""}> ${esc(o)}</label>`).join("") + L("altro", "Altro (motivo)", { hint: "Se lo scrivi, la casella «Altro» viene spuntata." });
     let body = "";
-    if (tipo === "trasferimento") body = L("tipologia", "Tipologia *", { attrs: 'autocapitalize="sentences"' }) + `<div class="row"><div>${L("marca_modello", "Marca / Modello")}</div><div>${L("seriale", "Numero di serie", { attrs: 'autocapitalize="characters"' })}</div></div>` +
+    if (tipo === "trasferimento") body = L("tipologia", "Tipologia *", { attrs: 'autocapitalize="sentences"' }) + `<div class="row"><div>${L("marca_modello", "Marca / Modello")}</div><div>${L("seriale", "Numero di serie", { attrs: 'autocapitalize="characters" data-scan="serial"' })}</div></div>` +
       L("provenienza", "Provenienza (struttura)") + L("destinazione", "Destinazione (struttura)") + L("assegnatario", "Assegnatario", { hint: "Scegli un utente in lista e compilo i suoi dati." }) + L("contatti", "Contatti", { attrs: 'inputmode="tel"' }) +
       motivi(MOTIVI.trasferimento) + T("note", "Note", "", 60) + `<label for="v_data_sped">Data spedizione</label><input id="v_data_sped" type="date" value="${esc(d.data_sped || "")}"><div class="hint">Se la lasci vuota uso la data del verbale.</div>`;
-    else if (tipo === "presa_in_carico") body = L("tipologia", "Tipologia dispositivo *") + L("marca_modello", "Marca e modello") + L("seriale", "Numero seriale", { attrs: 'autocapitalize="characters"' }) +
+    else if (tipo === "presa_in_carico") body = L("tipologia", "Tipologia dispositivo *") + L("marca_modello", "Marca e modello") + L("seriale", "Numero seriale", { attrs: 'autocapitalize="characters" data-scan="serial"' }) +
       L("utente", "Utente assegnatario *", { hint: "Scegli un utente in lista e compilo i suoi dati." }) + `<div class="row"><div>${L("inc", "N° INC", { attrs: 'autocapitalize="characters"' })}</div><div>${L("ric", "N° RIC", { attrs: 'autocapitalize="characters"' })}</div></div>` +
       T("materiale", "Elenco materiale consegnato", "Una voce per riga (esempio: caricabatterie, cover).", 80) + motivi(MOTIVI.presa_in_carico);
     else if (tipo === "assegnazione") body = L("titolo", "Titolo", { hint: "Facoltativo: scrive «al dott.», «all'avv.», «alla dott.ssa»…" }) + L("utente", "Utente *") + L("matricola", "Matricola", { attrs: 'autocapitalize="characters"' }) +
       `<div class="card vbox"><h3>Dotazione assegnata *</h3><div id="v_dList"></div>
         <label for="v_dTipo">Oggetto</label><input id="v_dTipo" autocomplete="off" value="${esc(TIPI_DOT[0])}">
         <label for="v_dModello">Modello</label><input id="v_dModello" autocomplete="off" spellcheck="false">
-        <label for="v_dCodice" id="v_dCodLab">S/N o IMEI</label><input id="v_dCodice" autocomplete="off" autocapitalize="characters" spellcheck="false">
+        <label for="v_dCodice" id="v_dCodLab">S/N o IMEI</label><input id="v_dCodice" autocomplete="off" autocapitalize="characters" spellcheck="false" data-scan="serial" data-scan-imei-field="v_dTipo" data-scan-imei-re="smartphone|cellulare|telefono">
         <div id="v_dSim" class="hidden"><div class="row"><div><label for="v_dIccid">ICCID</label><input id="v_dIccid" inputmode="numeric" autocomplete="off"></div><div><label for="v_dNumero">Numero</label><input id="v_dNumero" inputmode="tel" autocomplete="off"></div></div></div>
         <button class="btn navy" type="button" id="v_dAdd">＋ Aggiungi alla dotazione</button>
         <div class="hint">Se non scrivi il codice resta una riga ______ da compilare a mano nel Word.</div></div>` + T("accessori", "Accessori inclusi", "Una voce per riga (esempio: zaino porta notebook).", 70);
@@ -462,7 +623,7 @@
       L("collega", "Indicazioni ricevute da", { hint: "Facoltativo: se lo lasci vuoto la frase sulla dismissione non compare." }) + L("col_codice", "Titolo colonna codice") +
       `<div class="card vbox"><h3>Apparecchi censiti <span id="v_nApp" class="meta"></span></h3><div id="v_aList"></div>
         <div class="row"><div><label for="v_aMarca">Marca</label><input id="v_aMarca" autocomplete="off" spellcheck="false"></div><div><label for="v_aModello">Modello</label><input id="v_aModello" autocomplete="off" spellcheck="false"></div></div>
-        <label for="v_aCodice" id="v_aCodLab">Codice</label><input id="v_aCodice" autocomplete="off" autocorrect="off" spellcheck="false" autocapitalize="characters" enterkeyhint="done">
+        <label for="v_aCodice" id="v_aCodLab">Codice</label><input id="v_aCodice" autocomplete="off" autocorrect="off" spellcheck="false" autocapitalize="characters" enterkeyhint="done" data-scan="serial" data-scan-multi="1" data-scan-imei-field="v_col_codice" data-scan-imei-re="^imei$">
         <button class="btn navy" type="button" id="v_aAdd">＋ Aggiungi apparecchio</button>
         <button class="btn" type="button" id="v_aPasteBtn">Incolla un elenco…</button>
         <div id="v_aPasteBox" class="hidden"><textarea id="v_aPaste" placeholder="Una riga per apparecchio. Da Excel: marca, modello, codice. Oppure solo i codici, uno per riga." style="min-height:110px"></textarea><button class="btn navy" type="button" id="v_aPasteOk">Aggiungi le righe</button></div>
@@ -720,7 +881,7 @@
     let firme = old ? { ...(old.firme || {}) } : {};
     if (old && Object.keys(firme).length && (!sameDati(old.dati, d) || (old.foto || []).length !== S.photos.length) &&
         confirm("Questo verbale è già firmato e hai cambiato dei dati.\n\nOK = tolgo le firme (da rifare sul testo nuovo)\nAnnulla = tengo le firme")) firme = {};
-    const rec = { uid: S.uid || uuid(), tipo: S.tipo, dati: d, foto: S.photos, firme, creato: old ? old.creato : now, modificato: now };
+    const rec = { uid: S.uid || uuid(), tipo: S.tipo, dati: d, foto: S.photos, firme, cartaceo: old ? { ...(old.cartaceo || {}) } : {}, creato: old ? old.creato : now, modificato: now };
     await put("verbali", rec);
     if (S.tipo === "censimento") { SET_KEYS.forEach(k => { if (d[k]) settings[k] = d[k]; }); await saveSettings(); }
     closeModal(); await render(); showVer(rec.uid, true);
@@ -732,7 +893,7 @@
     await loadSettings();
     const m = $("modal"), top = m.scrollTop, last = await getMeta("lastSent");
     m.innerHTML = `<div class="card"><h3>${esc(TIPI[v.tipo].titolo)}</h3>
-      <div class="meta">${isSigned(v) ? "✍ Firmato" : "Da firmare"} · ${isNewV(v, last) ? "da inviare al PC" : "già nel PC"}</div>
+      <div class="meta">${esc(sigLabel(v))} · ${isNewV(v, last) ? "da inviare al PC" : "già nel PC"}</div>
       ${justSaved ? `<div class="msg">Verbale salvato. Fai firmare qui sotto.</div>` : ""}
       <div class="dc">${docHtml(v)}</div>
       ${(v.foto || []).length ? `<label>Foto (${v.foto.length})</label><div class="thumbs">${v.foto.map(f => `<div><img src="${f.data}" alt=""></div>`).join("")}</div>` : ""}
@@ -758,16 +919,31 @@
       const k = b.dataset.sign, r = await signPad(k, slotLabel(k));
       if (!r) return;
       if (r.keep) { myFirma = r.data; await setMeta("firmaTecnico", myFirma); }
-      store(cur => { cur.firme = { ...(cur.firme || {}), [k]: r.data }; });
+      store(cur => setFirma(cur, k, r.data));
     });
-    m.querySelectorAll("[data-mine]").forEach(b => b.onclick = () => store(cur => { cur.firme = { ...(cur.firme || {}), tecnico: myFirma }; }));
+    m.querySelectorAll("[data-mine]").forEach(b => b.onclick = () => store(cur => setFirma(cur, "tecnico", myFirma)));
+    m.querySelectorAll("[data-upload]").forEach(b => b.onclick = async () => {
+      const k = b.dataset.upload;
+      if (k !== "tecnico") return;                      // l'immagine della firma è solo del tecnico
+      const r = await sigUpload(k);
+      if (!r) return;
+      if (r.keep) { myFirma = r.data; await setMeta("firmaTecnico", myFirma); }
+      store(cur => setFirma(cur, k, r.data));
+    });
+    m.querySelectorAll("[data-paper]").forEach(b => b.onchange = () => {
+      const k = b.dataset.paper;
+      if (b.checked) {
+        if (hasImg(v, k) && !confirm("C'è già una firma. Passo a «firma a mano sul foglio» e la tolgo?")) { b.checked = false; return; }
+        store(cur => { const f = { ...(cur.firme || {}) }; delete f[k]; cur.firme = f; cur.cartaceo = { ...(cur.cartaceo || {}), [k]: true }; });
+      } else store(cur => { const c = { ...(cur.cartaceo || {}) }; delete c[k]; cur.cartaceo = c; });
+    });
     m.querySelectorAll("[data-unsign]").forEach(b => b.onclick = () => store(cur => { const f = { ...(cur.firme || {}) }; delete f[b.dataset.unsign]; cur.firme = f; }));
   }
 
   /* ---------- scambio con il PC ---------- */
   async function exportItems(mode, last) {
     const all = await getAll("verbali");
-    return (mode === "all" ? all : all.filter(v => isNewV(v, last))).map(v => ({ uid: v.uid, tipo: v.tipo, dati: v.dati, foto: (v.foto || []).map(f => ({ nome: f.nome, data: f.data })), firme: v.firme || {}, creato: v.creato, modificato: v.modificato }));
+    return (mode === "all" ? all : all.filter(v => isNewV(v, last))).map(v => ({ uid: v.uid, tipo: v.tipo, dati: v.dati, foto: (v.foto || []).map(f => ({ nome: f.nome, data: f.data })), firme: v.firme || {}, cartaceo: v.cartaceo || {}, creato: v.creato, modificato: v.modificato }));
   }
   async function countNew(last) { return (await getAll("verbali")).filter(v => isNewV(v, last)).length; }
   async function merge(data, fromPc) {
@@ -777,9 +953,16 @@
       const uid = String(it.uid), cur = await getKey("verbali", uid), mod = str(it.modificato);
       if (cur && !(mod > (cur.modificato || ""))) { p++; continue; }
       const foto = (it.foto || []).filter(f => f && typeof f.data === "string" && f.data.startsWith("data:")).map(f => ({ nome: String(f.nome || "foto.jpg"), data: f.data }));
-      const firme = {};
+      const firme = {}, carta = {};
       for (const k of ["tecnico", "utente"]) { const x = it.firme && it.firme[k]; if (typeof x === "string" && x.startsWith("data:image/")) firme[k] = x; }
-      const rec = { uid, tipo: it.tipo, dati: cleanDati(it.dati), foto: foto.length ? foto : (cur ? cur.foto || [] : []), firme: { ...(cur ? cur.firme || {} : {}), ...firme }, creato: it.creato || mod || nowIso(), modificato: mod || nowIso() };
+      for (const k of ["tecnico", "utente"]) if (it.cartaceo && it.cartaceo[k] === true && !firme[k]) carta[k] = true;
+      /* dal PC (file versione 6 in poi) le firme arrivate sono quelle giuste: sostituiscono le mie, così «tolta» o «a mano» fatti sul PC valgono anche qui.
+         Con file più vecchi si uniscono come prima. */
+      const auth = fromPc && (data.versione || 0) >= 6;
+      let firmeOut = auth ? firme : { ...(cur ? cur.firme || {} : {}), ...firme }, cartaOut = auth ? carta : { ...(cur ? cur.cartaceo || {} : {}), ...carta };
+      for (const k of Object.keys(firmeOut)) if (carta[k]) delete firmeOut[k];       // «a mano» appena deciso toglie la firma vecchia
+      for (const k of Object.keys(cartaOut)) if (firmeOut[k]) delete cartaOut[k];    // una firma presente vince su «a mano»
+      const rec = { uid, tipo: it.tipo, dati: cleanDati(it.dati), foto: foto.length ? foto : (cur ? cur.foto || [] : []), firme: firmeOut, cartaceo: cartaOut, creato: it.creato || mod || nowIso(), modificato: mod || nowIso() };
       if (fromPc) rec.daPC = rec.modificato;
       await put("verbali", rec); cur ? a++ : n++;
     }
@@ -792,5 +975,5 @@
     return { n, a, p, s };
   }
 
-  window.VER = { render, chooseTipo, exportItems, countNew, merge, tipi: TIPI, cleanDati, imeiProblem, controllaApparati, parseApparati, docOf };
+  window.VER = { render, chooseTipo, exportItems, countNew, merge, tipi: TIPI, cleanDati, imeiProblem, controllaApparati, parseApparati, docOf, sigUpload, imgToSignature };
 })();

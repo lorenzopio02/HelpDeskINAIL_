@@ -587,7 +587,7 @@ def prepara_firma(src, dest_dir, stem):
     """Ritaglia la firma (PNG con sfondo trasparente o scansione su bianco) e la ridimensiona.
     Restituisce il percorso del PNG pronto."""
     try:
-        from PIL import Image, ImageChops
+        from PIL import Image, ImageChops, ImageFilter
     except ImportError as e:  # pragma: no cover
         raise VerbaleError("Manca il componente per le immagini (Pillow): %s" % e)
     os.makedirs(dest_dir, exist_ok=True)
@@ -595,11 +595,24 @@ def prepara_firma(src, dest_dir, stem):
         with Image.open(src) as im:
             im = im.convert("RGBA")
             alpha = im.getchannel("A")
-            if alpha.getextrema() == (255, 255):         # niente trasparenza: tolgo il bianco
+            if alpha.getextrema() == (255, 255):         # niente trasparenza: tolgo il fondo del foglio
                 grey = im.convert("L")
-                alpha = grey.point(lambda v: 0 if v > 235 else 255)
-                im.putalpha(alpha)
-            box = alpha.getbbox()
+                # il fondo di una foto non e' mai bianco puro (ombre, carta grigia): stimo la luminosita'
+                # del foglio zona per zona (il valore piu' chiaro dei blocchi vicini: i tratti sottili della
+                # firma non lo abbassano) e considero inchiostro solo cio' che e' piu' scuro del foglio
+                bs = max(8, max(grey.size) // 48)
+                small = grey.resize((max(1, -(-grey.width // bs)), max(1, -(-grey.height // bs))),
+                                    getattr(Image, "Resampling", Image).BOX)
+                small = small.filter(ImageFilter.MaxFilter(5))
+                paper = small.resize(grey.size, getattr(Image, "Resampling", Image).BILINEAR)
+                diff = ImageChops.subtract(paper, grey)
+                lut = [0 if v <= 24 else 255 if v >= 90 else int(round((v - 24) * 255.0 / 66))
+                       for v in range(256)]
+                alpha = diff.point(lut)
+                ink = Image.new("RGBA", im.size, (11, 31, 75, 255))   # blu scuro, come la firma col dito
+                ink.putalpha(alpha)
+                im = ink
+            box = alpha.point(lambda a: 255 if a > 40 else 0).getbbox()   # ignoro i puntini leggeri
             if not box:
                 raise VerbaleError("La firma è vuota.")
             m = 6
@@ -649,12 +662,17 @@ def _disegno_firma(doc, path):
     return drawing
 
 
-def applica_firme(doc, firme, avvisi=None):
+def applica_firme(doc, firme, avvisi=None, cartaceo=None):
     """firme = {"tecnico": percorso PNG, "utente": percorso PNG} (le chiavi mancanti = niente firma).
+    cartaceo = chi firmerà a mano sul foglio stampato (esempio {"utente"}): per lui non si mette
+    nessuna immagine e il modello resta com'è per la firma a mano (la riga vuota); nella ricevuta
+    facoltativa dell'assegnazione la riga dell'utente compare comunque, da firmare a mano.
     Mette le immagini al posto dei segnaposto {{FIRMA_...}} e toglie le righe che servono solo
     quando c'è la firma. Restituisce quante firme ha messo."""
     from lxml import etree
-    has = {k: bool(v) for k, v in (firme or {}).items()}
+    img = {k: bool(v) for k, v in (firme or {}).items()}
+    paper = {k for k in (cartaceo or ()) if k in FIRME_CHIAVI and not img.get(k)}
+    has = dict(img)              # chi ha l'immagine: serve lo spazio sopra la riga per l'immagine
     anyone = any(has.values())
     placed, seen = 0, set()
     for p in _all_paragraphs(doc):
@@ -666,7 +684,7 @@ def applica_firme(doc, firme, avvisi=None):
         drop = (("FIRMA_GAP_TECNICO" in names and not has.get("tecnico")) or
                 ("FIRMA_GAP_UTENTE" in names and not has.get("utente")) or
                 ("FIRMA_GAP_ANY" in names and not anyone) or
-                ("FIRMA_SOLO_UTENTE" in names and not has.get("utente")))
+                ("FIRMA_SOLO_UTENTE" in names and not has.get("utente") and "utente" not in paper))
         if drop:
             p.getparent().remove(p)
             continue
@@ -682,7 +700,7 @@ def applica_firme(doc, firme, avvisi=None):
                 who = {"FIRMA_TECNICO": "tecnico", "FIRMA_UTENTE": "utente"}.get(name)
                 if who:
                     seen.add(who)
-                    if has.get(who):
+                    if img.get(who):
                         d = _disegno_firma(doc, firme[who])
                         cur.addnext(d)
                         cur = d
@@ -694,10 +712,74 @@ def applica_firme(doc, firme, avvisi=None):
                     cur = nt
     if avvisi is not None:
         for who, label in (("tecnico", "del tecnico"), ("utente", "dell'utente")):
-            if has.get(who) and who not in seen:
+            if img.get(who) and who not in seen:
                 avvisi.append("Il modello Word non ha il posto per la firma %s: la firma non è stata "
                               "inserita. Usa «Modelli Word > Ripristina i modelli originali»." % label)
     return placed
+
+
+# --------------------------------------------------------------------------
+# Posti firma: chi può firmare e in che modo
+# --------------------------------------------------------------------------
+FIRME_CHIAVI = ("tecnico", "utente")
+# chiave -> (etichetta, obbligatoria) per ogni verbale (stessi posti del modello Word e del telefono)
+FIRME_POSTI = {
+    "trasferimento": [("tecnico", "Firma Tecnico di Presidio", True)],
+    "presa_in_carico": [("utente", "Firma utente consegnatario", True),
+                        ("tecnico", "Firma tecnico CED/IT", True)],
+    "assegnazione": [("tecnico", "Firma tecnico CED/IT", True),
+                     ("utente", "Firma utente per ricevuta (facoltativa)", False)],
+    "censimento": [("tecnico", "Firma Tecnico di PRESIDIO", True)],
+}
+# Modi di firma di un posto:
+#   nessuna  = niente (la riga resta da firmare)
+#   tenuta   = la firma che c'è già (fatta col dito sul telefono o scelta prima)
+#   salvata  = l'immagine della firma del tecnico salvata nel programma (SOLO posto del tecnico)
+#   cartaceo = firmerà a mano sul foglio stampato
+MODI_FIRMA = {"tecnico": ("nessuna", "tenuta", "salvata", "cartaceo"),
+              "utente": ("nessuna", "tenuta", "cartaceo")}
+
+
+def modi_firma_ammessi(chiave):
+    """Modi di firma permessi a un posto firma. L'immagine della firma (salvata) c'è SOLO per il
+    tecnico: per l'utente e per ogni altra persona si firma col dito o a mano sul foglio."""
+    return MODI_FIRMA.get(chiave, ("nessuna", "tenuta", "cartaceo"))
+
+
+def applica_scelte_firme(cartella, nomi, cartaceo, scelte, salvata=None):
+    """Applica le scelte fatte nel programma del PC sulle firme di un verbale.
+    cartella = cartella del verbale; nomi = {posto: nome file della firma già presente};
+    cartaceo = posti già segnati come «firma a mano»; scelte = {posto: modo} (vedi MODI_FIRMA);
+    salvata = percorso dell'immagine di firma del tecnico (se c'è).
+    Restituisce (nomi, cartaceo) aggiornati. Un modo non permesso al posto (esempio un'immagine per
+    l'utente) viene rifiutato con VerbaleError e non cambia niente."""
+    nomi = dict(nomi or {})
+    cart = {k for k in (cartaceo or ()) if k in FIRME_CHIAVI}
+    for chi, modo in (scelte or {}).items():
+        if modo not in modi_firma_ammessi(chi):
+            raise VerbaleError("Per questo posto firma il modo «%s» non è permesso: si può firmare "
+                               "col dito sul telefono oppure a mano sul foglio." % modo)
+    for chi, modo in (scelte or {}).items():
+        if modo == "tenuta":
+            if chi not in nomi:
+                raise VerbaleError("Non c'è nessuna firma da tenere.")
+            cart.discard(chi)
+        elif modo == "salvata":
+            if not salvata or not os.path.isfile(salvata):
+                raise VerbaleError("Non c'è ancora un'immagine di firma salvata: scegline una in "
+                                   "«Dati per i verbali».")
+            name = "firma_%s.png" % chi
+            os.makedirs(cartella, exist_ok=True)
+            prepara_firma(salvata, cartella, "firma_%s" % chi)
+            nomi[chi] = name
+            cart.discard(chi)
+        elif modo == "cartaceo":
+            nomi.pop(chi, None)
+            cart.add(chi)
+        else:                                   # nessuna
+            nomi.pop(chi, None)
+            cart.discard(chi)
+    return nomi, cart
 
 
 # --------------------------------------------------------------------------
@@ -720,9 +802,10 @@ def nome_file_proposto(tipo, d):
 
 
 def crea_verbale(tipo, d, out_path, templates_dir, photos=None, imp=None, firme=None,
-                 avvisi=None):
+                 avvisi=None, cartaceo=None):
     """Compila il modello e salva il Word in out_path. photos = elenco di file JPEG già pronti.
     firme = {"tecnico": file immagine, "utente": file immagine} (facoltative).
+    cartaceo = chi firma a mano sul foglio (la riga resta vuota, con lo spazio per la firma).
     avvisi = lista a cui aggiungere le segnalazioni (esempio: modello senza posto per la firma)."""
     docx = _docx()
     photos = list(photos or [])
@@ -768,7 +851,7 @@ def crea_verbale(tipo, d, out_path, templates_dir, photos=None, imp=None, firme=
             if src and os.path.isfile(src):
                 tmp = tmp or tempfile.mkdtemp(prefix="firme_")
                 pronte[chi] = prepara_firma(src, tmp, chi)
-        applica_firme(doc, pronte, avvisi)
+        applica_firme(doc, pronte, avvisi, cartaceo)
 
         for p in _all_paragraphs(doc):
             if p.getparent() is None:

@@ -8,12 +8,17 @@ in Excel/PDF.
 import base64
 import io
 import json
+import math
 import os
+import queue
 import re
 import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
+import time
+import unicodedata
 import uuid
 import zipfile
 from collections import Counter
@@ -31,6 +36,11 @@ try:
     import verbali as VB          # verbali Word (trasferimento, consegna, assegnazione, censimento)
 except ImportError:
     VB = None
+
+try:
+    import codici as CD           # lettura di codici a barre e QR (fotocamera, foto, appunti)
+except ImportError:
+    CD = None
 
 APP_NAME = "Help Desk INAIL"
 
@@ -57,6 +67,11 @@ COLORI_TONER = [("Nero", "#1c1c1c", "#1c1c1c"), ("Azzurro", "#1fa3dc", "#0d7fb0"
                 ("Magenta", "#d6247f", "#c0176c"), ("Giallo", "#f2c500", "#a67c00"),
                 ("Vaschetta", "#8a96a3", "#4f5d6b")]
 TONER_NOMI = [c[0] for c in COLORI_TONER]
+ROOM_CODE_MAX = 24                # lunghezza massima del codice di una stanza
+PIANTA_PX = 1600                  # lato lungo della pianta mandata al telefono
+PANORAMA_PX = 2600                # lato lungo dei panorami mandati al telefono
+BADGE_GIALLO = "#f2c500"          # bollino giallo (scorta in esaurimento)
+BADGE_GIALLO_TESTO = "#8a5200"    # testo leggibile per la scorta bassa
 TONER_TESTO = {c[0]: c[2] for c in COLORI_TONER}
 
 MODELLI_STAMPANTI = ["bizhub C360i", "bizhub C3351i"]
@@ -99,6 +114,74 @@ def scorta_status(quantita, soglia):
     if quantita <= soglia:
         return "In esaurimento"
     return "OK"
+
+
+def model_key(modello):
+    """Il modello scritto in modo un po' diverso (spazi, maiuscole) conta come lo stesso."""
+    return " ".join((modello or "").split()).casefold()
+
+
+def natural_key(text):
+    """Ordine "naturale": T2 viene prima di T12."""
+    return [int(t) if t.isdigit() else t.casefold() for t in re.split(r"(\d+)", text or "")]
+
+
+def clean_room_code(text):
+    return " ".join((text or "").split())[:ROOM_CODE_MAX]
+
+
+def parse_room_codes(text):
+    """Un codice per riga (vanno bene anche virgole e punti e virgola). Restituisce
+    (codici validi senza doppioni, codici scartati perché troppo lunghi)."""
+    seen, good, bad = set(), [], []
+    for raw in re.split(r"[\r\n;,\t]+", text or ""):
+        code = " ".join(raw.split())
+        if not code:
+            continue
+        if len(code) > ROOM_CODE_MAX:
+            bad.append(code)
+        elif code.casefold() not in seen:
+            seen.add(code.casefold())
+            good.append(code)
+    return good, bad
+
+
+def room_label(r):
+    """Scritta sulla pianta e negli elenchi: "T12 · 3" (codice e numero di persone)."""
+    return "%s · %d" % (r["codice"], r.get("n_persone") or 0)
+
+
+def room_occupancy(r):
+    """('occupate 2/3', False) se le scrivanie totali sono indicate, altrimenti ('', False).
+    Il secondo valore è True quando le persone sono più delle scrivanie."""
+    tot = r.get("scrivanie") or 0
+    n = r.get("n_persone") or 0
+    if tot <= 0:
+        return "", False
+    return "occupate %d/%d" % (n, tot), n > tot
+
+
+def days_ago(data_ora, today=None):
+    """Giorni di calendario passati da 'AAAA-MM-GG hh:mm' (0 = oggi); None se manca la data."""
+    try:
+        d = datetime.strptime((data_ora or "")[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    return max(0, ((today or datetime.now().date()) - d).days)
+
+
+def ago_short(n):
+    """Per lo spazio stretto sotto la stampante: mai / oggi / ieri / 12 gg fa."""
+    if n is None:
+        return "mai"
+    return "oggi" if n == 0 else "ieri" if n == 1 else "%d gg fa" % n
+
+
+def ago_long(n):
+    """Frase completa: cambiato 12 giorni fa."""
+    if n is None:
+        return "mai registrato"
+    return "cambiato oggi" if n == 0 else "cambiato ieri" if n == 1 else "cambiato %d giorni fa" % n
 
 
 def tec_date(m):
@@ -207,7 +290,7 @@ def staging_dir():
 # Verbali Word: impostazioni e cartelle
 # ---------------------------------------------------------------------------
 SETTINGS_DEFAULT = {"tecnico": "", "sede_citta": "Firenze", "indirizzo": "Via Delle Porte Nuove, 61",
-                    "cap": "50144", "cartella_verbali": ""}
+                    "cap": "50144", "cartella_verbali": "", "mappa_pos": ""}
 
 
 def settings_path():
@@ -235,9 +318,427 @@ def save_settings(s):
         return False
 
 
+# ---------------------------------------------------------------------------
+# Mappa della Toscana: contorno semplificato (disegnato a mano da punti di riferimento, NON è un
+# confine ufficiale) e coordinate dei comuni. Le sedi si riconoscono dal nome; quelle che il
+# programma non conosce si posizionano a mano (la posizione resta in impostazioni.json).
+# ---------------------------------------------------------------------------
+# --- TOSCANA-DATI-INIZIO (generato dallo stesso elenco di docs/toscana.js: non modificare a mano) ---
+TOSC_K, TOSC_S, TOSC_LON0, TOSC_LAT1, TOSC_W, TOSC_H = 0.72537, 492.0, 9.65, 44.55, 1000, 1181
+TOSC_OUTLINE = [(10.03, 44.055), (10.045, 44.03), (10.1, 43.99), (10.15, 43.97),
+    (10.18, 43.95), (10.2, 43.92), (10.23, 43.87), (10.26, 43.82), (10.28, 43.75),
+    (10.27, 43.68), (10.29, 43.62), (10.31, 43.57), (10.3, 43.54), (10.33, 43.49),
+    (10.37, 43.43), (10.4, 43.4), (10.44, 43.35), (10.47, 43.31), (10.5, 43.25),
+    (10.53, 43.18), (10.54, 43.12), (10.55, 43.04), (10.5, 42.99), (10.49, 42.96),
+    (10.52, 42.93), (10.56, 42.92), (10.62, 42.97), (10.7, 42.95), (10.76, 42.92),
+    (10.78, 42.89), (10.77, 42.84), (10.74, 42.8), (10.8, 42.78), (10.87, 42.77),
+    (10.93, 42.72), (10.97, 42.69), (11.03, 42.64), (11.07, 42.6), (11.1, 42.57),
+    (11.13, 42.55), (11.17, 42.53), (11.19, 42.5), (11.13, 42.48), (11.1, 42.45),
+    (11.08, 42.42), (11.1, 42.39), (11.17, 42.375), (11.22, 42.385), (11.25, 42.4),
+    (11.29, 42.415), (11.38, 42.385), (11.47, 42.355), (11.52, 42.39), (11.57, 42.43),
+    (11.62, 42.5), (11.69, 42.56), (11.74, 42.62), (11.78, 42.7), (11.82, 42.77),
+    (11.88, 42.78), (11.95, 42.82), (11.97, 42.88), (12.03, 42.93), (12.03, 42.97),
+    (12.06, 43.02), (12.1, 43.07), (12.05, 43.12), (12.03, 43.2), (12.05, 43.26),
+    (12.1, 43.31), (12.12, 43.36), (12.13, 43.42), (12.12, 43.47), (12.15, 43.53),
+    (12.17, 43.58), (12.2, 43.62), (12.25, 43.65), (12.33, 43.65), (12.38, 43.7),
+    (12.37, 43.76), (12.3, 43.8), (12.22, 43.83), (12.15, 43.84), (12.05, 43.8),
+    (11.98, 43.82), (11.9, 43.83), (11.83, 43.86), (11.78, 43.87), (11.7, 43.9),
+    (11.68, 43.94), (11.62, 43.98), (11.66, 44.04), (11.7, 44.09), (11.66, 44.14),
+    (11.57, 44.16), (11.5, 44.17), (11.46, 44.2), (11.38, 44.22), (11.3, 44.2), (11.24, 44.17),
+    (11.17, 44.14), (11.1, 44.12), (11.0, 44.08), (10.9, 44.15), (10.82, 44.17),
+    (10.75, 44.15), (10.68, 44.17), (10.62, 44.15), (10.55, 44.16), (10.5, 44.2),
+    (10.45, 44.25), (10.35, 44.26), (10.28, 44.3), (10.22, 44.31), (10.15, 44.33),
+    (10.12, 44.36), (10.05, 44.4), (10.0, 44.43), (9.93, 44.46), (9.86, 44.43), (9.8, 44.4),
+    (9.78, 44.35), (9.82, 44.3), (9.88, 44.25), (9.93, 44.2), (9.97, 44.16), (9.99, 44.13),
+    (10.0, 44.09)]
+TOSC_ISLANDS = {
+    'Elba': [(10.11, 42.8), (10.17, 42.82), (10.26, 42.83), (10.34, 42.83), (10.4, 42.86),     (10.45, 42.84), (10.45, 42.81), (10.42, 42.78), (10.41, 42.73),     (10.34, 42.73), (10.27, 42.75), (10.19, 42.74), (10.12, 42.76)],
+    'Capraia': [(9.865, 43.05), (9.862, 43.076), (9.852, 43.097), (9.838, 43.108),     (9.822, 43.108), (9.808, 43.097), (9.798, 43.076), (9.795, 43.05),     (9.798, 43.024), (9.808, 43.003), (9.822, 42.992), (9.838, 42.992),     (9.852, 43.003), (9.862, 43.024)],
+    'Gorgona': [(9.914, 43.43), (9.91, 43.441), (9.9, 43.446), (9.89, 43.441), (9.886, 43.43),     (9.89, 43.419), (9.9, 43.414), (9.91, 43.419)],
+    'Pianosa': [(10.1, 42.585), (10.094, 42.595), (10.08, 42.599), (10.066, 42.595),     (10.06, 42.585), (10.066, 42.575), (10.08, 42.571), (10.094, 42.575)],
+    'Montecristo': [(10.33, 42.335), (10.324, 42.349), (10.31, 42.355), (10.296, 42.349),     (10.29, 42.335), (10.296, 42.321), (10.31, 42.315), (10.324, 42.321)],
+    'Giglio': [(10.95, 42.36), (10.947, 42.382), (10.937, 42.399), (10.923, 42.409),     (10.907, 42.409), (10.893, 42.399), (10.883, 42.382), (10.88, 42.36),     (10.883, 42.338), (10.893, 42.321), (10.907, 42.311), (10.923, 42.311),     (10.937, 42.321), (10.947, 42.338)],
+    'Giannutri': [(11.125, 42.255), (11.118, 42.262), (11.1, 42.265), (11.082, 42.262),     (11.075, 42.255), (11.082, 42.248), (11.1, 42.245), (11.118, 42.248)]}
+TOSC_COMUNI = {'Firenze': (43.7696, 11.2558, 1), 'Pisa': (43.7228, 10.4017, 1),
+    'Siena': (43.3188, 11.3308, 1), 'Arezzo': (43.4633, 11.8797, 1),
+    'Livorno': (43.5485, 10.3106, 1), 'Lucca': (43.843, 10.5027, 1),
+    'Grosseto': (42.7635, 11.1124, 1), 'Massa': (44.0354, 10.1393, 1),
+    'Carrara': (44.0793, 10.0977, 0), 'Pistoia': (43.9331, 10.9175, 1),
+    'Prato': (43.8777, 11.1022, 1), 'Empoli': (43.7192, 10.9456, 0),
+    'Viareggio': (43.8681, 10.2511, 0), 'Piombino': (42.9254, 10.5266, 0),
+    'Cecina': (43.3085, 10.5169, 0), 'Pontedera': (43.6619, 10.6313, 0),
+    'Montecatini Terme': (43.8836, 10.7727, 0), 'Sansepolcro': (43.571, 12.14, 0),
+    'Cortona': (43.2756, 11.9855, 0), 'Montepulciano': (43.0988, 11.7826, 0),
+    'Poggibonsi': (43.4693, 11.1472, 0), "Colle di Val d'Elsa": (43.4228, 11.1197, 0),
+    'San Gimignano': (43.4677, 11.0432, 0), 'Volterra': (43.4002, 10.8605, 0),
+    'Follonica': (42.9233, 10.7606, 0), 'Orbetello': (42.4423, 11.214, 0),
+    'Porto Santo Stefano': (42.4372, 11.118, 0), 'Portoferraio': (42.8143, 10.3263, 0),
+    'Massa Marittima': (43.0505, 10.8933, 0),
+    'Castiglione della Pescaia': (42.7647, 10.8808, 0), 'Aulla': (44.2108, 9.9689, 0),
+    'Pontremoli': (44.3764, 9.8806, 0), 'Fivizzano': (44.2373, 10.1288, 0),
+    'Castelnuovo di Garfagnana': (44.11, 10.4097, 0), 'Barga': (44.0772, 10.4778, 0),
+    'Borgo a Mozzano': (43.9993, 10.5421, 0), 'Pescia': (43.9022, 10.689, 0),
+    'Pietrasanta': (43.9588, 10.2282, 0), 'Forte dei Marmi': (43.9626, 10.1711, 0),
+    'Camaiore': (43.9378, 10.3052, 0), 'San Miniato': (43.6823, 10.8505, 0),
+    'Cascina': (43.6767, 10.5547, 0), 'Pontassieve': (43.7667, 11.4333, 0),
+    'Sesto Fiorentino': (43.8326, 11.1999, 0), 'Scandicci': (43.7547, 11.1856, 0),
+    'Bagno a Ripoli': (43.7428, 11.3036, 0), 'Figline Valdarno': (43.6175, 11.4672, 0),
+    'Borgo San Lorenzo': (43.9548, 11.3872, 0), 'Barberino di Mugello': (44.0, 11.2167, 0),
+    'Firenzuola': (44.1228, 11.3789, 0), 'Montevarchi': (43.5236, 11.5681, 0),
+    'San Giovanni Valdarno': (43.5708, 11.5276, 0), 'Bibbiena': (43.697, 11.816, 0),
+    'Poppi': (43.7194, 11.7672, 0), 'Sinalunga': (43.2088, 11.7347, 0),
+    'Chiusi': (43.0172, 11.9494, 0), 'Abbadia San Salvatore': (42.8793, 11.6786, 0),
+    'Radicofani': (42.8999, 11.7679, 0), 'Pitigliano': (42.6336, 11.6683, 0),
+    'Manciano': (42.587, 11.5167, 0), 'Capalbio': (42.4167, 11.3667, 0),
+    'Scansano': (42.6819, 11.3253, 0), 'Roccastrada': (42.9988, 11.1608, 0),
+    'Rosignano Marittimo': (43.4044, 10.4752, 0), 'Castagneto Carducci': (43.1633, 10.6053, 0),
+    'San Vincenzo': (43.1, 10.539, 0), 'Campiglia Marittima': (43.0636, 10.6097, 0),
+    'Suvereto': (43.0742, 10.6753, 0), 'Capraia Isola': (43.05, 9.8333, 0),
+    'Marciana Marina': (42.8, 10.1964, 0), 'Porto Azzurro': (42.764, 10.3965, 0),
+    'Rio Marina': (42.8167, 10.4283, 0), 'Capoliveri': (42.7466, 10.3797, 0),
+    'Isola del Giglio': (42.3647, 10.9156, 0), 'Ponsacco': (43.6264, 10.6203, 0),
+    'Altopascio': (43.8142, 10.6717, 0), 'Capannori': (43.8419, 10.5698, 0),
+    'Fucecchio': (43.7289, 10.8074, 0), 'Castelfiorentino': (43.6073, 10.9646, 0),
+    'Certaldo': (43.547, 11.04, 0), 'Montelupo Fiorentino': (43.7333, 11.0167, 0),
+    'Greve in Chianti': (43.5855, 11.3162, 0), 'Impruneta': (43.6972, 11.2528, 0),
+    'Fiesole': (43.8056, 11.2938, 0), 'Reggello': (43.6864, 11.5336, 0),
+    'Rufina': (43.8131, 11.48, 0), 'Vicchio': (43.9179, 11.4504, 0),
+    'Marradi': (44.0731, 11.6228, 0), 'Abetone': (44.1433, 10.6553, 0),
+    'San Marcello Piteglio': (44.0554, 10.7959, 0), 'Quarrata': (43.85, 10.98, 0),
+    'Monsummano Terme': (43.87, 10.82, 0), 'Vernio': (44.0633, 11.1511, 0),
+    'Montemurlo': (43.9199, 11.0153, 0), 'Campi Bisenzio': (43.8167, 11.1333, 0),
+    'Piancastagnaio': (42.845, 11.702, 0), 'Castel del Piano': (42.8944, 11.5333, 0),
+    'Arcidosso': (42.85, 11.5333, 0), 'Sarteano': (43.0, 11.8667, 0),
+    'Cetona': (43.0, 11.9, 0), 'Montalcino': (43.0575, 11.49, 0),
+    'Pienza': (43.0766, 11.6786, 0), 'Chianciano Terme': (43.0617, 11.8219, 0),
+    'Monte San Savino': (43.3333, 11.7333, 0), 'Castiglion Fiorentino': (43.3333, 11.9167, 0),
+    'Anghiari': (43.54, 12.06, 0), 'Pieve Santo Stefano': (43.6667, 12.0333, 0),
+    'Stia': (43.8, 11.7, 0), 'Sorano': (42.6833, 11.7167, 0), 'Gavorrano': (42.9167, 10.9, 0),
+    'Scarlino': (42.9167, 10.8667, 0), 'Pomarance': (43.2967, 10.8718, 0),
+    'Peccioli': (43.55, 10.7167, 0), "Santa Croce sull'Arno": (43.7167, 10.7667, 0),
+    'San Giuliano Terme': (43.75, 10.4333, 0), 'Massarosa': (43.8667, 10.3333, 0),
+    'Seravezza': (43.9961, 10.2292, 0), 'Bagni di Lucca': (44.0167, 10.5833, 0),
+    'Camporgiano': (44.15, 10.3833, 0), 'Villafranca in Lunigiana': (44.3, 9.95, 0),
+    'Licciana Nardi': (44.2, 10.0, 0), 'Albinia': (42.5, 11.19, 0),
+    'Talamone': (42.55, 11.13, 0), 'Cavo': (42.85, 10.4167, 0)}
+TOSC_ALIAS = {'dr toscana': 'Firenze', 'direzione regionale': 'Firenze',
+    'direzione regionale toscana': 'Firenze', 'massa carrara': 'Massa',
+    'massa-carrara': 'Massa', 'mc': 'Massa', 'elba': 'Portoferraio',
+    "isola d'elba": 'Portoferraio', 'valdarno': 'Montevarchi', 'mugello': 'Borgo San Lorenzo',
+    'versilia': 'Viareggio', 'lunigiana': 'Aulla', 'garfagnana': 'Castelnuovo di Garfagnana',
+    'val di cornia': 'Piombino', 'argentario': 'Porto Santo Stefano',
+    'chianti': 'Greve in Chianti', 'valdichiana': 'Sinalunga', 'casentino': 'Poppi',
+    'amiata': 'Abbadia San Salvatore'}
+# --- TOSCANA-DATI-FINE ---
+
+TOSC_PERIODI = [("tutto", "Sempre"), ("anno", "Quest'anno"), ("mese", "Questo mese"),
+                ("30g", "Ultimi 30 giorni")]
+
+
+def tosc_norm(s):
+    """Nome senza accenni, maiuscole e punteggiatura (per confrontare i nomi delle sedi)."""
+    s = unicodedata.normalize("NFKD", str(s or ""))
+    s = "".join(c for c in s if not unicodedata.combining(c)).lower()
+    s = re.sub(r"[’`´]", "'", s)
+    return re.sub(r"[^a-z0-9']+", " ", s).strip()
+
+
+_TOSC_INDEX = []
+
+
+def _tosc_index():
+    if not _TOSC_INDEX:
+        idx = {tosc_norm(n): n for n in TOSC_COMUNI}
+        for k, v in TOSC_ALIAS.items():
+            idx.setdefault(tosc_norm(k), v)
+        _TOSC_INDEX.append((idx, sorted(idx, key=lambda k: (-len(k), k))))
+    return _TOSC_INDEX[0]
+
+
+def tosc_find(name):
+    """Il comune di cui parla il nome della sede (Firenze, «Sede di Pisa», «DR Toscana»...)."""
+    n = tosc_norm(name)
+    if not n:
+        return None
+    idx, keys = _tosc_index()
+    if n in idx:
+        return idx[n]
+    pad = " " + n + " "
+    for k in keys:
+        if " " + k + " " in pad:
+            return idx[k]
+    return None
+
+
+def tosc_project(lon, lat):
+    return ((lon - TOSC_LON0) * TOSC_K * TOSC_S, (TOSC_LAT1 - lat) * TOSC_S)
+
+
+def tosc_unproject(x, y):
+    """Da punto della mappa a (latitudine, longitudine)."""
+    return (TOSC_LAT1 - y / TOSC_S, x / (TOSC_K * TOSC_S) + TOSC_LON0)
+
+
+def tosc_position(name, overrides=None):
+    """(lat, lon, da dove) oppure None se la sede non si riconosce."""
+    k = tosc_norm(name)
+    if not k:
+        return None
+    if overrides and k in overrides:
+        return (overrides[k][0], overrides[k][1], "manuale")
+    c = tosc_find(name)
+    if c:
+        return (TOSC_COMUNI[c][0], TOSC_COMUNI[c][1], c)
+    return None
+
+
+def load_map_pos(settings):
+    """Le posizioni scelte a mano: {nome normalizzato: (lat, lon)}."""
+    try:
+        d = json.loads(settings.get("mappa_pos") or "{}")
+    except (ValueError, AttributeError):
+        return {}
+    out = {}
+    if isinstance(d, dict):
+        for k, v in d.items():
+            try:
+                lat, lon = round(float(v[0]), 4), round(float(v[1]), 4)
+            except (TypeError, ValueError, IndexError, KeyError):
+                continue
+            if 41.5 < lat < 45.0 and 9.0 < lon < 13.0:
+                out[str(k)] = (lat, lon)
+    return out
+
+
+def dump_map_pos(d):
+    return json.dumps({k: [v[0], v[1]] for k, v in d.items()}, ensure_ascii=False, sort_keys=True)
+
+
+def tosc_period_from(kind, today=None):
+    today = today or date.today()
+    if kind == "anno":
+        return today.replace(month=1, day=1).isoformat()
+    if kind == "mese":
+        return today.replace(day=1).isoformat()
+    if kind == "30g":
+        return (today - timedelta(days=29)).isoformat()
+    return ""
+
+
+def tosc_records(db, periodo="tutto", overrides=None, today=None):
+    """Per ogni sede: interventi (nel periodo), da seguire (sempre), utenti, stampanti e posizione.
+    Le sedi dell'elenco di base compaiono anche a zero, così si vede dove sono."""
+    dal = tosc_period_from(periodo, today)
+    recs = {}
+
+    def rec(raw, peso=1.0):
+        raw = (raw or "").strip()
+        k = tosc_norm(raw)
+        if not k:
+            return None
+        r = recs.get(k)
+        if r is None:
+            r = recs[k] = {"key": k, "raws": {}, "interventi": 0, "da_seguire": 0, "utenti": 0,
+                           "stampanti": 0}
+        r["raws"][raw] = r["raws"].get(raw, 0) + peso
+        return r
+
+    for s in SEDI_TOSCANA:
+        rec(s, 0.5)
+    senza = {"interventi": 0, "da_seguire": 0}
+    for row in db.conn.execute("SELECT sede, stato, data_ora FROM interventi"):
+        r = rec(row["sede"]) or senza
+        if not dal or (row["data_ora"] or "")[:10] >= dal:
+            r["interventi"] += 1
+        if row["stato"] in STATI_APERTI:
+            r["da_seguire"] += 1
+    for row in db.conn.execute("SELECT sede FROM utenti"):
+        r = rec(row["sede"])
+        if r:
+            r["utenti"] += 1
+    for row in db.conn.execute("SELECT e.sede AS sede, COUNT(s.id) AS n FROM edifici e "
+                               "LEFT JOIN stampanti s ON s.edificio_id = e.id GROUP BY e.id"):
+        r = rec(row["sede"])
+        if r:
+            r["stampanti"] += row["n"]
+    out = []
+    for r in recs.values():
+        raws = sorted(r["raws"].items(), key=lambda kv: (-kv[1], kv[0]))
+        r["raws"] = [name for name, _ in raws]
+        r["nome"] = r["raws"][0]
+        pos = tosc_position(r["nome"], overrides)
+        r["lat"], r["lon"], r["via"] = pos if pos else (None, None, "")
+        out.append(r)
+    out.sort(key=lambda r: (-r["interventi"], -r["da_seguire"], r["nome"].casefold()))
+    return {"sedi": out, "senza_sede": senza}
+
+
+def tosc_pin_radius(n):
+    return min(46.0, 18 + 3.5 * math.sqrt(n))
+
+
+def tosc_separate(pins, gap=2.0, rounds=60):
+    """Allontana i pallini che si sovrapporrebbero (Carrara e Massa sono a pochi chilometri)."""
+    for _ in range(rounds):
+        moved = False
+        for i in range(len(pins)):
+            for j in range(i + 1, len(pins)):
+                a, b = pins[i], pins[j]
+                dx, dy = b["x"] - a["x"], b["y"] - a["y"]
+                d = math.hypot(dx, dy)
+                need = a["r"] + b["r"] + gap
+                if d < need - 0.01:
+                    if d < 1e-6:
+                        dx, dy, d = 1.0, 0.0, 1.0
+                    push = (need - d) / 2
+                    ux, uy = dx / d, dy / d
+                    a["x"] -= ux * push
+                    a["y"] -= uy * push
+                    b["x"] += ux * push
+                    b["y"] += uy * push
+                    moved = True
+        if not moved:
+            break
+
+
+def tosc_pins(recs):
+    """Le sedi con posizione, unite quando cadono nello stesso punto (Firenze e DR Toscana)."""
+    groups = {}
+    for r in recs:
+        if r["lat"] is not None:
+            groups.setdefault((round(r["lat"], 4), round(r["lon"], 4)), []).append(r)
+    pins = []
+    for (lat, lon), rs in groups.items():
+        rs = sorted(rs, key=lambda r: (-r["interventi"], r["nome"].casefold()))
+        n = sum(r["interventi"] for r in rs)
+        x, y = tosc_project(lon, lat)
+        pins.append({"x": x, "y": y, "tx": x, "ty": y, "r": tosc_pin_radius(n), "n": n,
+                     "rosso": sum(r["da_seguire"] for r in rs),
+                     "label": " + ".join(r["nome"] for r in rs), "sedi": [r["key"] for r in rs]})
+    pins.sort(key=lambda p: (-p["n"], p["label"].casefold()))
+    tosc_separate(pins)
+    return pins
+
+
+def tosc_place_labels(pins, fs=28.0):
+    """Mette i nomi sotto, sopra, a destra o a sinistra dei pallini senza sovrapporli."""
+    def over(a, b):
+        return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+    circles = [(p["x"] - p["r"], p["y"] - p["r"], p["x"] + p["r"], p["y"] + p["r"]) for p in pins]
+    placed, out = [], []
+    for i, p in enumerate(pins):
+        tw = len(p["label"]) * fs * 0.56
+        cands = [("middle", p["x"], p["y"] + p["r"] + fs * 0.95),
+                 ("middle", p["x"], p["y"] - p["r"] - fs * 0.3),
+                 ("start", p["x"] + p["r"] + 6, p["y"] + fs * 0.35),
+                 ("end", p["x"] - p["r"] - 6, p["y"] + fs * 0.35)]
+        first, chosen = None, None
+        for anchor, tx, ty in cands:
+            x0 = tx - tw / 2 if anchor == "middle" else (tx if anchor == "start" else tx - tw)
+            shift = 0
+            if x0 < 2:
+                shift = 2 - x0
+            elif x0 + tw > TOSC_W - 2:
+                shift = (TOSC_W - 2) - (x0 + tw)
+            x0, tx = x0 + shift, tx + shift
+            box = (x0, ty - fs * 0.8, x0 + tw, ty + fs * 0.25)
+            cand = {"anchor": anchor, "lx": tx, "ly": ty, "box": box}
+            if first is None:
+                first = cand
+            if any(over(box, b) for b in placed) or any(
+                    over(box, c) for j, c in enumerate(circles) if j != i):
+                continue
+            chosen = cand
+            break
+        chosen = chosen or first
+        placed.append(chosen["box"])
+        out.append(chosen)
+    return out
+
+
+def tosc_scene(pins, scale=1.0, fs=28.0):
+    """Tutto quello che serve per disegnare la mappa (poligoni e pallini), già in pixel."""
+    def flat(pts):
+        res = []
+        for lon, lat in pts:
+            x, y = tosc_project(lon, lat)
+            res += [round(x * scale, 1), round(y * scale, 1)]
+        return res
+    labels = tosc_place_labels(pins, fs)
+    return {"w": int(TOSC_W * scale), "h": int(TOSC_H * scale), "land": flat(TOSC_OUTLINE),
+            "islands": [flat(v) for v in TOSC_ISLANDS.values()],
+            "pins": [{"cx": p["x"] * scale, "cy": p["y"] * scale, "r": p["r"] * scale, "n": p["n"],
+                      "rosso": p["rosso"], "label": p["label"], "sedi": p["sedi"],
+                      "lx": lb["lx"] * scale, "ly": lb["ly"] * scale, "anchor": lb["anchor"]}
+                     for p, lb in zip(pins, labels)]}
+
+
+def tosc_pin_at(pins, x, y, scale=1.0, margin=14.0):
+    """Il pallino più vicino al punto toccato (x, y in pixel), se è abbastanza vicino."""
+    best, bd = None, None
+    for i, p in enumerate(pins):
+        d = math.hypot(x / scale - p["x"], y / scale - p["y"])
+        if d <= p["r"] + margin and (bd is None or d < bd):
+            best, bd = i, d
+    return best
+
+
 def templates_dir():
     """Cartella dei modelli Word dei verbali (si possono modificare a mano)."""
     return os.path.join(data_dir(), "Modelli verbali")
+
+
+def saved_signature_path():
+    """Immagine della firma del tecnico (scelta in «Dati per i verbali»). Sta tra gli allegati,
+    quindi finisce anche nel backup."""
+    return os.path.join(attachments_root(), "firma_tecnico.png")
+
+
+def saved_signature():
+    p = saved_signature_path()
+    return p if os.path.isfile(p) else None
+
+
+def save_signature_image(src):
+    """Prepara l'immagine scelta (ritaglia i margini, toglie il fondo bianco) e la salva come
+    «la mia firma». Solleva VB.VerbaleError se l'immagine non va bene."""
+    if os.path.normcase(os.path.abspath(src)) == os.path.normcase(
+            os.path.abspath(saved_signature_path())):
+        return saved_signature_path()
+    tmp = VB.prepara_firma(src, staging_dir_firme(), "firma_tecnico_nuova")
+    try:
+        shutil.copyfile(tmp, saved_signature_path())
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    return saved_signature_path()
+
+
+def staging_dir_firme():
+    path = os.path.join(attachments_root(), "_temp")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def stanze_foto_root():
+    """Foto e panorami delle stanze (inclusi nel backup)."""
+    path = os.path.join(attachments_root(), "stanze")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def piante_root():
+    """Foto delle piante dei piani (incluse nel backup)."""
+    path = os.path.join(attachments_root(), "piante")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def pianta_uid(edificio_uid, piano):
+    """Identificativo fisso di una pianta: telefono e PC lo costruiscono allo stesso modo."""
+    return "pi:%s:%d" % (edificio_uid, piano)
 
 
 def verbali_foto_root():
@@ -262,12 +763,20 @@ def verbale_stato_word(r):
 
 
 def verbale_firme_text(r):
+    """Chi ha firmato (col dito o con l'immagine) e chi firmerà a mano sul foglio (cartacea)."""
     try:
-        firme = json.loads(r.get("dati") or "{}").get("_firme") or {}
+        dati = json.loads(r.get("dati") or "{}")
     except ValueError:
-        firme = {}
-    nomi = [label for k, label in (("utente", "utente"), ("tecnico", "tecnico")) if firme.get(k)]
-    return " + ".join(nomi) if nomi else ""
+        dati = {}
+    firme = dati.get("_firme") or {}
+    cart = dati.get("_cartaceo") or {}
+    nomi = []
+    for k in ("utente", "tecnico"):
+        if firme.get(k):
+            nomi.append(k)
+        elif cart.get(k):
+            nomi.append("%s (cartacea)" % k)
+    return " + ".join(nomi)
 
 
 def riassunto_verbale(tipo, d):
@@ -441,6 +950,53 @@ CREATE TABLE IF NOT EXISTS scorta (
     modificato TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (modello, colore)
 );
+
+CREATE TABLE IF NOT EXISTS stanze (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid         TEXT NOT NULL DEFAULT '',
+    edificio_id INTEGER NOT NULL REFERENCES edifici(id) ON DELETE CASCADE,
+    piano       INTEGER NOT NULL DEFAULT 0,
+    codice      TEXT NOT NULL,
+    scrivanie   INTEGER NOT NULL DEFAULT 0,
+    note        TEXT NOT NULL DEFAULT '',
+    come        TEXT NOT NULL DEFAULT '',
+    px          REAL,
+    py          REAL,
+    modificato  TEXT NOT NULL DEFAULT '',
+    eliminata   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_stanze_edificio ON stanze(edificio_id, piano);
+CREATE INDEX IF NOT EXISTS idx_stanze_uid ON stanze(uid);
+
+CREATE TABLE IF NOT EXISTS piante (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid         TEXT NOT NULL DEFAULT '',
+    edificio_id INTEGER NOT NULL REFERENCES edifici(id) ON DELETE CASCADE,
+    piano       INTEGER NOT NULL,
+    file        TEXT NOT NULL DEFAULT '',
+    modificato  TEXT NOT NULL DEFAULT '',
+    UNIQUE (edificio_id, piano)
+);
+
+CREATE TABLE IF NOT EXISTS stanze_foto (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid        TEXT NOT NULL DEFAULT '',
+    stanza_id  INTEGER NOT NULL REFERENCES stanze(id) ON DELETE CASCADE,
+    nome       TEXT NOT NULL,
+    tipo       TEXT NOT NULL DEFAULT 'foto',
+    file       TEXT NOT NULL,
+    modificato TEXT NOT NULL DEFAULT '',
+    eliminata  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_stfoto_stanza ON stanze_foto(stanza_id);
+
+CREATE TABLE IF NOT EXISTS postazioni (
+    utente_id  INTEGER PRIMARY KEY REFERENCES utenti(id) ON DELETE CASCADE,
+    stanza_id  INTEGER REFERENCES stanze(id) ON DELETE SET NULL,
+    numero     INTEGER NOT NULL DEFAULT 0,
+    modificato TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_post_stanza ON postazioni(stanza_id);
 
 CREATE TABLE IF NOT EXISTS verbali (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -618,6 +1174,14 @@ class Database:
                                             matricola, modificato or now_utc_iso(), user_id))
 
     def merge_users(self, source_id, target_id):
+        if self.posto_of_user(source_id):
+            if self.posto_of_user(target_id):
+                self.rimuovi_persona(source_id)       # il bersaglio ha già la sua postazione
+            else:
+                with self.conn:                       # la postazione passa al bersaglio
+                    self.conn.execute("DELETE FROM postazioni WHERE utente_id = ?", (target_id,))
+                    self.conn.execute("UPDATE postazioni SET utente_id = ? WHERE utente_id = ?",
+                                      (target_id, source_id))
         with self.conn:
             self.conn.execute(
                 "UPDATE interventi SET utente_id = ? WHERE utente_id = ?", (target_id, source_id)
@@ -630,6 +1194,7 @@ class Database:
         ).fetchone()[0]
         if n:
             return False
+        self.rimuovi_persona(user_id)       # libera la postazione e rinumera la stanza
         with self.conn:
             self.conn.execute("DELETE FROM utenti WHERE id = ?", (user_id,))
         return True
@@ -825,6 +1390,10 @@ class Database:
         return n_s, n_t
 
     def delete_edificio(self, eid):
+        for r in self.stanze_of(eid):
+            self.delete_stanza(r["id"])
+        for pr in self.conn.execute("SELECT piano FROM piante WHERE edificio_id=?", (eid,)).fetchall():
+            self.delete_pianta(eid, pr["piano"])
         with self.conn:
             self.conn.execute("DELETE FROM stampanti WHERE edificio_id=?", (eid,))
             self.conn.execute("DELETE FROM edifici WHERE id=?", (eid,))
@@ -839,7 +1408,21 @@ class Database:
             " AND m.stato = 'Richiesto') AS man_richieste "
             "FROM stampanti s WHERE s.edificio_id = ? ORDER BY s.piano DESC, s.id",
             (edificio_id,))
-        return [dict(r) for r in rows]
+        out = [dict(r) for r in rows]
+        # ultimo cambio di ogni colore e scorta bassa del modello (per i bollini e i "giorni fa")
+        ultimi = {}
+        for r in self.conn.execute(
+                "SELECT t.stampante_id AS sid, t.colore AS colore, MAX(t.data_ora) AS d FROM toner t "
+                "JOIN stampanti s ON s.id = t.stampante_id WHERE s.edificio_id = ? "
+                "GROUP BY t.stampante_id, t.colore", (edificio_id,)):
+            ultimi.setdefault(r["sid"], {})[r["colore"]] = r["d"]
+        scorta = [r for r in self.scorta_all() if scorta_status(r["quantita"], r["soglia"]) != "OK"]
+        for p in out:
+            p["ultimi"] = ultimi.get(p["id"], {})
+            mk = model_key(p["modello"])
+            p["scorta_bassa"] = [(r["colore"], r["quantita"]) for r in scorta
+                                 if mk and model_key(r["modello"]) == mk]
+        return out
 
     def all_printers(self):
         rows = self.conn.execute(
@@ -963,6 +1546,307 @@ class Database:
     def scorta_bassa(self):
         return [r for r in self.scorta_all()
                 if scorta_status(r["quantita"], r["soglia"]) != "OK"]
+
+    # --- piani e stanze ---
+    ROOM_COLS = ("s.id, s.uid, s.edificio_id, s.piano, s.codice, s.scrivanie, s.note, s.come, "
+                 "s.px, s.py, s.modificato, s.eliminata")
+
+    def stanze_of(self, edificio_id, piano=None):
+        """Le stanze dell'edificio (quelle eliminate non compaiono)."""
+        sql = ("SELECT " + self.ROOM_COLS + ", "
+               "(SELECT COUNT(*) FROM postazioni p WHERE p.stanza_id = s.id) AS n_persone, "
+               "(SELECT COUNT(*) FROM stanze_foto f WHERE f.stanza_id = s.id AND f.eliminata = 0) "
+               "AS n_foto FROM stanze s WHERE s.edificio_id = ? AND s.eliminata = 0")
+        params = [edificio_id]
+        if piano is not None:
+            sql += " AND s.piano = ?"
+            params.append(piano)
+        rows = [dict(r) for r in self.conn.execute(sql, params)]
+        rows.sort(key=lambda r: (-r["piano"], natural_key(r["codice"])))
+        return rows
+
+    def get_stanza(self, sid, anche_eliminata=False):
+        row = self.conn.execute(
+            "SELECT " + self.ROOM_COLS + ", e.nome AS edificio, e.uid AS edificio_uid, "
+            "(SELECT COUNT(*) FROM postazioni p WHERE p.stanza_id = s.id) AS n_persone, "
+            "(SELECT COUNT(*) FROM stanze_foto f WHERE f.stanza_id = s.id AND f.eliminata = 0) "
+            "AS n_foto FROM stanze s JOIN edifici e ON e.id = s.edificio_id WHERE s.id = ?",
+            (sid,)).fetchone()
+        if not row or (row["eliminata"] and not anche_eliminata):
+            return None
+        return dict(row)
+
+    def find_stanza_by_uid(self, uid, anche_eliminata=False):
+        row = self.conn.execute("SELECT id FROM stanze WHERE uid = ?", (uid,)).fetchone()
+        return self.get_stanza(row["id"], anche_eliminata) if row else None
+
+    def find_stanza_by_code(self, edificio_id, piano, codice):
+        row = self.conn.execute(
+            "SELECT id FROM stanze WHERE edificio_id = ? AND piano = ? AND codice = ? COLLATE NOCASE "
+            "AND eliminata = 0", (edificio_id, piano, clean_room_code(codice))).fetchone()
+        return self.get_stanza(row["id"]) if row else None
+
+    def add_stanza(self, edificio_id, piano, codice, scrivanie=0, note="", come="", px=None,
+                   py=None, uid=None, modificato=None):
+        codice = clean_room_code(codice)
+        if not codice:
+            raise ValueError("Scrivi il codice della stanza.")
+        if self.find_stanza_by_code(edificio_id, piano, codice):
+            raise ValueError("La stanza %s esiste già su questo piano." % codice)
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO stanze(uid, edificio_id, piano, codice, scrivanie, note, come, px, py, "
+                "modificato) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (uid or "ro-" + uuid.uuid4().hex, edificio_id, piano, codice,
+                 max(0, int(scrivanie or 0)), note or "", come or "", px, py,
+                 modificato or now_utc_iso()))
+        return cur.lastrowid
+
+    def add_stanze_bulk(self, edificio_id, piano, testo):
+        """Incolla più codici (uno per riga). Restituisce {"nuove", "esistenti", "scartate"}."""
+        good, bad = parse_room_codes(testo)
+        res = {"nuove": [], "esistenti": [], "scartate": bad}
+        for code in good:
+            if self.find_stanza_by_code(edificio_id, piano, code):
+                res["esistenti"].append(code)
+            else:
+                self.add_stanza(edificio_id, piano, code)
+                res["nuove"].append(code)
+        return res
+
+    def update_stanza(self, sid, codice, scrivanie, note, come, modificato=None):
+        cur = self.get_stanza(sid)
+        codice = clean_room_code(codice)
+        if not cur or not codice:
+            raise ValueError("Scrivi il codice della stanza.")
+        other = self.find_stanza_by_code(cur["edificio_id"], cur["piano"], codice)
+        if other and other["id"] != sid:
+            raise ValueError("La stanza %s esiste già su questo piano." % codice)
+        with self.conn:
+            self.conn.execute(
+                "UPDATE stanze SET codice=?, scrivanie=?, note=?, come=?, modificato=? WHERE id=?",
+                (codice, max(0, int(scrivanie or 0)), note or "", come or "",
+                 modificato or now_utc_iso(), sid))
+
+    def set_stanza_pos(self, sid, px, py, modificato=None):
+        """Posizione della stanza sulla pianta (frazioni 0..1); None, None la toglie."""
+        if px is not None:
+            px, py = min(1.0, max(0.0, float(px))), min(1.0, max(0.0, float(py)))
+        with self.conn:
+            self.conn.execute("UPDATE stanze SET px=?, py=?, modificato=? WHERE id=?",
+                              (px, py, modificato or now_utc_iso(), sid))
+
+    def delete_stanza(self, sid, modificato=None):
+        """Toglie la stanza (resta un segno "eliminata" così anche il telefono la toglie), libera
+        le sue postazioni (le persone restano negli utenti) e cancella le foto."""
+        now = modificato or now_utc_iso()
+        for f in self.foto_stanza(sid):
+            self._remove_file(os.path.join(stanze_foto_root(), *f["file"].split("/")))
+        with self.conn:
+            self.conn.execute("UPDATE stanze_foto SET eliminata = 1, modificato = ? "
+                              "WHERE stanza_id = ?", (now, sid))
+            self.conn.execute(
+                "UPDATE postazioni SET stanza_id = NULL, numero = 0, modificato = ? "
+                "WHERE stanza_id = ?", (now, sid))
+            self.conn.execute("UPDATE stanze SET eliminata = 1, modificato = ? WHERE id = ?",
+                              (now, sid))
+
+    @staticmethod
+    def _remove_file(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+    # persone e postazioni: le postazioni le gestisce il programma (1, 2, 3...), non l'utente
+    def persone_of(self, stanza_id):
+        rows = self.conn.execute(
+            "SELECT p.numero, p.modificato AS posto_modificato, u.id AS utente_id, u.nome, "
+            "u.matricola, u.telefono, u.seriale_pc, u.imei FROM postazioni p "
+            "JOIN utenti u ON u.id = p.utente_id WHERE p.stanza_id = ? "
+            "ORDER BY p.numero, u.nome COLLATE NOCASE", (stanza_id,))
+        return [dict(r) for r in rows]
+
+    def posto_of_user(self, utente_id):
+        row = self.conn.execute(
+            "SELECT p.numero, s.id AS stanza_id, s.uid AS stanza_uid, s.codice, s.piano, "
+            "e.id AS edificio_id, e.nome AS edificio FROM postazioni p "
+            "JOIN stanze s ON s.id = p.stanza_id JOIN edifici e ON e.id = s.edificio_id "
+            "WHERE p.utente_id = ?", (utente_id,)).fetchone()
+        return dict(row) if row else None
+
+    def persone_piano(self, edificio_id, piano):
+        rows = self.conn.execute(
+            "SELECT s.codice, s.id AS stanza_id, p.numero, u.id AS utente_id, u.nome, "
+            "u.telefono, u.seriale_pc, u.imei FROM postazioni p "
+            "JOIN stanze s ON s.id = p.stanza_id JOIN utenti u ON u.id = p.utente_id "
+            "WHERE s.edificio_id = ? AND s.piano = ?", (edificio_id, piano))
+        out = [dict(r) for r in rows]
+        out.sort(key=lambda r: (natural_key(r["codice"]), r["numero"], r["nome"].casefold()))
+        return out
+
+    def _renumber(self, stanza_id, now, bump=True):
+        """Postazioni di nuovo consecutive: 1, 2, 3... (senza buchi)."""
+        rows = self.conn.execute(
+            "SELECT p.utente_id, p.numero FROM postazioni p JOIN utenti u ON u.id = p.utente_id "
+            "WHERE p.stanza_id = ? ORDER BY p.numero, u.nome COLLATE NOCASE", (stanza_id,)).fetchall()
+        for i, r in enumerate(rows, 1):
+            if r["numero"] != i:
+                if bump:
+                    self.conn.execute("UPDATE postazioni SET numero = ?, modificato = ? "
+                                      "WHERE utente_id = ?", (i, now, r["utente_id"]))
+                else:
+                    self.conn.execute("UPDATE postazioni SET numero = ? WHERE utente_id = ?",
+                                      (i, r["utente_id"]))
+
+    def assegna_persona(self, utente_id, stanza_id, modificato=None):
+        """Mette la persona nella stanza, alla prima postazione libera. Se sedeva in un'altra
+        stanza la toglie da lì (e rinumera). Restituisce {"numero", "gia", "da", "sopra"}:
+        "da" = la stanza di prima (se è stata spostata), "sopra" = ora ci sono più persone che
+        scrivanie (solo se le scrivanie totali sono indicate)."""
+        now = modificato or now_utc_iso()
+        room = self.get_stanza(stanza_id)
+        if not room:
+            raise ValueError("Questa stanza non c'è più.")
+        old = self.posto_of_user(utente_id)
+        if old and old["stanza_id"] == stanza_id:
+            return {"numero": old["numero"], "gia": True, "da": None, "sopra": False}
+        with self.conn:
+            if old:
+                self.conn.execute("UPDATE postazioni SET stanza_id = NULL, numero = 0, modificato = ? "
+                                  "WHERE utente_id = ?", (now, utente_id))
+                self._renumber(old["stanza_id"], now)
+            n = self.conn.execute("SELECT COUNT(*) FROM postazioni WHERE stanza_id = ?",
+                                  (stanza_id,)).fetchone()[0] + 1
+            self.conn.execute(
+                "INSERT INTO postazioni(utente_id, stanza_id, numero, modificato) VALUES (?,?,?,?) "
+                "ON CONFLICT(utente_id) DO UPDATE SET stanza_id = excluded.stanza_id, "
+                "numero = excluded.numero, modificato = excluded.modificato",
+                (utente_id, stanza_id, n, now))
+        tot = room["scrivanie"] or 0
+        return {"numero": n, "gia": False, "da": old, "sopra": bool(tot and n > tot)}
+
+    def rimuovi_persona(self, utente_id, modificato=None):
+        """Libera la postazione (la riga resta con "nessuna stanza" così il telefono lo sa)."""
+        now = modificato or now_utc_iso()
+        old = self.posto_of_user(utente_id)
+        if not old:
+            return False
+        with self.conn:
+            self.conn.execute("UPDATE postazioni SET stanza_id = NULL, numero = 0, modificato = ? "
+                              "WHERE utente_id = ?", (now, utente_id))
+            self._renumber(old["stanza_id"], now)
+        return True
+
+    def apply_stanza(self, sid, codice, scrivanie, note, come, px, py, modificato, eliminata=False):
+        """Aggiorna una stanza con i dati arrivati dall'altro dispositivo (senza toccare "adesso").
+        eliminata=True: l'altro dispositivo l'ha tolta (si liberano le postazioni e le foto)."""
+        cur = self.get_stanza(sid, anche_eliminata=True)
+        if eliminata:
+            if not cur["eliminata"]:
+                self.delete_stanza(sid, modificato)
+            return
+        codice = clean_room_code(codice) or cur["codice"]
+        other = self.find_stanza_by_code(cur["edificio_id"], cur["piano"], codice)
+        if other and other["id"] != sid:
+            codice = cur["codice"]
+        with self.conn:
+            self.conn.execute(
+                "UPDATE stanze SET codice=?, scrivanie=?, note=?, come=?, px=?, py=?, modificato=?, "
+                "eliminata=0 WHERE id=?", (codice, max(0, int(scrivanie or 0)), note or "",
+                                           come or "", px, py, modificato, sid))
+
+    def apply_posto(self, utente_id, stanza_id, numero, modificato):
+        """Postazione arrivata dall'altro dispositivo: vince la più recente. stanza_id None =
+        la persona non è in nessuna stanza. Restituisce le stanze toccate (da rinumerare)."""
+        old = self.conn.execute("SELECT stanza_id, modificato FROM postazioni WHERE utente_id = ?",
+                                (utente_id,)).fetchone()
+        if old and (old["modificato"] or "") >= modificato:
+            return None
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO postazioni(utente_id, stanza_id, numero, modificato) VALUES (?,?,?,?) "
+                "ON CONFLICT(utente_id) DO UPDATE SET stanza_id = excluded.stanza_id, "
+                "numero = excluded.numero, modificato = excluded.modificato",
+                (utente_id, stanza_id, numero if stanza_id else 0, modificato))
+        return {x for x in (old["stanza_id"] if old else None, stanza_id) if x}
+
+    def renumber_rooms(self, ids):
+        """Dopo uno scambio: postazioni di nuovo consecutive (senza cambiare le date)."""
+        with self.conn:
+            for sid in ids:
+                self._renumber(sid, now_utc_iso(), bump=False)
+
+    # foto e panorami della stanza
+    def foto_stanza(self, stanza_id):
+        rows = self.conn.execute(
+            "SELECT id, uid, nome, tipo, file, modificato FROM stanze_foto WHERE stanza_id = ? "
+            "AND eliminata = 0 ORDER BY id", (stanza_id,))
+        return [dict(r) for r in rows]
+
+    def add_foto_stanza(self, stanza_id, nome, tipo, file, uid=None, modificato=None):
+        tipo = tipo if tipo in ("foto", "panorama") else "foto"
+        now = modificato or now_utc_iso()
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO stanze_foto(uid, stanza_id, nome, tipo, file, modificato) "
+                "VALUES (?,?,?,?,?,?)", (uid or "sf-" + uuid.uuid4().hex, stanza_id, nome, tipo,
+                                         file, now))
+            self.conn.execute("UPDATE stanze SET modificato = ? WHERE id = ?", (now, stanza_id))
+        return cur.lastrowid
+
+    def set_tipo_foto_stanza(self, fid, tipo):
+        if tipo in ("foto", "panorama"):
+            with self.conn:
+                self.conn.execute("UPDATE stanze_foto SET tipo = ?, modificato = ? WHERE id = ?",
+                                  (tipo, now_utc_iso(), fid))
+
+    def delete_foto_stanza(self, fid, modificato=None):
+        row = self.conn.execute("SELECT file, stanza_id FROM stanze_foto WHERE id = ?",
+                                (fid,)).fetchone()
+        if not row:
+            return
+        now = modificato or now_utc_iso()
+        self._remove_file(os.path.join(stanze_foto_root(), *row["file"].split("/")))
+        with self.conn:
+            self.conn.execute("UPDATE stanze_foto SET eliminata = 1, modificato = ? WHERE id = ?",
+                              (now, fid))
+            self.conn.execute("UPDATE stanze SET modificato = ? WHERE id = ?",
+                              (now, row["stanza_id"]))
+
+    # pianta del piano (una foto per edificio e piano)
+    def pianta_of(self, edificio_id, piano):
+        row = self.conn.execute(
+            "SELECT id, uid, edificio_id, piano, file, modificato FROM piante "
+            "WHERE edificio_id = ? AND piano = ?", (edificio_id, piano)).fetchone()
+        return dict(row) if row else None
+
+    def set_pianta(self, edificio_id, piano, file, modificato=None):
+        e = self.conn.execute("SELECT uid FROM edifici WHERE id = ?", (edificio_id,)).fetchone()
+        if not e:
+            raise ValueError("Questo edificio non c'è più.")
+        if not e["uid"]:
+            self.ensure_sync_ids()
+            e = self.conn.execute("SELECT uid FROM edifici WHERE id = ?", (edificio_id,)).fetchone()
+        old = self.pianta_of(edificio_id, piano)
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO piante(uid, edificio_id, piano, file, modificato) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(edificio_id, piano) DO UPDATE SET file = excluded.file, "
+                "modificato = excluded.modificato",
+                (pianta_uid(e["uid"], piano), edificio_id, piano, file,
+                 modificato or now_utc_iso()))
+        if old and old["file"] and old["file"] != file:
+            self._remove_file(os.path.join(piante_root(), *old["file"].split("/")))
+
+    def delete_pianta(self, edificio_id, piano):
+        old = self.pianta_of(edificio_id, piano)
+        if not old:
+            return
+        if old["file"]:
+            self._remove_file(os.path.join(piante_root(), *old["file"].split("/")))
+        with self.conn:
+            self.conn.execute("DELETE FROM piante WHERE id = ?", (old["id"],))
 
     # --- interventi del tecnico Konica sulle stampanti ---
     def manutenzioni_search(self, edificio_id=None, stampante_id=None, stato="", dal=None, al=None,
@@ -1356,7 +2240,9 @@ def import_phone_data(db, data):
            "toner_nuovi": 0, "toner_gia_presenti": 0, "toner_saltati": 0, "scorta_bassa": [],
            "manut_nuove": 0, "manut_aggiornate": 0, "manut_gia_presenti": 0, "manut_saltate": 0,
            "verbali_nuovi": 0, "verbali_aggiornati": 0, "verbali_gia_presenti": 0,
-           "verbali_saltati": 0, "verbali_foto": 0}
+           "verbali_saltati": 0, "verbali_foto": 0, "stanze_nuove": 0, "stanze_aggiornate": 0,
+           "stanze_gia_presenti": 0, "stanze_saltate": 0, "piante": 0, "stanze_foto": 0,
+           "postazioni": 0, "postazioni_saltate": 0}
 
     for u in data.get("utenti") or []:
         nome = normalize_name(_clean(u.get("nome")))
@@ -1384,6 +2270,7 @@ def import_phone_data(db, data):
     import_phone_toner(db, data.get("toner") or [], res)
     import_phone_manutenzioni(db, data.get("manutenzioni") or [], res)
     import_phone_verbali(db, data.get("verbali") or [], res)
+    import_phone_stanze(db, data, res)
     for it in data.get("interventi") or []:
         uid = _clean(it.get("uid"))
         utente = normalize_name(_clean(it.get("utente")))
@@ -1511,6 +2398,10 @@ def import_phone_verbali(db, items, res):
             if src and _write_data_url(src, os.path.join(folder, name), 3 * 1024 * 1024):
                 firme[chi] = name
                 keep.add(name)
+        cart_src = it.get("cartaceo") if isinstance(it.get("cartaceo"), dict) else {}
+        # firma a mano sul foglio: vale solo se per quel posto non c'è già una firma (l'immagine vince)
+        cartaceo = {chi: True for chi in ("tecnico", "utente")
+                    if cart_src.get(chi) is True and chi not in firme}
         for name in os.listdir(folder):          # tolgo i file che sul telefono non ci sono piu'
             if name not in keep:
                 try:
@@ -1519,6 +2410,7 @@ def import_phone_verbali(db, items, res):
                     pass
         dati["_foto"] = foto_names
         dati["_firme"] = firme
+        dati["_cartaceo"] = cartaceo
         soggetto, dettaglio = riassunto_verbale(tipo, dati)
         data_iso = (parse_date(dati.get("data", "")) or date.today()).isoformat()
         if existing:
@@ -1534,13 +2426,14 @@ def import_phone_verbali(db, items, res):
 PHONE_PHOTO_PX = 1400   # lato lungo massimo delle foto mandate al telefono
 
 
-def photo_data_url(path):
+def photo_data_url(path, px=None):
     """Foto -> testo (data URL) per il file del telefono, ridotta per non appesantirlo."""
+    px = px or PHONE_PHOTO_PX
     try:
         from PIL import Image, ImageOps
         with Image.open(path) as im:
             im = ImageOps.exif_transpose(im)
-            im.thumbnail((PHONE_PHOTO_PX, PHONE_PHOTO_PX))
+            im.thumbnail((px, px))
             buf = io.BytesIO()
             im.convert("RGB").save(buf, "JPEG", quality=78)
         return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
@@ -1603,13 +2496,306 @@ def build_phone_export(db, with_photos=False, settings=None):
                         "FROM manutenzioni m JOIN stampanti s ON s.id = m.stampante_id "
                         "ORDER BY m.id").fetchall()]
     verbali, n_foto_v = verbali_for_phone(db, with_photos)
-    return ({"tipo": "helpdesk-pc", "versione": 5, "creato": now, "utenti": users,
-             "interventi": items, "edifici": edifici, "stampanti": stampanti,
-             "toner": toner, "manutenzioni": manutenzioni, "scorta": db.scorta_all(),
-             "scorta_aggiornata": now, "verbali": verbali,
-             "impostazioni_verbali": {k: _clean((settings or {}).get(k))
-                                      for k in ("tecnico", "sede_citta", "indirizzo", "cap")}},
-            n_foto + n_foto_v)
+    piani, n_foto_s = stanze_for_phone(db, with_photos)
+    out = {"tipo": "helpdesk-pc", "versione": 7, "creato": now, "utenti": users,
+           "interventi": items, "edifici": edifici, "stampanti": stampanti,
+           "toner": toner, "manutenzioni": manutenzioni, "scorta": db.scorta_all(),
+           "scorta_aggiornata": now, "verbali": verbali,
+           "impostazioni_verbali": {k: _clean((settings or {}).get(k))
+                                    for k in ("tecnico", "sede_citta", "indirizzo", "cap")}}
+    out.update(piani)
+    return out, n_foto + n_foto_v + n_foto_s
+
+
+FOTO_STANZA_PX = 1600
+MARK_H = 24
+
+
+def _reduced_jpeg(src, dest, max_px):
+    """Legge un'immagine, la raddrizza, la riduce (lato lungo max_px) e la salva come JPEG."""
+    try:
+        from PIL import Image, ImageOps
+        with Image.open(src) as im:
+            im = ImageOps.exif_transpose(im)
+            im.thumbnail((max_px, max_px))
+            im.convert("RGB").save(dest, "JPEG", quality=85)
+    except Exception:
+        raise ValueError("Non riesco a leggere questa immagine: %s" % os.path.basename(src))
+
+
+def save_room_photo(db, stanza_id, src, tipo="foto"):
+    """Aggiunge alla stanza una foto o un panorama (ridotti: 1600 px, il panorama 2600 px)."""
+    room = db.get_stanza(stanza_id)
+    if not room:
+        raise ValueError("Questa stanza non c'è più.")
+    tipo = tipo if tipo in ("foto", "panorama") else "foto"
+    folder = os.path.join(stanze_foto_root(), room["uid"])
+    os.makedirs(folder, exist_ok=True)
+    stem = os.path.splitext(safe_photo_name(os.path.basename(src)))[0] or tipo
+    dest = unique_path(folder, stem, ".jpg")
+    _reduced_jpeg(src, dest, PANORAMA_PX if tipo == "panorama" else FOTO_STANZA_PX)
+    name = os.path.basename(dest)
+    return db.add_foto_stanza(stanza_id, name, tipo, "%s/%s" % (room["uid"], name))
+
+
+def save_plan_photo(db, edificio_id, piano, src):
+    """Salva (o sostituisce) la foto della pianta di un piano."""
+    folder = os.path.join(piante_root(), "%d_%d" % (edificio_id, piano))
+    os.makedirs(folder, exist_ok=True)
+    name = "pianta_%s.jpg" % datetime.now().strftime("%Y%m%d%H%M%S%f")
+    _reduced_jpeg(src, os.path.join(folder, name), PIANTA_PX)
+    db.set_pianta(edificio_id, piano, "%d_%d/%s" % (edificio_id, piano, name))
+
+
+def plan_image_b64(path, max_w):
+    """La foto della pianta, della larghezza giusta, come PNG in base64 per Tk: (b64, larghezza, altezza)."""
+    try:
+        from PIL import Image, ImageOps
+        with Image.open(path) as im:
+            im = ImageOps.exif_transpose(im).convert("RGB")
+            k = min(1.0, float(max_w) / im.width)
+            if k < 1.0:
+                im = im.resize((max(1, int(im.width * k)), max(1, int(im.height * k))))
+            buf = io.BytesIO()
+            im.save(buf, "PNG")
+        return base64.b64encode(buf.getvalue()).decode("ascii"), im.width, im.height
+    except Exception:
+        return None
+
+
+def marker_width(label):
+    return max(46, 8 * len(label) + 14)
+
+
+def plan_markers(rooms, width, height):
+    """I segni delle stanze sulla foto della pianta (solo quelle già segnate), con le misure in pixel."""
+    out = []
+    for r in rooms:
+        if r.get("px") is None or r.get("py") is None:
+            continue
+        label = room_label(r)
+        out.append({"id": r["id"], "label": label, "x": r["px"] * width, "y": r["py"] * height,
+                    "w": marker_width(label), "h": MARK_H, "over": room_occupancy(r)[1]})
+    return out
+
+
+def plan_hit(markers, x, y):
+    """L'id della stanza il cui segno si trova nel punto (x, y), oppure None."""
+    for m in reversed(markers):
+        if abs(x - m["x"]) <= m["w"] / 2.0 and abs(y - m["y"]) <= m["h"] / 2.0:
+            return m["id"]
+    return None
+
+
+def plan_click_fraction(x, y, width, height):
+    """Il punto cliccato sulla foto come frazione 0..1 (None se è fuori dalla foto)."""
+    if width <= 0 or height <= 0 or not (0 <= x <= width and 0 <= y <= height):
+        return None
+    return round(x / float(width), 4), round(y / float(height), 4)
+
+
+def grid_tiles(rooms, width, tile_w=120, tile_h=62, gap=10, pad=10):
+    """Lo schema del piano: una casella per stanza, in ordine, a righe. Restituisce (caselle, altezza)."""
+    per_row = max(1, int((width - 2 * pad + gap) // (tile_w + gap)))
+    tiles = []
+    for i, r in enumerate(rooms):
+        x0 = pad + (i % per_row) * (tile_w + gap)
+        y0 = pad + (i // per_row) * (tile_h + gap)
+        occ, over = room_occupancy(r)
+        tiles.append({"id": r["id"], "label": room_label(r), "occ": occ, "over": over,
+                      "x0": x0, "y0": y0, "x1": x0 + tile_w, "y1": y0 + tile_h})
+    rows = (len(rooms) + per_row - 1) // per_row
+    height = pad * 2 + rows * tile_h + max(0, rows - 1) * gap if rows else pad * 2 + 40
+    return tiles, height
+
+
+def tile_hit(tiles, x, y):
+    for t in tiles:
+        if t["x0"] <= x <= t["x1"] and t["y0"] <= y <= t["y1"]:
+            return t["id"]
+    return None
+
+
+def stanze_for_phone(db, with_photos):
+    """Stanze, piante dei piani, foto/panorami delle stanze e postazioni per il telefono.
+    Restituisce (dizionario da aggiungere al file, numero di foto)."""
+    db.ensure_sync_ids()
+    stanze, foto, piante, n_foto = [], [], [], 0
+    for e in db.conn.execute("SELECT id, uid FROM edifici ORDER BY id").fetchall():
+        for r in db.conn.execute("SELECT id FROM stanze WHERE edificio_id = ? ORDER BY id",
+                                 (e["id"],)).fetchall():
+            r = db.get_stanza(r["id"], anche_eliminata=True)
+            stanze.append({"uid": r["uid"], "edificio_uid": e["uid"], "piano": r["piano"],
+                           "codice": r["codice"], "scrivanie": r["scrivanie"], "note": r["note"],
+                           "come": r["come"], "px": r["px"], "py": r["py"],
+                           "eliminata": bool(r["eliminata"]), "modificato": r["modificato"]})
+            for f in db.conn.execute(
+                    "SELECT uid, nome, tipo, file, modificato, eliminata FROM stanze_foto "
+                    "WHERE stanza_id = ? ORDER BY id", (r["id"],)).fetchall():
+                item = {"uid": f["uid"], "stanza_uid": r["uid"], "nome": f["nome"],
+                        "tipo": f["tipo"], "data": "", "eliminata": bool(f["eliminata"]),
+                        "modificato": f["modificato"]}
+                path = os.path.join(stanze_foto_root(), *f["file"].split("/"))
+                if with_photos and not f["eliminata"] and os.path.isfile(path):
+                    data = photo_data_url(path, PANORAMA_PX if f["tipo"] == "panorama" else None)
+                    if data:
+                        item["data"] = data
+                        n_foto += 1
+                foto.append(item)
+    for r in db.conn.execute(
+            "SELECT p.uid, p.piano, p.file, p.modificato, e.uid AS edificio_uid FROM piante p "
+            "JOIN edifici e ON e.id = p.edificio_id ORDER BY p.id").fetchall():
+        item = {"uid": r["uid"], "edificio_uid": r["edificio_uid"], "piano": r["piano"],
+                "foto": "", "modificato": r["modificato"]}
+        path = os.path.join(piante_root(), *r["file"].split("/")) if r["file"] else ""
+        if with_photos and path and os.path.isfile(path):
+            data = photo_data_url(path, PIANTA_PX)
+            if data:
+                item["foto"] = data
+                n_foto += 1
+        piante.append(item)
+    postazioni = [{"utente": r["nome"], "stanza_uid": r["stanza_uid"] or "",
+                   "postazione": r["numero"], "modificato": r["modificato"]}
+                  for r in db.conn.execute(
+                      "SELECT u.nome, s.uid AS stanza_uid, p.numero, p.modificato FROM postazioni p "
+                      "JOIN utenti u ON u.id = p.utente_id LEFT JOIN stanze s ON s.id = p.stanza_id "
+                      "ORDER BY u.nome COLLATE NOCASE").fetchall()]
+    return ({"stanze": stanze, "stanze_foto": foto, "piante": piante, "postazioni": postazioni},
+            n_foto)
+
+
+def import_phone_stanze(db, data, res):
+    """Stanze, piante, foto e postazioni arrivate dal telefono. Vince la modifica più recente.
+    Se la stessa stanza (stesso edificio, piano e codice) è stata creata due volte con
+    identificativi diversi, resta una sola stanza: quella già presente."""
+    for k in ("stanze_nuove", "stanze_aggiornate", "stanze_gia_presenti", "stanze_saltate",
+              "piante", "stanze_foto", "postazioni", "postazioni_saltate"):
+        res.setdefault(k, 0)
+    ed = {r["uid"]: r["id"] for r in db.conn.execute("SELECT id, uid FROM edifici")}
+    room_of = {}                      # uid in arrivo -> id della stanza qui
+
+    def to_float(v):
+        try:
+            return None if v is None else min(1.0, max(0.0, float(v)))
+        except (TypeError, ValueError):
+            return None
+
+    for it in data.get("stanze") or []:
+        if not isinstance(it, dict):
+            continue
+        uid, eid = _clean(it.get("uid")), ed.get(_clean(it.get("edificio_uid")))
+        try:
+            piano = int(it.get("piano"))
+        except (TypeError, ValueError):
+            piano = None
+        codice = clean_room_code(_clean(it.get("codice")))
+        if not uid or eid is None or piano is None or not codice:
+            res["stanze_saltate"] += 1
+            continue
+        mod = _clean(it.get("modificato")) or now_utc_iso()
+        px, py = to_float(it.get("px")), to_float(it.get("py"))
+        if px is None or py is None:
+            px = py = None
+        try:
+            scriv = max(0, int(it.get("scrivanie") or 0))
+        except (TypeError, ValueError):
+            scriv = 0
+        gone = bool(it.get("eliminata"))
+        ex = db.find_stanza_by_uid(uid, anche_eliminata=True) or \
+            db.find_stanza_by_code(eid, piano, codice)
+        if not ex:
+            if gone:                      # eliminata altrove e qui non c'era: niente da fare
+                continue
+            room_of[uid] = db.add_stanza(eid, piano, codice, scriv, _clean(it.get("note")),
+                                         _clean(it.get("come")), px, py, uid=uid, modificato=mod)
+            res["stanze_nuove"] += 1
+        else:
+            if not ex["eliminata"]:
+                room_of[uid] = ex["id"]
+            if mod > (ex["modificato"] or ""):
+                db.apply_stanza(ex["id"], codice, scriv, _clean(it.get("note")),
+                                _clean(it.get("come")), px, py, mod, eliminata=gone)
+                res["stanze_aggiornate"] += 1
+                if gone:
+                    room_of.pop(uid, None)
+                else:
+                    room_of[uid] = ex["id"]
+            else:
+                res["stanze_gia_presenti"] += 1
+
+    def room_id(uid):
+        if uid in room_of:
+            return room_of[uid]
+        r = db.find_stanza_by_uid(uid)
+        return r["id"] if r else None
+
+    for it in data.get("piante") or []:
+        if not isinstance(it, dict):
+            continue
+        eid = ed.get(_clean(it.get("edificio_uid")))
+        try:
+            piano = int(it.get("piano"))
+        except (TypeError, ValueError):
+            continue
+        payload, mod = _clean(it.get("foto")), _clean(it.get("modificato")) or now_utc_iso()
+        cur = db.pianta_of(eid, piano) if eid is not None else None
+        if eid is None or "," not in payload or (cur and not mod > (cur["modificato"] or "")):
+            continue
+        folder = os.path.join(piante_root(), "%d_%d" % (eid, piano))
+        os.makedirs(folder, exist_ok=True)
+        name = "pianta_%s.jpg" % re.sub(r"\D", "", mod)[:17]
+        if _write_data_url(payload, os.path.join(folder, name), 25 * 1024 * 1024):
+            db.set_pianta(eid, piano, "%d_%d/%s" % (eid, piano, name), modificato=mod)
+            res["piante"] += 1
+
+    for it in data.get("stanze_foto") or []:
+        if not isinstance(it, dict):
+            continue
+        uid, payload = _clean(it.get("uid")), _clean(it.get("data"))
+        have = db.conn.execute("SELECT id, tipo, modificato, eliminata FROM stanze_foto "
+                               "WHERE uid = ?", (uid,)).fetchone() if uid else None
+        mod = _clean(it.get("modificato")) or now_utc_iso()
+        tipo = it.get("tipo") if it.get("tipo") in ("foto", "panorama") else "foto"
+        if it.get("eliminata"):
+            if have and not have["eliminata"]:
+                db.delete_foto_stanza(have["id"], mod)
+            continue
+        sid = room_id(_clean(it.get("stanza_uid")))
+        if sid is None or not uid or "," not in payload:
+            continue
+        if have:
+            if not have["eliminata"] and tipo != have["tipo"] and mod > (have["modificato"] or ""):
+                db.set_tipo_foto_stanza(have["id"], tipo)
+            continue
+        room = db.get_stanza(sid)
+        folder = os.path.join(stanze_foto_root(), room["uid"])
+        os.makedirs(folder, exist_ok=True)
+        name = os.path.basename(unique_path(folder, os.path.splitext(
+            safe_photo_name(it.get("nome")))[0], ".jpg"))
+        if _write_data_url(payload, os.path.join(folder, name), 25 * 1024 * 1024):
+            db.add_foto_stanza(sid, name, tipo, "%s/%s" % (room["uid"], name), uid=uid,
+                               modificato=mod)
+            res["stanze_foto"] += 1
+
+    touched = set()
+    for it in data.get("postazioni") or []:
+        if not isinstance(it, dict):
+            continue
+        u = db.find_user(normalize_name(_clean(it.get("utente"))))
+        suid = _clean(it.get("stanza_uid"))
+        sid = room_id(suid) if suid else None
+        if not u or (suid and sid is None):
+            res["postazioni_saltate"] += 1
+            continue
+        try:
+            numero = max(0, int(it.get("postazione") or 0))
+        except (TypeError, ValueError):
+            numero = 0
+        t = db.apply_posto(u["id"], sid, numero, _clean(it.get("modificato")) or now_utc_iso())
+        if t is not None:
+            touched |= t
+            res["postazioni"] += 1
+    db.renumber_rooms(touched)
 
 
 def verbali_for_phone(db, with_photos):
@@ -1622,7 +2808,10 @@ def verbali_for_phone(db, with_photos):
             continue
         folder = os.path.join(verbali_foto_root(), r["uid"])
         foto_names, firme_names = dati.pop("_foto", []), dati.pop("_firme", {})
+        cart_names = dati.pop("_cartaceo", {})
         item = {"uid": r["uid"], "tipo": r["tipo"], "dati": dati, "foto": [], "firme": {},
+                "cartaceo": {k: True for k, v in (cart_names or {}).items()
+                             if v and k not in (firme_names or {})},
                 "modificato": r["modificato"], "creato": r["creato"]}
         if with_photos:
             for name in foto_names:
@@ -1902,7 +3091,7 @@ class UserDialog(ModalDialog):
               ("Sede", "sede"), ("Telefono", "telefono"),
               ("Seriale del PC", "seriale_pc"), ("IMEI cellulare aziendale", "imei"))
 
-    def __init__(self, parent, user, sedi, on_save):
+    def __init__(self, parent, user, sedi, on_save, seat=None, on_room=None):
         super().__init__(parent, "Nuovo utente" if user is None else "Scheda utente")
         self.resizable(False, False)
         self.on_save = on_save
@@ -1918,14 +3107,29 @@ class UserDialog(ModalDialog):
             else:
                 w = ttk.Entry(body, textvariable=self.vars[key], width=36)
             w.grid(row=i, column=1, sticky="ew", pady=5)
+            if key in ("seriale_pc", "imei"):
+                scan_button(body, self.vars[key], "imei" if key == "imei" else "serial", entry=w).grid(
+                    row=i, column=2, sticky="w", padx=(8, 0))
             if i == 0:
                 w.focus_set()
+        nrow = len(self.FIELDS)
+        if user:
+            ttk.Label(body, text="Dove si siede").grid(row=nrow, column=0, sticky="w", pady=5,
+                                                       padx=(0, 14))
+            fr = ttk.Frame(body)
+            fr.grid(row=nrow, column=1, sticky="w", pady=5)
+            ttk.Label(fr, text=seat or "Nessuna stanza assegnata (si assegna da Stampanti › "
+                                       "Piani e stanze).").pack(side="left")
+            if seat and on_room:
+                ttk.Button(fr, text="Apri la stanza", command=lambda: (self.destroy(), on_room())
+                           ).pack(side="left", padx=(10, 0))
+            nrow += 1
         ttk.Label(body, style="Hint.TLabel", wraplength=420, justify="left",
                   text="Se cambi il nome con quello di un altro utente già in lista, i due "
-                       "utenti vengono uniti.").grid(row=len(self.FIELDS), column=0,
+                       "utenti vengono uniti.").grid(row=nrow, column=0,
                                                      columnspan=2, sticky="w", pady=(8, 0))
         btns = ttk.Frame(body)
-        btns.grid(row=len(self.FIELDS) + 1, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        btns.grid(row=nrow + 1, column=0, columnspan=2, sticky="e", pady=(14, 0))
         ttk.Button(btns, text="Annulla", command=self.destroy).pack(side="right")
         ttk.Button(btns, text="Salva", style="Save.TButton", command=self.save).pack(
             side="right", padx=(0, 8))
@@ -2157,6 +3361,18 @@ class PrinterDialog(ModalDialog):
             lines.append("IP: %s" % p["ip"])
         if p["note"]:
             lines.append("Note: %s" % p["note"])
+        ultimi = {r["colore"]: r["data_ora"] for r in reversed(self.app.db.toner_of(self.printer_id))}
+        lines.append("Ultimo cambio:")
+        for colore in TONER_NOMI:
+            quando = ultimi.get(colore)
+            lines.append("   %s: %s%s" % (colore, ago_long(days_ago(quando)),
+                                          " (%s)" % fmt_dt(quando) if quando else ""))
+        bassa = [(r["colore"], r["quantita"]) for r in self.app.db.scorta_all()
+                 if model_key(r["modello"]) == model_key(p["modello"])
+                 and scorta_status(r["quantita"], r["soglia"]) != "OK"]
+        if bassa and p["modello"]:
+            lines.append("ATTENZIONE, scorta in esaurimento: %s" % ", ".join(
+                "%s (ne restano %d)" % (col, q) for col, q in bassa))
         man = self.app.db.manutenzioni_of(self.printer_id)
         if man:
             richieste = sum(1 for m in man if m["stato"] == "Richiesto")
@@ -2597,6 +3813,786 @@ class PasteDialog(ModalDialog):
         self.destroy()
 
 
+class RoomNewDialog(ModalDialog):
+    """Una nuova stanza: codice (anche con lettere, per esempio T12) e scrivanie totali (facoltative)."""
+
+    def __init__(self, parent, titolo, on_ok):
+        super().__init__(parent, "Nuova stanza")
+        self.resizable(False, False)
+        self.on_ok = on_ok
+        body = ttk.Frame(self, padding=16)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=titolo, style="Hint.TLabel").grid(row=0, column=0, columnspan=2,
+                                                                sticky="w", pady=(0, 8))
+        ttk.Label(body, text="Codice della stanza *").grid(row=1, column=0, sticky="w", pady=5,
+                                                           padx=(0, 14))
+        self.v_cod = tk.StringVar()
+        e = ttk.Entry(body, textvariable=self.v_cod, width=20)
+        e.grid(row=1, column=1, sticky="w", pady=5)
+        e.focus_set()
+        ttk.Label(body, text="Scrivanie totali (facoltativo)").grid(row=2, column=0, sticky="w",
+                                                                    pady=5, padx=(0, 14))
+        self.v_scr = tk.StringVar()
+        ttk.Entry(body, textvariable=self.v_scr, width=8).grid(row=2, column=1, sticky="w", pady=5)
+        ttk.Label(body, style="Hint.TLabel", wraplength=360, justify="left",
+                  text="Le postazioni (Postazione 1, 2, 3...) le numera il programma da solo "
+                       "quando aggiungi le persone.").grid(row=3, column=0, columnspan=2,
+                                                          sticky="w", pady=(6, 0))
+        btns = ttk.Frame(body)
+        btns.grid(row=4, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        ttk.Button(btns, text="Annulla", command=self.destroy).pack(side="right")
+        ttk.Button(btns, text="Crea la stanza", style="Save.TButton", command=self.save).pack(
+            side="right", padx=(0, 8))
+        self.bind("<Return>", lambda e: self.save())
+
+    def save(self):
+        if self.on_ok(self.v_cod.get(), self.v_scr.get()):
+            self.destroy()
+
+
+class RoomDialog(ModalDialog):
+    """Scheda di una stanza: codice, scrivanie, come arrivarci, chi siede dove, foto e panorami."""
+
+    def __init__(self, app, room_id):
+        super().__init__(app, "Stanza", "900x800")
+        self.minsize(820, 680)
+        self.app = app
+        self.room_id = room_id
+        room = app.db.get_stanza(room_id)
+        self.v_codice = tk.StringVar(value=room["codice"])
+        self.v_scriv = tk.StringVar(value=str(room["scrivanie"]) if room["scrivanie"] else "")
+        self.v_persona = tk.StringVar()
+        body = ttk.Frame(self, padding=14)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(1, weight=1)
+        self.lbl_head = ttk.Label(body, style="Hint.TLabel")
+        self.lbl_head.grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(body, text="Codice stanza *").grid(row=1, column=0, sticky="w", pady=4, padx=(0, 12))
+        ttk.Entry(body, textvariable=self.v_codice, width=18).grid(row=1, column=1, sticky="w", pady=4)
+        ttk.Label(body, text="Scrivanie totali").grid(row=2, column=0, sticky="w", pady=4, padx=(0, 12))
+        fr = ttk.Frame(body)
+        fr.grid(row=2, column=1, sticky="w", pady=4)
+        ttk.Entry(fr, textvariable=self.v_scriv, width=8).pack(side="left")
+        ttk.Label(fr, text="  (facoltativo: se lo indichi vedi «occupate 2/3» e ti avviso quando "
+                           "sono troppe)", style="Hint.TLabel").pack(side="left")
+        ttk.Label(body, text="Come arrivarci").grid(row=3, column=0, sticky="nw", pady=4, padx=(0, 12))
+        self.txt_come = make_text(body, 3)
+        self.txt_come.grid(row=3, column=1, sticky="ew", pady=4)
+        self.txt_come.insert("1.0", room["come"])
+        ttk.Label(body, text="Note").grid(row=4, column=0, sticky="nw", pady=4, padx=(0, 12))
+        self.txt_note = make_text(body, 3)
+        self.txt_note.grid(row=4, column=1, sticky="ew", pady=4)
+        self.txt_note.insert("1.0", room["note"])
+        ttk.Button(body, text="Salva la stanza", style="Save.TButton", command=self.save).grid(
+            row=5, column=1, sticky="w", pady=(2, 8))
+
+        ttk.Label(body, text="Chi siede qui", font=("Segoe UI", 10, "bold")).grid(
+            row=6, column=0, sticky="w", pady=(6, 2))
+        self.lbl_occ = ttk.Label(body, style="Hint.TLabel")
+        self.lbl_occ.grid(row=6, column=1, sticky="w", pady=(6, 2))
+        self.tree_p = ttk.Treeview(body, columns=("posto", "nome", "tel", "pc", "imei"),
+                                   show="headings", height=5, selectmode="browse")
+        for col, text, w in (("posto", "Postazione", 100), ("nome", "Persona", 200),
+                             ("tel", "Telefono", 110), ("pc", "Seriale PC", 150),
+                             ("imei", "IMEI", 150)):
+            self.tree_p.heading(col, text=text)
+            self.tree_p.column(col, width=w, anchor="w")
+        self.tree_p.grid(row=7, column=0, columnspan=2, sticky="ew")
+        pr = ttk.Frame(body)
+        pr.grid(row=8, column=0, columnspan=2, sticky="w", pady=(6, 8))
+        self.cb_persona = ttk.Combobox(pr, textvariable=self.v_persona, width=34,
+                                       values=app.users_cache)
+        self.cb_persona.pack(side="left")
+        bind_autocomplete(self.cb_persona, self.v_persona, lambda: app.users_cache)
+        ttk.Button(pr, text="Aggiungi persona", style="Save.TButton",
+                   command=self.add_person).pack(side="left", padx=(8, 0))
+        ttk.Button(pr, text="Togli dalla stanza", command=self.remove_person).pack(
+            side="left", padx=(8, 0))
+
+        ttk.Label(body, text="Foto e panorami", font=("Segoe UI", 10, "bold")).grid(
+            row=9, column=0, columnspan=2, sticky="w", pady=(6, 2))
+        self.tree_f = ttk.Treeview(body, columns=("nome", "tipo"), show="headings", height=4,
+                                   selectmode="browse")
+        self.tree_f.heading("nome", text="File")
+        self.tree_f.heading("tipo", text="Tipo")
+        self.tree_f.column("nome", width=420, anchor="w")
+        self.tree_f.column("tipo", width=110, anchor="w")
+        self.tree_f.grid(row=10, column=0, columnspan=2, sticky="ew")
+        self.tree_f.bind("<Double-1>", lambda e: self.open_photo())
+        fb = ttk.Frame(body)
+        fb.grid(row=11, column=0, columnspan=2, sticky="w", pady=(6, 8))
+        ttk.Button(fb, text="Aggiungi foto…", command=lambda: self.add_photos("foto")).pack(
+            side="left")
+        ttk.Button(fb, text="Aggiungi panorama…",
+                   command=lambda: self.add_photos("panorama")).pack(side="left", padx=(8, 0))
+        ttk.Button(fb, text="Apri", command=self.open_photo).pack(side="left", padx=(8, 0))
+        ttk.Button(fb, text="Cambia tipo (foto / panorama)", command=self.toggle_tipo).pack(
+            side="left", padx=(8, 0))
+        ttk.Button(fb, text="Togli", style="Danger.TButton", command=self.del_photo).pack(
+            side="left", padx=(8, 0))
+        ttk.Label(body, style="Hint.TLabel", wraplength=800, justify="left",
+                  text="Le foto vengono ridotte (1600 px, i panorami 2600 px) per tenere leggero "
+                       "il file di scambio col telefono. I video restano solo sul telefono.").grid(
+            row=12, column=0, columnspan=2, sticky="w")
+
+        ttk.Label(body, text="Posizione sulla pianta", font=("Segoe UI", 10, "bold")).grid(
+            row=13, column=0, columnspan=2, sticky="w", pady=(8, 2))
+        pf = ttk.Frame(body)
+        pf.grid(row=14, column=0, columnspan=2, sticky="w")
+        self.lbl_pos = ttk.Label(pf)
+        self.lbl_pos.pack(side="left")
+        ttk.Button(pf, text="Segna sulla pianta", command=self.mark_on_plan).pack(
+            side="left", padx=(10, 0))
+        bt = ttk.Frame(body)
+        bt.grid(row=15, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+        ttk.Button(bt, text="Elimina la stanza", style="Danger.TButton",
+                   command=self.delete_room).pack(side="left")
+        ttk.Button(bt, text="Chiudi", command=self.destroy).pack(side="right")
+        self.refresh()
+
+    def room(self):
+        return self.app.db.get_stanza(self.room_id)
+
+    def refresh(self):
+        room = self.room()
+        if not room:
+            self.destroy()
+            return
+        db = self.app.db
+        self.lbl_head.configure(text="%s · %s" % (room["edificio"], floor_label(room["piano"])))
+        occ, over = room_occupancy(room)
+        self.lbl_occ.configure(text=occ or "scrivanie totali non indicate",
+                               foreground=RED if over else GREY)
+        self.tree_p.delete(*self.tree_p.get_children())
+        for p in db.persone_of(self.room_id):
+            self.tree_p.insert("", "end", iid=str(p["utente_id"]),
+                               values=("Postazione %d" % p["numero"], p["nome"], p["telefono"],
+                                       p["seriale_pc"], p["imei"]))
+        self.tree_f.delete(*self.tree_f.get_children())
+        for f in db.foto_stanza(self.room_id):
+            self.tree_f.insert("", "end", iid=str(f["id"]),
+                               values=(f["nome"], "Panorama" if f["tipo"] == "panorama" else "Foto"))
+        self.lbl_pos.configure(text="Segnata sulla pianta." if room["px"] is not None
+                               else "Non ancora segnata sulla pianta.")
+
+    def save(self):
+        txt = self.v_scriv.get().strip()
+        if txt and not txt.isdigit():
+            messagebox.showwarning(APP_NAME, "Le scrivanie totali devono essere un numero (oppure "
+                                             "lascia vuoto).", parent=self)
+            return False
+        try:
+            self.app.db.update_stanza(self.room_id, self.v_codice.get(), int(txt or 0),
+                                      self.txt_note.get("1.0", "end").strip(),
+                                      self.txt_come.get("1.0", "end").strip())
+        except ValueError as e:
+            messagebox.showwarning(APP_NAME, str(e), parent=self)
+            return False
+        self.app.refresh_rooms()
+        self.refresh()
+        occ, over = room_occupancy(self.room())
+        if over:
+            messagebox.showwarning(APP_NAME, "Attenzione: in questa stanza ci sono più persone "
+                                             "delle scrivanie (%s)." % occ, parent=self)
+        return True
+
+    def add_person(self):
+        nome = normalize_name(self.v_persona.get())
+        if not nome:
+            messagebox.showinfo(APP_NAME, "Scrivi o scegli il nome della persona.", parent=self)
+            return
+        db = self.app.db
+        user = db.find_user(nome)
+        if not user:
+            if not messagebox.askyesno(APP_NAME, "\"%s\" non è ancora tra gli utenti.\n"
+                                                 "Vuoi crearlo adesso?" % nome, parent=self):
+                return
+            room = self.room()
+            row = db.conn.execute("SELECT sede FROM edifici WHERE id = ?",
+                                  (room["edificio_id"],)).fetchone()
+            db.add_user(nome, row["sede"] if row else "", "", "", "", "")
+            user = db.find_user(nome)
+        self.assign_user(user["id"], user["nome"])
+
+    def assign_user(self, utente_id, nome):
+        db = self.app.db
+        room = self.room()
+        old = db.posto_of_user(utente_id)
+        if old and old["stanza_id"] != self.room_id:
+            if not messagebox.askyesno(
+                    APP_NAME, "%s siede già in %s (%s, Postazione %d).\nVuoi spostarlo in %s?"
+                              % (nome, old["codice"], floor_label(old["piano"]), old["numero"],
+                                 room["codice"]), parent=self):
+                return False
+        res = db.assegna_persona(utente_id, self.room_id)
+        self.v_persona.set("")
+        self.app.refresh_users()
+        self.refresh()
+        if res["sopra"]:
+            occ, _ = room_occupancy(self.room())
+            messagebox.showwarning(APP_NAME, "Attenzione: ora in %s ci sono più persone delle "
+                                             "scrivanie (%s)." % (room["codice"], occ), parent=self)
+        return True
+
+    def remove_person(self):
+        sel = self.tree_p.selection()
+        if not sel:
+            messagebox.showinfo(APP_NAME, "Seleziona prima una persona dall'elenco.", parent=self)
+            return
+        self.app.db.rimuovi_persona(int(sel[0]))
+        self.app.refresh_users()
+        self.refresh()
+
+    def add_photos(self, tipo):
+        paths = filedialog.askopenfilenames(
+            parent=self, title="Scegli i panorami" if tipo == "panorama" else "Scegli le foto",
+            filetypes=[("Immagini", "*.jpg *.jpeg *.png *.bmp *.webp"), ("Tutti i file", "*.*")])
+        bad = []
+        for path in paths or ():
+            try:
+                save_room_photo(self.app.db, self.room_id, path, tipo)
+            except ValueError as e:
+                bad.append(str(e))
+        self.refresh()
+        self.app.refresh_rooms()
+        if bad:
+            messagebox.showwarning(APP_NAME, "\n".join(bad), parent=self)
+
+    def selected_photo(self):
+        sel = self.tree_f.selection()
+        if not sel:
+            messagebox.showinfo(APP_NAME, "Seleziona prima una foto dall'elenco.", parent=self)
+            return None
+        return next((f for f in self.app.db.foto_stanza(self.room_id) if str(f["id"]) == sel[0]),
+                    None)
+
+    def open_photo(self):
+        f = self.selected_photo()
+        if f:
+            try:
+                os.startfile(os.path.join(stanze_foto_root(), *f["file"].split("/")))  # solo Windows
+            except Exception:
+                messagebox.showinfo(APP_NAME, "Non riesco ad aprire la foto da qui.", parent=self)
+
+    def toggle_tipo(self):
+        f = self.selected_photo()
+        if f:
+            self.app.db.set_tipo_foto_stanza(f["id"], "foto" if f["tipo"] == "panorama"
+                                             else "panorama")
+            self.refresh()
+
+    def del_photo(self):
+        f = self.selected_photo()
+        if f and messagebox.askyesno(APP_NAME, "Togliere questa foto dalla stanza?", parent=self):
+            self.app.db.delete_foto_stanza(f["id"])
+            self.refresh()
+            self.app.refresh_rooms()
+
+    def mark_on_plan(self):
+        rid = self.room_id
+        self.destroy()
+        self.app.start_marking(rid)
+
+    def delete_room(self):
+        room = self.room()
+        n = room["n_persone"]
+        msg = "Eliminare la stanza %s?" % room["codice"]
+        if n:
+            msg += "\nLe %d persone assegnate restano tra gli utenti ma senza stanza." % n
+        msg += "\nLe foto della stanza vengono tolte."
+        if messagebox.askyesno(APP_NAME, msg, icon="warning", parent=self):
+            self.app.db.delete_stanza(self.room_id)
+            self.app.refresh_users()
+            self.app.refresh_rooms()
+            self.destroy()
+
+
+class MapDialog(ModalDialog):
+    """Mappa della Toscana: dove sono le sedi e quanti interventi hanno (contorno semplificato)."""
+    FS = 24.0
+    SEA, LAND, LAND_LINE, OFF = "#dfeaf5", "#f4efe0", "#7a8a6a", "#8a99ab"
+
+    def __init__(self, app):
+        super().__init__(app, "Mappa della Toscana")
+        self.app = app
+        self.scale = max(0.4, min(0.7, (self.winfo_screenheight() - 170) / TOSC_H))
+        self.geometry("%dx%d" % (int(TOSC_W * self.scale) + 600, int(TOSC_H * self.scale) + 50))
+        self.overrides = load_map_pos(app.settings)
+        self.var_per = tk.StringVar(value=TOSC_PERIODI[0][1])
+        self.sel_keys, self.placing = set(), None
+        self.recs, self.senza, self.pins, self.scene = [], {}, [], None
+        body = ttk.Frame(self, padding=10)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+        self.canvas = tk.Canvas(body, bg=self.SEA, highlightthickness=1, highlightbackground=BORDER,
+                                width=int(TOSC_W * self.scale), height=int(TOSC_H * self.scale))
+        self.canvas.grid(row=0, column=0, sticky="n")
+        self.canvas.bind("<Button-1>", self.on_click)
+        right = ttk.Frame(body)
+        right.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(2, weight=1)
+        top = ttk.Frame(right)
+        top.grid(row=0, column=0, sticky="ew")
+        ttk.Label(top, text="Interventi:").pack(side="left")
+        cb = ttk.Combobox(top, textvariable=self.var_per, state="readonly", width=18,
+                          values=[lab for _, lab in TOSC_PERIODI])
+        cb.pack(side="left", padx=(6, 0))
+        cb.bind("<<ComboboxSelected>>", lambda e: self.reload())
+        self.lbl_info = ttk.Label(right, style="Hint.TLabel", wraplength=520, justify="left")
+        self.lbl_info.grid(row=1, column=0, sticky="w", pady=(8, 6))
+        tf = ttk.Frame(right)
+        tf.grid(row=2, column=0, sticky="nsew")
+        tf.columnconfigure(0, weight=1)
+        tf.rowconfigure(0, weight=1)
+        cols = ("sede", "interventi", "segui", "utenti", "stampanti", "dove")
+        self.tree = ttk.Treeview(tf, columns=cols, show="headings", selectmode="browse")
+        for c, t, w, a in (("sede", "Sede", 150, "w"), ("interventi", "Interventi", 70, "center"),
+                           ("segui", "Da seguire", 75, "center"), ("utenti", "Utenti", 55, "center"),
+                           ("stampanti", "Stampanti", 70, "center"), ("dove", "Posizione", 110, "w")):
+            self.tree.heading(c, text=t)
+            self.tree.column(c, width=w, anchor=a, stretch=(c == "sede"))
+        self.tree.tag_configure("rosso", foreground=RED)
+        self.tree.tag_configure("nopos", foreground="#7a8794")
+        sb = ttk.Scrollbar(tf, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=sb.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+        self.tree.bind("<<TreeviewSelect>>", self.on_tree)
+        self.tree.bind("<Double-1>", lambda e: self.show_in_registry(False))
+        bt = ttk.Frame(right)
+        bt.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(bt, text="Mostra gli interventi", style="Primary.TButton",
+                   command=lambda: self.show_in_registry(False)).pack(side="left")
+        ttk.Button(bt, text="Solo quelli da seguire",
+                   command=lambda: self.show_in_registry(True)).pack(side="left", padx=(8, 0))
+        bt2 = ttk.Frame(right)
+        bt2.grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        ttk.Button(bt2, text="Posiziona sulla mappa", command=self.start_place).pack(side="left")
+        ttk.Button(bt2, text="Togli la posizione scelta", command=self.clear_place).pack(
+            side="left", padx=(8, 0))
+        ttk.Button(bt2, text="Chiudi", command=self.destroy).pack(side="right")
+        ttk.Label(right, style="Hint.TLabel", wraplength=520, justify="left",
+                  text="Le sedi si riconoscono dal nome (Firenze, Pisa, «Sede di Siena»...). Se una "
+                       "sede non ha la posizione, sceglila nell'elenco, premi «Posiziona sulla "
+                       "mappa» e clicca il punto giusto. Il contorno della Toscana è semplificato."
+                  ).grid(row=5, column=0, sticky="w", pady=(8, 0))
+        self.reload()
+
+    def period_kind(self):
+        lab = self.var_per.get()
+        return next((k for k, t in TOSC_PERIODI if t == lab), "tutto")
+
+    def reload(self):
+        res = tosc_records(self.app.db, self.period_kind(), self.overrides)
+        self.recs, self.senza = res["sedi"], res["senza_sede"]
+        self.pins = tosc_pins(self.recs)
+        self.tree.delete(*self.tree.get_children())
+        for r in self.recs:
+            dove = "scelta da te" if r["via"] == "manuale" else (r["via"] or "non posizionata")
+            tags = (("rosso",) if r["da_seguire"] else ()) + (() if r["lat"] is not None else ("nopos",))
+            self.tree.insert("", "end", iid=r["key"], tags=tags,
+                             values=(r["nome"], r["interventi"], r["da_seguire"], r["utenti"],
+                                     r["stampanti"], dove))
+        self.sel_keys = {k for k in self.sel_keys if any(r["key"] == k for r in self.recs)}
+        self.draw()
+        self.show_info()
+
+    def draw(self):
+        c = self.canvas
+        c.delete("all")
+        sc = self.scene = tosc_scene(self.pins, self.scale, self.FS)
+        c.create_rectangle(0, 0, sc["w"], sc["h"], fill=self.SEA, outline="")
+        c.create_polygon(*sc["land"], fill=self.LAND, outline=self.LAND_LINE)
+        for isl in sc["islands"]:
+            c.create_polygon(*isl, fill=self.LAND, outline=self.LAND_LINE)
+        size = max(8, int(round(self.FS * self.scale * 0.72)))
+        for p in sc["pins"]:
+            sel = any(k in self.sel_keys for k in p["sedi"])
+            cx, cy, r = p["cx"], p["cy"], p["r"]
+            c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=NAVY if p["n"] else self.OFF,
+                          outline="#ffc20e" if sel else WHITE, width=4 if sel else 2)
+            if p["n"]:
+                c.create_text(cx, cy, text=str(p["n"]), fill=WHITE, font=("Segoe UI", size, "bold"))
+            if p["rosso"]:
+                b = 8 * self.scale + 3
+                bx, by = cx + r * 0.85, cy - r * 0.85
+                c.create_oval(bx - b, by - b, bx + b, by + b, fill=RED, outline=WHITE, width=2)
+            anchor = {"middle": "s", "start": "sw", "end": "se"}[p["anchor"]]
+            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                c.create_text(p["lx"] + dx, p["ly"] + dy, text=p["label"], anchor=anchor,
+                              fill=WHITE, font=("Segoe UI", size, "bold"))
+            c.create_text(p["lx"], p["ly"], text=p["label"], anchor=anchor, fill=TEXT,
+                          font=("Segoe UI", size, "bold"))
+
+    def selected_rec(self):
+        return next((r for r in self.recs if r["key"] in self.sel_keys), None)
+
+    def show_info(self):
+        r = self.selected_rec()
+        if self.placing:
+            nome = next((x["nome"] for x in self.recs if x["key"] == self.placing), "")
+            txt = "Clicca sulla mappa il punto dove si trova «%s»." % nome
+        elif r:
+            txt = ("%s: %d interventi nel periodo, %d da seguire (di qualsiasi data), %d utenti, "
+                   "%d stampanti. Posizione: %s." % (
+                       r["nome"], r["interventi"], r["da_seguire"], r["utenti"], r["stampanti"],
+                       "scelta da te" if r["via"] == "manuale" else (r["via"] or "non indicata")))
+        else:
+            txt = ("Clicca su un pallino o scegli una sede nell'elenco. Il numero è quello degli "
+                   "interventi nel periodo; il pallino rosso dice quanti sono ancora da seguire "
+                   "(aperti o in attesa, di qualsiasi data).")
+        if self.senza.get("interventi") or self.senza.get("da_seguire"):
+            txt += "\nSenza sede indicata: %d interventi (%d da seguire)." % (
+                self.senza["interventi"], self.senza["da_seguire"])
+        self.lbl_info.configure(text=txt)
+
+    def on_tree(self, _e=None):
+        sel = self.tree.selection()
+        self.sel_keys = {sel[0]} if sel else set()
+        self.draw()
+        self.show_info()
+
+    def on_click(self, event):
+        if self.placing:
+            lat, lon = tosc_unproject(event.x / self.scale, event.y / self.scale)
+            if not (41.9 < lat < 44.7 and 9.5 < lon < 12.6):
+                messagebox.showinfo("Mappa della Toscana", "Clicca dentro la mappa.", parent=self)
+                return
+            self.overrides[self.placing] = (round(lat, 4), round(lon, 4))
+            key, self.placing = self.placing, None
+            self.canvas.configure(cursor="")
+            self.save_overrides()
+            self.sel_keys = {key}
+            self.reload()
+            if self.tree.exists(key):
+                self.tree.selection_set(key)
+            return
+        i = tosc_pin_at(self.pins, event.x, event.y, self.scale)
+        if i is None:
+            return
+        keys = self.pins[i]["sedi"]
+        cur = self.selected_rec()
+        # se il pallino ha più sedi, un altro clic passa alla successiva
+        if cur and cur["key"] in keys and len(keys) > 1:
+            key = keys[(keys.index(cur["key"]) + 1) % len(keys)]
+        else:
+            key = keys[0]
+        self.sel_keys = {key}
+        self.tree.selection_set(key)
+        self.tree.see(key)
+        self.draw()
+        self.show_info()
+
+    def save_overrides(self):
+        self.app.settings["mappa_pos"] = dump_map_pos(self.overrides)
+        if not save_settings(self.app.settings):
+            messagebox.showwarning("Mappa della Toscana",
+                                   "Non sono riuscito a salvare la posizione.", parent=self)
+
+    def start_place(self):
+        r = self.selected_rec()
+        if not r:
+            messagebox.showinfo("Mappa della Toscana", "Scegli prima una sede nell'elenco.",
+                                parent=self)
+            return
+        self.placing = r["key"]
+        self.canvas.configure(cursor="crosshair")
+        self.show_info()
+
+    def clear_place(self):
+        r = self.selected_rec()
+        if not r or r["key"] not in self.overrides:
+            messagebox.showinfo("Mappa della Toscana",
+                                "Questa sede non ha una posizione scelta da te.", parent=self)
+            return
+        del self.overrides[r["key"]]
+        self.placing = None
+        self.save_overrides()
+        self.reload()
+
+    def show_in_registry(self, only_open):
+        r = self.selected_rec()
+        if not r:
+            messagebox.showinfo("Mappa della Toscana", "Scegli prima una sede.", parent=self)
+            return
+        self.app.show_sede_in_registry(r["nome"], "tutto" if only_open else self.period_kind(),
+                                       only_open)
+        self.destroy()
+
+
+class ScanDialog(ModalDialog):
+    """Legge un codice a barre (Code 128, Code 39) o un QR con la webcam. Se la webcam non c'è o non va:
+    una foto scelta da file, un'immagine copiata negli appunti, oppure si scrive a mano.
+    kind: "serial" (qualunque codice di almeno 4 caratteri), "imei" (solo un IMEI valido) o "any".
+    multi: la webcam resta accesa e ogni codice nuovo viene passato a on_code (lettura a catena)."""
+    W = 640
+
+    def __init__(self, parent, kind="serial", multi=False, title="Leggi il codice", on_code=None,
+                 on_manual=None, source=0):
+        super().__init__(parent, title)
+        self.resizable(False, False)
+        self.bind("<Escape>", lambda e: self.close())
+        self.protocol("WM_DELETE_WINDOW", self.close)
+        self.kind, self.multi, self.on_code, self.on_manual = kind, multi, on_code, on_manual
+        self.source = source
+        self.alive = True
+        self.gen = 0
+        self.lock = threading.Lock()
+        self.frame, self.frame_no, self.shown_no = None, 0, 0
+        self.events = queue.Queue()
+        self.count = 0
+        self.codes = []
+        self._img = None
+        self.var_msg = tk.StringVar()
+        self.var_list = tk.StringVar()
+        body = ttk.Frame(self, padding=12)
+        body.pack(fill="both", expand=True)
+        self.lbl_img = tk.Label(body, bg="#111111", fg="white", text="Avvio la fotocamera…",
+                                width=80, height=18)
+        self.lbl_img.pack()
+        self.lbl_msg = ttk.Label(body, textvariable=self.var_msg, wraplength=self.W, justify="left")
+        self.lbl_msg.pack(fill="x", pady=(8, 0))
+        self.lbl_list = ttk.Label(body, textvariable=self.var_list, style="Hint.TLabel",
+                                  wraplength=self.W, justify="left")
+        self.lbl_list.pack(fill="x", pady=(4, 0))
+        row = ttk.Frame(body)
+        row.pack(fill="x", pady=(10, 0))
+        ttk.Button(row, text="Scegli una foto…", command=self.choose_photo).pack(side="left")
+        ttk.Button(row, text="Incolla immagine", command=self.paste_photo).pack(side="left", padx=(8, 0))
+        if isinstance(source, int):
+            ttk.Button(row, text="Altra fotocamera", command=self.next_camera).pack(side="left", padx=(8, 0))
+        self.btn_close = ttk.Button(row, text="Chiudi", command=self.close)
+        self.btn_close.pack(side="right")
+        ttk.Button(row, text="Scrivi a mano", command=self.manual).pack(side="right", padx=(0, 8))
+        self.say("Avvio la fotocamera…")
+        if CD is None or not CD.disponibile():
+            self.say("In questa versione del programma la lettura dei codici non è disponibile. "
+                     "Scrivi il codice a mano.", "err")
+        else:
+            self.start_camera()
+        self.after(50, self.poll)
+
+    # ----- messaggi -----
+    def say(self, text, level=""):
+        self.var_msg.set(text)
+        try:
+            self.lbl_msg.configure(foreground=RED if level == "err" else GREEN_DARK if level == "ok" else TEXT)
+        except tk.TclError:
+            pass
+
+    def prompt(self):
+        return ("Inquadra il codice a barre dell'IMEI (15 cifre)." if self.kind == "imei"
+                else "Inquadra il codice a barre o il QR e tienilo fermo dentro il riquadro.")
+
+    # ----- fotocamera (in due thread: uno prende i fotogrammi, uno li legge) -----
+    def start_camera(self):
+        self.gen += 1
+        threading.Thread(target=self._capture, args=(self.source, self.gen), daemon=True).start()
+
+    def _capture(self, source, gen):
+        cam = None
+        try:
+            cam = CD.Camera(source)
+            self.events.put((gen, "info", self.prompt()))
+            threading.Thread(target=self._decode, args=(gen,), daemon=True).start()
+            fails = 0
+            while self.alive and self.gen == gen:
+                fr = cam.read()
+                if fr is None:
+                    fails += 1
+                    if fails > 40:
+                        self.events.put((gen, "err", "La fotocamera non manda immagini: forse la sta usando un altro "
+                                                     "programma, o Windows non le permette di usarla. "
+                                                     "Scegli una foto oppure scrivi a mano."))
+                        break
+                    time.sleep(0.05)
+                    continue
+                fails = 0
+                with self.lock:
+                    self.frame, self.frame_no = fr, self.frame_no + 1
+                time.sleep(1 / 30 if isinstance(source, str) else 0.004)
+        except Exception as e:
+            self.events.put((gen, "err", (str(e) or "La fotocamera non parte.") +
+                             " Scegli una foto oppure scrivi a mano."))
+        finally:
+            if cam is not None:
+                cam.close()
+
+    def _decode(self, gen):
+        rd = CD.LiveReader(self.kind, self.multi)
+        last_no, last_hint = 0, ""
+        while self.alive and self.gen == gen:
+            with self.lock:
+                fr, no = self.frame, self.frame_no
+            if fr is None or no == last_no:
+                time.sleep(0.01)
+                continue
+            last_no = no
+            try:
+                res = rd.read_frame(fr)
+            except Exception:
+                res = []
+            t = rd.feed(res)
+            if t is not None:
+                self.events.put((gen, "code", t))
+                if not self.multi:
+                    return
+            else:
+                h = rd.hint()
+                if h and h != last_hint:
+                    last_hint = h
+                    self.events.put((gen, "hint", h))
+
+    def next_camera(self):
+        if not isinstance(self.source, int):
+            return
+        self.source = (self.source + 1) % 4
+        with self.lock:
+            self.frame = None
+        self.say("Provo la fotocamera numero %d…" % (self.source + 1))
+        self.start_camera()
+
+    # ----- foto da file o dagli appunti -----
+    def choose_photo(self):
+        f = filedialog.askopenfilename(
+            parent=self, title="Scegli la foto del codice",
+            filetypes=[("Immagini", "*.jpg *.jpeg *.png *.bmp *.gif *.webp *.tif *.tiff"), ("Tutti i file", "*.*")])
+        if f:
+            self._photo_job(lambda: CD.load_image(f))
+
+    def paste_photo(self):
+        def load():
+            try:
+                from PIL import ImageGrab
+                data = ImageGrab.grabclipboard()
+            except Exception:
+                data = None
+            if isinstance(data, list):
+                data = next((CD.load_image(p) for p in data if os.path.isfile(p)
+                             and os.path.splitext(p)[1].lower() in IMG_EXTS), None)
+            return data
+        self._photo_job(load)
+
+    def _photo_job(self, loader):
+        if CD is None or not CD.disponibile():
+            self.say("La lettura dei codici non è disponibile in questa versione.", "err")
+            return
+        self.say("Cerco il codice nella foto…")
+
+        def run():
+            try:
+                im = loader()
+                if im is None:
+                    self.events.put((-1, "err", "Negli appunti non c'è nessuna immagine. Copia una foto o uno "
+                                                "screenshot e riprova."))
+                    return
+                self.events.put((-1, "photo", CD.decode_image(im, self.kind)))
+            except Exception as e:
+                self.events.put((-1, "err", "Non riesco ad aprire questa immagine: %s" % e))
+        threading.Thread(target=run, daemon=True).start()
+
+    # ----- ciclo dell'interfaccia -----
+    def poll(self):
+        if not self.alive:
+            return
+        try:
+            while self.alive:
+                gen, kind, payload = self.events.get_nowait()
+                if gen != self.gen and gen != -1:
+                    continue
+                if kind == "code":
+                    self.accept(payload)
+                elif kind == "photo":
+                    if payload:
+                        self.accept(payload["text"])
+                    else:
+                        self.say("Nella foto non trovo un IMEI valido (15 cifre). Riprova più vicino e dritto, "
+                                 "oppure scrivilo a mano." if self.kind == "imei" else
+                                 "Nella foto non trovo nessun codice. Riprova più vicino, con il codice dritto e "
+                                 "ben illuminato, oppure scrivilo a mano.", "err")
+                elif kind == "err":
+                    self.say(payload, "err")
+                else:
+                    self.say(payload)
+        except queue.Empty:
+            pass
+        if not self.alive:
+            return
+        self.draw()
+        self.after(40, self.poll)
+
+    def draw(self):
+        with self.lock:
+            fr, no = self.frame, self.frame_no
+        if fr is None or no == self.shown_no:
+            return
+        self.shown_no = no
+        try:
+            self._img = tk.PhotoImage(data=CD.preview_png_b64(fr, self.W))
+            self.lbl_img.configure(image=self._img, text="", width=self._img.width(), height=self._img.height())
+        except Exception:
+            pass
+
+    def accept(self, text):
+        try:
+            self.bell()
+        except Exception:
+            pass
+        cb = self.on_code
+        if self.multi:
+            self.count += 1
+            self.codes.insert(0, text)
+            self.var_list.set("Letti: %d · ultimo %s%s" % (self.count, text, (" · prima " + ", ".join(self.codes[1:4]))
+                                                       if len(self.codes) > 1 else ""))
+            self.btn_close.configure(text="Fine (%d)" % self.count)
+            self.say("Letto: %s. Inquadra il prossimo codice." % text, "ok")
+            if cb:
+                cb(text)
+            return
+        self.close()
+        if cb:
+            cb(text)
+
+    def manual(self):
+        f = self.on_manual
+        self.close()
+        if f:
+            f()
+
+    def close(self):
+        self.alive = False
+        self.gen += 1
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
+
+
+def scan_button(parent, var, kind="serial", multi=False, on_code=None, entry=None, kind_fn=None,
+                title=None):
+    """Il pulsante «Fotocamera…» da mettere accanto a un campo: apre ScanDialog e scrive nel campo (var).
+    kind_fn: se serve, una funzione che dice di volta in volta cosa cercare ("imei" o "serial")."""
+    def go():
+        k = kind_fn() if kind_fn else kind
+
+        def done(text):
+            var.set(text)
+            if on_code:
+                on_code(text)
+
+        def manual():
+            try:
+                entry.focus_set()
+            except Exception:
+                pass
+        ScanDialog(parent.winfo_toplevel(), kind=k, multi=multi, on_code=done, on_manual=manual,
+                   title=title or ("Leggi un codice dopo l'altro" if multi else "Leggi l'IMEI" if k == "imei"
+                                   else "Leggi il codice"))
+    return ttk.Button(parent, text="Fotocamera…", command=go)
+
+
 class VerbaliSettingsDialog(ModalDialog):
     FIELDS = (("Nome del tecnico (compare nei censimenti)", "tecnico"),
               ("Sede (città)", "sede_citta"), ("Indirizzo della sede", "indirizzo"), ("CAP", "cap"))
@@ -2617,15 +4613,147 @@ class VerbaliSettingsDialog(ModalDialog):
                   text="Questi dati si propongono da soli nei nuovi verbali di censimento. "
                        "Li puoi comunque cambiare ogni volta.").grid(
             row=len(self.FIELDS), column=0, columnspan=2, sticky="w", pady=(8, 0))
+        # immagine della firma: SOLO per il tecnico (per l'utente si firma col dito o a mano)
+        sig = ttk.LabelFrame(body, text="La mia firma (immagine del tecnico)", padding=10)
+        sig.grid(row=len(self.FIELDS) + 1, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        self.lbl_sig = ttk.Label(sig, text="", wraplength=440, justify="left")
+        self.lbl_sig.pack(anchor="w")
+        srow = ttk.Frame(sig)
+        srow.pack(anchor="w", pady=(6, 0))
+        ttk.Button(srow, text="Scegli l'immagine…", command=self.choose_signature).pack(side="left")
+        ttk.Button(srow, text="Togli la firma salvata", command=self.remove_signature).pack(
+            side="left", padx=(8, 0))
+        ttk.Label(sig, style="Hint.TLabel", wraplength=440, justify="left",
+                  text="Una foto o una scansione della tua firma su foglio bianco: ritaglio io i "
+                       "margini e tolgo il fondo. Nel verbale la scegli con «Mia firma salvata». "
+                       "Per l'utente e per le altre persone non si può caricare nessuna immagine: "
+                       "firmano col dito sul telefono o a mano sul foglio.").pack(
+            anchor="w", pady=(6, 0))
+        self._show_signature()
         btns = ttk.Frame(body)
-        btns.grid(row=len(self.FIELDS) + 1, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        btns.grid(row=len(self.FIELDS) + 2, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        ttk.Button(btns, text="Annulla", command=self.destroy).pack(side="right")
+        ttk.Button(btns, text="Salva", style="Save.TButton", command=self.save).pack(
+            side="right", padx=(0, 8))
+
+    def _show_signature(self):
+        self.lbl_sig.configure(text="Firma salvata: sì (si usa con «Mia firma salvata»)."
+                               if saved_signature() else "Nessuna firma salvata.")
+
+    def choose_signature(self):
+        path = pick_signature_image(self)
+        if path:
+            self._show_signature()
+
+    def remove_signature(self):
+        if saved_signature() and messagebox.askyesno(
+                APP_NAME, "Togliere la firma salvata dal programma?\n\nI verbali già fatti "
+                          "tengono la loro copia.", parent=self):
+            try:
+                os.remove(saved_signature_path())
+            except OSError:
+                pass
+        self._show_signature()
+
+    def save(self):
+        self.on_save({k: v.get().strip() for k, v in self.vars.items()})
+        self.destroy()
+
+
+def pick_signature_image(parent):
+    """Fa scegliere un'immagine di firma del tecnico e la salva come «la mia firma».
+    Restituisce il percorso salvato oppure None."""
+    f = filedialog.askopenfilename(
+        parent=parent, title="Scegli l'immagine della tua firma",
+        filetypes=[("Immagini", "*.jpg *.jpeg *.png *.bmp *.gif *.webp *.tif *.tiff"),
+                   ("Tutti i file", "*.*")])
+    if not f:
+        return None
+    try:
+        return save_signature_image(f)
+    except VB.VerbaleError as e:
+        messagebox.showerror(APP_NAME, str(e), parent=parent)
+    except Exception as e:
+        messagebox.showerror(APP_NAME, "Non riesco a usare questa immagine:\n%s" % e, parent=parent)
+    return None
+
+
+class FirmePanel(ttk.LabelFrame):
+    """Riquadro delle firme di un verbale: per ogni posto firma si sceglie come si firma.
+    Tecnico: nessuna / firma già presente / mia firma salvata (immagine) / a mano sul foglio.
+    Utente e ogni altra persona: nessuna / firma già presente / a mano sul foglio (MAI immagine)."""
+
+    LABELS = {"nessuna": "Nessuna firma (la riga resta da firmare)",
+              "tenuta": "Tieni la firma già presente (fatta col dito sul telefono)",
+              "salvata": "Metti la mia firma salvata (immagine)",
+              "cartaceo": "Firmerà a mano sul foglio stampato (cartaceo)"}
+
+    def __init__(self, master, tipo, esistenti, cartaceo, parent_win):
+        super().__init__(master, text="Firme", padding=10)
+        self.tipo, self.parent_win = tipo, parent_win
+        self.vars, self.radios = {}, {}
+        for chiave, etichetta, obbl in VB.FIRME_POSTI[tipo]:
+            box = ttk.Frame(self)
+            box.pack(fill="x", anchor="w", pady=(0, 8))
+            ttk.Label(box, text="%s%s" % (etichetta, "" if obbl else " (facoltativa)"),
+                      font=("Segoe UI", 10, "bold")).pack(anchor="w")
+            if chiave in esistenti:
+                start = "tenuta"
+            elif chiave in cartaceo:
+                start = "cartaceo"
+            else:
+                start = "nessuna"
+            self.vars[chiave] = tk.StringVar(value=start)
+            for modo in VB.modi_firma_ammessi(chiave):
+                if modo == "tenuta" and chiave not in esistenti:
+                    continue
+                rb = ttk.Radiobutton(box, text=self.LABELS[modo], value=modo,
+                                     variable=self.vars[chiave])
+                rb.pack(anchor="w", padx=(12, 0))
+                self.radios[(chiave, modo)] = rb
+            if chiave == "tecnico":
+                ttk.Button(box, text="Scegli l'immagine della mia firma…",
+                           command=self.choose_signature).pack(anchor="w", padx=(12, 0), pady=(4, 0))
+        self._refresh_saved()
+
+    def _refresh_saved(self):
+        rb = self.radios.get(("tecnico", "salvata"))
+        if rb is not None:
+            rb.configure(state="normal" if saved_signature() else "disabled")
+
+    def choose_signature(self):
+        if pick_signature_image(self.parent_win):
+            self._refresh_saved()
+            if "tecnico" in self.vars:
+                self.vars["tecnico"].set("salvata")
+
+    def scelte(self):
+        return {k: v.get() for k, v in self.vars.items()}
+
+
+class FirmeDialog(ModalDialog):
+    """Cambia le firme di un verbale già nell'elenco."""
+
+    def __init__(self, app, tipo, esistenti, cartaceo, on_save):
+        super().__init__(app, "Firme del verbale - " + VB.TIPI[tipo][0])
+        self.on_save = on_save
+        body = ttk.Frame(self, padding=16)
+        body.pack(fill="both", expand=True)
+        self.panel = FirmePanel(body, tipo, esistenti, cartaceo, self)
+        self.panel.pack(fill="x")
+        ttk.Label(body, style="Hint.TLabel", wraplength=520, justify="left",
+                  text="Dopo il cambio premi «Crea il Word…» per rifare il documento. Con «a mano» "
+                       "il Word ha la riga della firma vuota, con lo spazio per firmare sul foglio "
+                       "stampato.").pack(anchor="w", pady=(8, 0))
+        btns = ttk.Frame(body)
+        btns.pack(fill="x", pady=(12, 0))
         ttk.Button(btns, text="Annulla", command=self.destroy).pack(side="right")
         ttk.Button(btns, text="Salva", style="Save.TButton", command=self.save).pack(
             side="right", padx=(0, 8))
 
     def save(self):
-        self.on_save({k: v.get().strip() for k, v in self.vars.items()})
-        self.destroy()
+        if self.on_save(self.panel.scelte()) is not False:
+            self.destroy()
 
 
 class VerbaleDialog(ModalDialog):
@@ -2668,6 +4796,11 @@ class VerbaleDialog(ModalDialog):
                     default=fmt_date(date.today()))
         getattr(self, "_form_" + tipo)()
         self._photo_box()
+        self.firme_panel = FirmePanel(self.body, tipo, dict(self.ini.get("firme_esistenti") or {}),
+                                      set(self.ini.get("firme_cartaceo") or ()), self)
+        self.firme_panel.grid(row=self.row, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+        self.row += 1
+        self.firme_scelte = self.firme_panel.scelte()
 
     # ----- costruzione dei campi -----
     def _wheel_on_combo(self, event):
@@ -2692,7 +4825,7 @@ class VerbaleDialog(ModalDialog):
         self._line(label, build)
         return var
 
-    def _combo(self, label, key, values, width=42, hint="", default=""):
+    def _combo(self, label, key, values, width=42, hint="", default="", scan=None):
         var = self.v[key] = tk.StringVar(value=self.ini.get(key, default))
         holder = []
 
@@ -2702,6 +4835,9 @@ class VerbaleDialog(ModalDialog):
             cb.pack(side="left")
             cb.bind("<MouseWheel>", self._wheel_on_combo)
             holder.append(cb)
+            if scan:
+                scan_button(fr, var, "serial", entry=cb, on_code=lambda t: scan(None)).pack(
+                    side="left", padx=(6, 0))
             if hint:
                 ttk.Label(fr, text=hint, style="Hint.TLabel").pack(side="left", padx=(8, 0))
         self._line(label, build)
@@ -2925,7 +5061,7 @@ class VerbaleDialog(ModalDialog):
         self._device_row()
         self._tipologia()
         self._hcombo("Marca / Modello", "marca_modello", "marca_modello", 44)
-        _, cb = self._combo("Numero di serie", "seriale", self._serial_values(), 36)
+        _, cb = self._combo("Numero di serie", "seriale", self._serial_values(), 36, scan=self._serial_picked)
         self._on_pick(cb, self._serial_picked)
         luoghi = self.app.verbale_luoghi()
         self._hcombo("Provenienza (struttura)", "provenienza", "provenienza", 64, base=luoghi)
@@ -2940,7 +5076,7 @@ class VerbaleDialog(ModalDialog):
         self._device_row()
         self._tipologia("Tipologia dispositivo *")
         self._hcombo("Marca e modello", "marca_modello", "marca_modello", 44)
-        _, cb = self._combo("Numero seriale", "seriale", self._serial_values(), 36)
+        _, cb = self._combo("Numero seriale", "seriale", self._serial_values(), 36, scan=self._serial_picked)
         self._on_pick(cb, self._serial_picked)
         self._user_combo("Utente assegnatario *", "utente")
         self._entry("N° INC", "inc", 24, hint="il ticket dell'incidente")
@@ -3048,10 +5184,13 @@ class VerbaleDialog(ModalDialog):
                     self._on_pick(e, self._modello_picked)
             else:
                 e = ttk.Entry(add, textvariable=var, width=width)
-            e.pack(side="left", padx=(0, 10))
+            e.pack(side="left", padx=(0, 10) if var is not self.v_codice else (0, 4))
             e.bind("<Return>", lambda ev: self._add_apparato(), add="+")
             if var is self.v_codice:
                 self.e_codice = e
+                scan_button(add, var, multi=True, entry=e, on_code=lambda t: self._add_apparato(),
+                            kind_fn=lambda: "imei" if self.v["col_codice"].get().strip().upper() == "IMEI"
+                            else "serial").pack(side="left", padx=(0, 10))
         ttk.Button(add, text="Aggiungi", style="Primary.TButton",
                    command=self._add_apparato).pack(side="left")
         row2 = ttk.Frame(box)
@@ -3154,6 +5293,8 @@ class VerbaleDialog(ModalDialog):
         e = ttk.Entry(r1, textvariable=self.dv["codice"], width=22)
         e.pack(side="left")
         e.bind("<Return>", lambda ev: self._add_dot())
+        scan_button(r1, self.dv["codice"], entry=e, kind_fn=lambda: "imei" if VB.tipologia_da_dotazione(
+            self.dv["tipo"].get()) == "Smartphone" else "serial").pack(side="left", padx=(6, 0))
         r2 = ttk.Frame(box)
         r2.grid(row=2, column=0, sticky="ew", pady=(6, 0))
         ttk.Label(r2, text="Solo per la SIM:  ICCID").pack(side="left", padx=(0, 4))
@@ -3330,6 +5471,7 @@ class VerbaleDialog(ModalDialog):
                         APP_NAME, "Ci sono punti da controllare:\n\n%s%s\n\nCreo comunque il "
                                   "verbale?" % ("\n".join(avvisi[:8]), more), parent=self):
                     return
+        self.firme_scelte = self.firme_panel.scelte()      # lette da make_verbale
         if self.on_create(self.tipo, d, list(self.photos), self):
             self.destroy()
 
@@ -3434,6 +5576,7 @@ class App(tk.Tk):
         m.add_command(label="Importa dati dal telefono…", command=self.import_from_phone)
         m.add_command(label="Esporta dati per il telefono…", command=self.export_for_phone)
         m.add_separator()
+        m.add_command(label="Mappa della Toscana…", command=self.open_map)
         m.add_command(label="Dati per i verbali Word…", command=self.verbali_settings)
         m.add_command(label="Apri la cartella dei modelli Word", command=self.open_templates_folder)
         m.add_separator()
@@ -3557,14 +5700,18 @@ class App(tk.Tk):
         ttk.Label(pf, text="Telefono").grid(row=0, column=0, sticky="w")
         ttk.Entry(pf, textvariable=self.var_tel, width=18).grid(row=0, column=1, padx=(6, 18))
         ttk.Label(pf, text="Seriale PC").grid(row=0, column=2, sticky="w")
-        ttk.Entry(pf, textvariable=self.var_seriale, width=22).grid(row=0, column=3, padx=(6, 18))
-        ttk.Label(pf, text="IMEI cellulare").grid(row=0, column=4, sticky="w")
-        ttk.Entry(pf, textvariable=self.var_imei, width=22).grid(row=0, column=5, padx=(6, 18))
-        ttk.Button(pf, text="Copia dati utente", command=self.copy_user_data).grid(row=0, column=6)
+        e_ser = ttk.Entry(pf, textvariable=self.var_seriale, width=20)
+        e_ser.grid(row=0, column=3, padx=(6, 4))
+        scan_button(pf, self.var_seriale, "serial", entry=e_ser).grid(row=0, column=4, padx=(0, 14))
+        ttk.Label(pf, text="IMEI cellulare").grid(row=0, column=5, sticky="w")
+        e_imei = ttk.Entry(pf, textvariable=self.var_imei, width=20)
+        e_imei.grid(row=0, column=6, padx=(6, 4))
+        scan_button(pf, self.var_imei, "imei", entry=e_imei).grid(row=0, column=7, padx=(0, 14))
+        ttk.Button(pf, text="Copia dati utente", command=self.copy_user_data).grid(row=0, column=8)
         ttk.Label(pf, style="Hint.TLabel",
                   text="Si compilano da soli se l'utente è già in lista; quello che scrivi qui "
-                       "viene salvato con l'utente.").grid(row=1, column=0, columnspan=7,
-                                                          sticky="w", pady=(3, 0))
+                       "viene salvato con l'utente. «Fotocamera…» legge il codice a barre o il QR "
+                       "dell'etichetta.").grid(row=1, column=0, columnspan=9, sticky="w", pady=(3, 0))
 
         ttk.Label(f, text="N. ticket\n(facoltativo)").grid(row=4, column=0, sticky="nw", pady=6,
                                                            padx=(0, 14))
@@ -3986,6 +6133,7 @@ class App(tk.Tk):
                      values=FILTRO_STATO).pack(side="left", padx=(6, 14))
         ttk.Button(r3, text="Mostra solo quelli da richiamare",
                    command=lambda: self.var_f_stato.set(FILTRO_STATO[1])).pack(side="left")
+        ttk.Button(r3, text="Mappa della Toscana…", command=self.open_map).pack(side="right")
         ttk.Label(r3, style="Hint.TLabel",
                   text="Aperto / In attesa = interventi ancora da seguire o da richiamare."
                   ).pack(side="left", padx=(12, 0))
@@ -4049,6 +6197,8 @@ class App(tk.Tk):
         bf = ttk.Frame(t)
         bf.grid(row=4, column=0, sticky="ew", pady=(10, 0))
         ttk.Button(bf, text="Modifica", command=self.edit_selected).pack(side="left")
+        ttk.Button(bf, text="Duplica", command=self.duplicate_selected).pack(
+            side="left", padx=(8, 0))
         ttk.Button(bf, text="Segna come risolto", style="Save.TButton",
                    command=self.mark_resolved).pack(side="left", padx=(8, 0))
         ttk.Button(bf, text="Elimina", style="Danger.TButton",
@@ -4078,6 +6228,22 @@ class App(tk.Tk):
     def show_open_interventi(self):
         self.reset_filters()
         self.var_f_stato.set(FILTRO_STATO[1])
+        self.nb.select(self.tab_reg)
+
+    def open_map(self):
+        MapDialog(self)
+
+    def show_sede_in_registry(self, sede, periodo="tutto", solo_aperti=False):
+        """Dalla mappa al Registro: gli interventi di una sede (nel periodo, o solo quelli da seguire)."""
+        self.reset_filters()
+        self.var_f_sede.set(sede)
+        if solo_aperti:
+            self.var_f_stato.set(FILTRO_STATO[1])
+        elif periodo == "30g":
+            self.var_f_dal.set(fmt_date(date.today() - timedelta(days=29)))
+            self.var_f_al.set(fmt_date(date.today()))
+        elif periodo in ("anno", "mese"):
+            self.set_period(periodo)
         self.nb.select(self.tab_reg)
 
     def schedule_filter(self, *_):
@@ -4251,6 +6417,39 @@ class App(tk.Tk):
         self.update_user_hint()
         self.nb.select(self.tab_new)
 
+    def duplicate_selected(self):
+        """Copia l'intervento selezionato in un intervento NUOVO: stessi dati, data e ora di
+        adesso, nessuna foto (restano all'originale). L'originale non viene toccato."""
+        r = self.selected_row()
+        if not r:
+            messagebox.showinfo(APP_NAME, "Seleziona prima un intervento dall'elenco.")
+            return
+        self.discard_staged()
+        self._loading_form = True
+        self.edit_id = None
+        self.set_now()
+        self.var_user.set(r["utente"])
+        self._set_station(r["sede"], r["telefono"], r["seriale_pc"], r["imei"], r["matricola"])
+        self._autofilled_for = key_name(r["utente"])
+        self.var_ticket.set(r["ticket"])
+        self.var_stato.set(r["stato"] if r["stato"] in STATI_INTERVENTO else "Risolto")
+        for w, key in ((self.t_richiesta, "richiesta"), (self.t_soluzione, "soluzione"),
+                       (self.t_note, "note")):
+            w.delete("1.0", "end")
+            w.insert("1.0", r[key])
+        self._loading_form = False
+        self.att_items = []
+        self.att_removed = []
+        self.update_att_strip()
+        self.form_title.configure(text="Nuovo intervento (copia di quello del %s)"
+                                  % fmt_dt(r["data_ora"]))
+        self.btn_save.configure(text="Salva la copia")
+        self.btn_clear.configure(text="Annulla copia")
+        self.update_user_hint()
+        self.nb.select(self.tab_new)
+        self.set_status("Copia pronta: data e ora sono quelle di adesso e le foto non vengono "
+                        "copiate. Cambia ciò che serve e salva.")
+
     def mark_resolved(self):
         r = self.selected_row()
         if not r:
@@ -4330,7 +6529,10 @@ class App(tk.Tk):
         sf = ttk.Frame(u)
         sf.grid(row=1, column=0, sticky="ew", pady=(12, 6))
         ttk.Label(sf, text="Cerca").pack(side="left")
-        ttk.Entry(sf, textvariable=self.var_u_search, width=30).pack(side="left", padx=(8, 0))
+        e_usearch = ttk.Entry(sf, textvariable=self.var_u_search, width=30)
+        e_usearch.pack(side="left", padx=(8, 0))
+        scan_button(sf, self.var_u_search, "any", entry=e_usearch,
+                    title="Leggi un codice per cercare l'utente").pack(side="left", padx=(6, 0))
         self.var_u_search.trace_add("write", lambda *_: self.fill_users_tree())
         ttk.Label(sf, text="Sede").pack(side="left", padx=(18, 0))
         self.cb_u_sede = ttk.Combobox(sf, textvariable=self.var_u_sede, width=16,
@@ -4391,6 +6593,7 @@ class App(tk.Tk):
         self.cb_u_sede.configure(values=["(Tutte)"] + self.sedi_cache)
         self.fill_users_tree()
         self.update_user_hint()
+        self.refresh_rooms()
 
     def fill_users_tree(self):
         terms = self.var_u_search.get().casefold().split()
@@ -4454,7 +6657,13 @@ class App(tk.Tk):
     def edit_user(self):
         user = self.selected_user()
         if user:
-            UserDialog(self, user, self.sedi_cache, lambda data: self.save_user_card(user, data))
+            posto = self.db.posto_of_user(user["id"])
+            seat = ("%s · Postazione %d  (%s · %s)" % (posto["codice"], posto["numero"],
+                                                        posto["edificio"], floor_label(posto["piano"]))
+                    if posto else None)
+            UserDialog(self, user, self.sedi_cache, lambda data: self.save_user_card(user, data),
+                       seat=seat, on_room=(lambda: self.open_room_anywhere(posto["stanza_id"]))
+                       if posto else None)
 
     def save_user_card(self, user, data):
         nome = normalize_name(data["nome"])
@@ -4521,14 +6730,17 @@ class App(tk.Tk):
         self.tab_toner = ttk.Frame(self.nb_print, padding=12)
         self.tab_manut = ttk.Frame(self.nb_print, padding=12)
         self.tab_scorta = ttk.Frame(self.nb_print, padding=12)
+        self.tab_rooms = ttk.Frame(self.nb_print, padding=12)
         self.nb_print.add(self.tab_building, text="Edificio e stampanti")
         self.nb_print.add(self.tab_toner, text="Cambi toner")
         self.nb_print.add(self.tab_manut, text="Interventi tecnico")
         self.nb_print.add(self.tab_scorta, text="Scorta toner")
+        self.nb_print.add(self.tab_rooms, text="Piani e stanze")
         self._build_building_view()
         self._build_toner_log()
         self._build_manut_log()
         self._build_scorta()
+        self._build_rooms_view()
 
     def get_printer_image(self, model, size):
         key = "%s_%s" % (printer_image_key(model), size)
@@ -4557,7 +6769,7 @@ class App(tk.Tk):
         self.cb_building = ttk.Combobox(bar, textvariable=self.var_building, state="readonly",
                                         width=44)
         self.cb_building.pack(side="left", padx=(8, 12))
-        self.cb_building.bind("<<ComboboxSelected>>", lambda e: self.schedule_draw())
+        self.cb_building.bind("<<ComboboxSelected>>", lambda e: self.on_building_selected())
         ttk.Button(bar, text="Nuovo edificio…", style="Save.TButton",
                    command=self.new_building).pack(side="left")
         ttk.Button(bar, text="Modifica edificio…", command=self.edit_building).pack(
@@ -4579,8 +6791,20 @@ class App(tk.Tk):
                          lambda e: self.canvas.yview_scroll(int(-e.delta / 120), "units"))
         ttk.Label(t, text="Clicca su una stampante per registrare il cambio toner o vaschetta, "
                           "vedere lo storico e gli interventi del tecnico. Con «+ Aggiungi "
-                          "stampante» la metti sul piano giusto.",
+                          "stampante» la metti sul piano giusto. Clicca sul nome del piano "
+                          "(a sinistra) per aprire la pianta e le stanze.",
                   style="Hint.TLabel").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        leg = ttk.Frame(t)
+        leg.grid(row=3, column=0, sticky="w", pady=(4, 0))
+        for fill, txt, fg, spiega in (
+                (RED, "1", WHITE, "ticket del tecnico Konica ancora aperto (il numero dice quanti)"),
+                (BADGE_GIALLO, "!", BADGE_GIALLO_TESTO, "scorta toner in esaurimento (sotto la soglia)")):
+            tk.Label(leg, text=txt, bg=fill, fg=fg, width=2, font=("Segoe UI", 9, "bold")).pack(
+                side="left")
+            ttk.Label(leg, text=spiega, style="Hint.TLabel").pack(side="left", padx=(4, 18))
+        ttk.Label(leg, text="Sotto ogni stampante: da quanti giorni è stato cambiato ogni colore "
+                            "(gg = giorni, mai = nessun cambio registrato).",
+                  style="Hint.TLabel").pack(side="left")
 
     def current_building(self):
         return self.building_by_label.get(self.var_building.get())
@@ -4605,6 +6829,11 @@ class App(tk.Tk):
         self.apply_toner_filters()
         self.apply_manut_filters()
         self.refresh_scorta()
+        self.refresh_rooms()
+
+    def on_building_selected(self):
+        self.schedule_draw()
+        self.refresh_rooms()
 
     def schedule_draw(self):
         if self._draw_job:
@@ -4639,26 +6868,37 @@ class App(tk.Tk):
 
         floors = list(range(b["piano_max"], b["piano_min"] - 1, -1))
         for idx, fl in enumerate(floors):
-            top, bottom = y, y + floor_h
-            c.create_rectangle(x0, top, x1, bottom, fill="#efe7cf" if idx % 2 == 0 else "#e7ddc0",
-                               outline="#7d7355", width=2)
-            # finestre appena accennate dietro alle stampanti
+            top = y
+            # prima le stampanti: cosi' so quanto deve essere alto il piano (con le scritte sotto)
+            px = x0 + label_w + 26
+            lowest = top + floor_h
+            for p in by_floor.get(fl, []):
+                slot, p_bottom = self._draw_printer(c, p, px, top + 10)
+                px += slot + 28
+                lowest = max(lowest, p_bottom + 12) if p_bottom else lowest
+            bottom = max(top + floor_h, lowest)
+            # poi lo sfondo del piano, messo sotto le stampanti già disegnate
+            bg = [c.create_rectangle(x0, top, x1, bottom, fill="#efe7cf" if idx % 2 == 0 else "#e7ddc0",
+                                     outline="#7d7355", width=2)]
             wx = x0 + label_w + 20
             while wx + 44 < x1 - 10:
-                c.create_rectangle(wx, top + 14, wx + 44, top + floor_h - 14, fill="#dbe7f0",
-                                   outline="#c5d3e0")
+                bg.append(c.create_rectangle(wx, top + 14, wx + 44, bottom - 14, fill="#dbe7f0",
+                                             outline="#c5d3e0"))
                 wx += 96
-            c.create_rectangle(x0, top, x0 + label_w, bottom, fill=NAVY, outline=NAVY)
-            c.create_text(x0 + label_w / 2, top + floor_h / 2, text=floor_label(fl), fill=WHITE,
-                          font=("Segoe UI", 12, "bold"), width=label_w - 14)
-
-            px = x0 + label_w + 26
-            for p in by_floor.get(fl, []):
-                px += self._draw_printer(c, p, px, top + 10) + 28
+            ftag = "fl%d" % fl
+            bg.append(c.create_rectangle(x0, top, x0 + label_w, bottom, fill=NAVY, outline=NAVY,
+                                         tags=(ftag,)))
+            for item in reversed(bg):
+                c.tag_lower(item)
+            c.create_text(x0 + label_w / 2, (top + bottom) / 2, text=floor_label(fl), fill=WHITE,
+                          font=("Segoe UI", 12, "bold"), width=label_w - 14, tags=(ftag,))
+            c.tag_bind(ftag, "<Button-1>", lambda e, fl=fl: self.floor_menu(fl, e))
+            c.tag_bind(ftag, "<Enter>", lambda e: c.configure(cursor="hand2"))
+            c.tag_bind(ftag, "<Leave>", lambda e: c.configure(cursor=""))
 
             tag = "add%d" % fl
             bx1, bx0 = x1 - 14, x1 - 184
-            cy = top + floor_h / 2
+            cy = (top + bottom) / 2
             c.create_rectangle(bx0, cy - 17, bx1, cy + 17, fill=GREEN, outline=GREEN, tags=(tag,))
             c.create_text((bx0 + bx1) / 2, cy, text="+ Aggiungi stampante", fill=WHITE,
                           font=("Segoe UI", 9, "bold"), tags=(tag,))
@@ -4670,7 +6910,7 @@ class App(tk.Tk):
         c.configure(scrollregion=(0, 0, width, y + 30))
 
     def _draw_printer(self, c, p, px, py):
-        """Disegna una stampante con le scritte sotto; restituisce la larghezza occupata."""
+        """Disegna una stampante con bollini e scritte sotto; restituisce (larghezza occupata, y del fondo)."""
         tag = "pr%d" % p["id"]
         img = self.get_printer_image(p["modello"], "s")
         iw, ih = (img.width(), img.height()) if img else (70, 96)
@@ -4683,17 +6923,35 @@ class App(tk.Tk):
             c.create_rectangle(ix, py, ix + iw, py + ih, fill=WHITE, outline=NAVY, tags=(tag,))
             c.create_text(cx, py + ih / 2, text="Stampante", fill=NAVY, tags=(tag,))
 
+        # bollini: rosso = ticket Konica ancora aperto (col numero), giallo = scorta del modello bassa
+        red = p.get("man_richieste") or 0
+        low = p.get("scorta_bassa") or []
+        badges = []
+        if red:
+            badges.append((RED, str(red), WHITE))
+        if low:
+            badges.append((BADGE_GIALLO, "!", BADGE_GIALLO_TESTO))
+        r = 11
+        bcx, bcy = ix + iw - 2, py + r
+        for fill, txt, fg in badges:
+            c.create_oval(bcx - r, bcy - r, bcx + r, bcy + r, fill=fill, outline=WHITE, width=2,
+                          tags=(tag,))
+            c.create_text(bcx, bcy, text=txt, fill=fg, font=("Segoe UI", 9, "bold"), tags=(tag,))
+            bcx -= 2 * r + 4
+
         lines = [(p["nome"] or p["modello"] or "Stampante", ("Segoe UI", 9, "bold"), NAVY)]
         if p["nome"] and p["modello"]:
             lines.append((p["modello"], ("Segoe UI", 8), GREY))
-        if p["ultimo"]:
-            colore, when = p["ultimo"].split("|", 1)
-            lines.append(("ultimo %s: %s" % (
-                "cambio" if colore == "Vaschetta" else "toner", "%s %s" % (
-                    colore, fmt_dt(when)[:5])), ("Segoe UI", 8), TONER_TESTO.get(colore, TEXT)))
-        if p.get("man_richieste"):
-            lines.append(("tecnico richiesto (%d)" % p["man_richieste"], ("Segoe UI", 8, "bold"),
-                          RED))
+        if red:
+            lines.append(("tecnico richiesto (%d)" % red, ("Segoe UI", 8, "bold"), RED))
+        if low:
+            lines.append(("scorta bassa: %s" % ", ".join("%s (%d)" % (col, q) for col, q in low),
+                          ("Segoe UI", 8, "bold"), BADGE_GIALLO_TESTO))
+        lines.append(("Cambiato:", ("Segoe UI", 8, "bold"), GREY))
+        ultimi = p.get("ultimi") or {}
+        for colore in TONER_NOMI:
+            lines.append(("%s: %s" % (colore, ago_short(days_ago(ultimi.get(colore)))),
+                          ("Segoe UI", 8), TONER_TESTO.get(colore, TEXT)))
         y = py + ih + 4
         for text, font, color in lines:
             item = c.create_text(cx, y, text=text, anchor="n", width=slot, font=font, fill=color,
@@ -4703,7 +6961,449 @@ class App(tk.Tk):
         c.tag_bind(tag, "<Button-1>", lambda e, pid=p["id"]: self.open_printer(pid))
         c.tag_bind(tag, "<Enter>", lambda e: c.configure(cursor="hand2"))
         c.tag_bind(tag, "<Leave>", lambda e: c.configure(cursor=""))
-        return slot
+        return slot, y
+
+    # ---------------- scheda: piani e stanze ----------------
+    def _build_rooms_view(self):
+        t = self.tab_rooms
+        t.columnconfigure(0, weight=1)
+        t.rowconfigure(1, weight=1)
+        self.plan_view = tk.StringVar(value="foto")
+        self.plan_mark = tk.BooleanVar(value=False)
+        self.var_rfloor = tk.StringVar()
+        self._plan_job = None
+        self._plan_img = None
+        self.rooms_rows, self.rooms_people_map = [], {}
+        self.plan_items = {"mode": "schema", "tiles": [], "markers": []}
+        bar = ttk.Frame(t)
+        bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        ttk.Label(bar, text="Edificio").pack(side="left")
+        self.cb_rbuilding = ttk.Combobox(bar, textvariable=self.var_building, state="readonly",
+                                         width=36)
+        self.cb_rbuilding.pack(side="left", padx=(8, 12))
+        self.cb_rbuilding.bind("<<ComboboxSelected>>", lambda e: self.on_building_selected())
+        ttk.Label(bar, text="Piano").pack(side="left")
+        self.cb_rfloor = ttk.Combobox(bar, textvariable=self.var_rfloor, state="readonly", width=14)
+        self.cb_rfloor.pack(side="left", padx=(8, 12))
+        self.cb_rfloor.bind("<<ComboboxSelected>>", lambda e: self.refresh_rooms())
+        ttk.Button(bar, text="+ Nuova stanza…", style="Save.TButton",
+                   command=self.new_room).pack(side="left")
+        ttk.Button(bar, text="Incolla più stanze…", command=self.bulk_rooms).pack(
+            side="left", padx=(8, 0))
+        self.lbl_rfloor = ttk.Label(bar, style="Hint.TLabel")
+        self.lbl_rfloor.pack(side="left", padx=(16, 0))
+
+        body = ttk.Frame(t)
+        body.grid(row=1, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=2, uniform="r")
+        body.columnconfigure(1, weight=3, uniform="r")
+        body.rowconfigure(0, weight=1)
+        left = ttk.Frame(body)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        left.columnconfigure(0, weight=1)
+        left.rowconfigure(1, weight=1)
+        left.rowconfigure(4, weight=1)
+        ttk.Label(left, text="Stanze del piano", font=("Segoe UI", 10, "bold")).grid(
+            row=0, column=0, sticky="w")
+        self.tree_rooms = ttk.Treeview(left, columns=("stanza", "persone", "occupate", "come"),
+                                       show="headings", height=8, selectmode="browse")
+        for col, text, w in (("stanza", "Stanza", 80), ("persone", "Persone", 60),
+                             ("occupate", "Scrivanie", 90), ("come", "Come arrivarci", 220)):
+            self.tree_rooms.heading(col, text=text)
+            self.tree_rooms.column(col, width=w, anchor="w")
+        self.tree_rooms.grid(row=1, column=0, sticky="nsew")
+        self.tree_rooms.bind("<Double-1>", lambda e: self.open_selected_room())
+        self.tree_rooms.bind("<<TreeviewSelect>>", lambda e: self.schedule_plan())
+        rb = ttk.Frame(left)
+        rb.grid(row=2, column=0, sticky="w", pady=(6, 10))
+        ttk.Button(rb, text="Apri la stanza…", command=self.open_selected_room).pack(side="left")
+        ttk.Button(rb, text="Togli il segno dalla pianta", command=self.unmark_selected).pack(
+            side="left", padx=(8, 0))
+        ttk.Button(rb, text="Elimina la stanza", style="Danger.TButton",
+                   command=self.delete_selected_room).pack(side="left", padx=(8, 0))
+        ttk.Label(left, text="Persone del piano", font=("Segoe UI", 10, "bold")).grid(
+            row=3, column=0, sticky="w")
+        self.tree_rpeople = ttk.Treeview(
+            left, columns=("persona", "stanza", "posto", "tel", "pc", "imei"), show="headings",
+            height=8, selectmode="browse")
+        for col, text, w in (("persona", "Persona", 130), ("stanza", "Stanza", 55),
+                             ("posto", "Posto", 45), ("tel", "Telefono", 85),
+                             ("pc", "Seriale PC", 100), ("imei", "IMEI", 120)):
+            self.tree_rpeople.heading(col, text=text)
+            self.tree_rpeople.column(col, width=w, anchor="w")
+        self.tree_rpeople.grid(row=4, column=0, sticky="nsew")
+        self.tree_rpeople.bind("<Double-1>", lambda e: self.open_person_room())
+
+        right = ttk.Frame(body)
+        right.grid(row=0, column=1, sticky="nsew")
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(1, weight=1)
+        ctl = ttk.Frame(right)
+        ctl.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        ttk.Radiobutton(ctl, text="Foto della pianta", variable=self.plan_view, value="foto",
+                        command=self.schedule_plan).pack(side="left")
+        ttk.Radiobutton(ctl, text="Schema", variable=self.plan_view, value="schema",
+                        command=self.schedule_plan).pack(side="left", padx=(8, 14))
+        ttk.Button(ctl, text="Carica la foto della pianta…", command=self.load_plan_photo).pack(
+            side="left")
+        ttk.Button(ctl, text="Togli la foto", command=self.remove_plan_photo).pack(
+            side="left", padx=(8, 14))
+        ttk.Checkbutton(ctl, text="Segna le stanze sulla foto", variable=self.plan_mark,
+                        command=self.schedule_plan).pack(side="left")
+        cf = ttk.Frame(right)
+        cf.grid(row=1, column=0, sticky="nsew")
+        cf.columnconfigure(0, weight=1)
+        cf.rowconfigure(0, weight=1)
+        self.pcanvas = tk.Canvas(cf, bg=WHITE, highlightthickness=1, highlightbackground=BORDER)
+        psb = ttk.Scrollbar(cf, orient="vertical", command=self.pcanvas.yview)
+        self.pcanvas.configure(yscrollcommand=psb.set)
+        self.pcanvas.grid(row=0, column=0, sticky="nsew")
+        psb.grid(row=0, column=1, sticky="ns")
+        self.pcanvas.bind("<Configure>", lambda e: self.schedule_plan())
+        self.pcanvas.bind("<Button-1>", self.on_plan_click)
+        self.pcanvas.bind("<MouseWheel>",
+                          lambda e: self.pcanvas.yview_scroll(int(-e.delta / 120), "units"))
+        ttk.Label(t, style="Hint.TLabel", wraplength=1100, justify="left",
+                  text="Per segnare le stanze sulla foto: scegli una stanza nell'elenco, attiva "
+                       "«Segna le stanze sulla foto» e clicca il punto dove si trova. La scritta "
+                       "sulla pianta è «codice · numero di persone» (rosso se le persone sono più "
+                       "delle scrivanie). Le stampanti del piano sono sotto la pianta, con i "
+                       "bollini.").grid(row=2, column=0, sticky="w", pady=(6, 0))
+
+    def rooms_floor(self):
+        b = self.current_building()
+        if not b:
+            return None
+        return next((n for n in range(b["piano_max"], b["piano_min"] - 1, -1)
+                     if floor_label(n) == self.var_rfloor.get()), None)
+
+    def refresh_rooms(self, keep_floor=None):
+        if not hasattr(self, "tree_rooms"):
+            return
+        b = self.current_building()
+        self.tree_rooms.delete(*self.tree_rooms.get_children())
+        self.tree_rpeople.delete(*self.tree_rpeople.get_children())
+        self.rooms_rows, self.rooms_people_map = [], {}
+        self.cb_rbuilding.configure(values=list(getattr(self, "building_by_label", {})))
+        if not b:
+            self.cb_rfloor.configure(values=[])
+            self.var_rfloor.set("")
+            self.lbl_rfloor.configure(text="")
+            self.schedule_plan()
+            return
+        floors = list(range(b["piano_max"], b["piano_min"] - 1, -1))
+        self.cb_rfloor.configure(values=[floor_label(n) for n in floors])
+        want = keep_floor if keep_floor is not None else self.rooms_floor()
+        if want is None or want not in floors:
+            want = 0 if 0 in floors else floors[0]
+        self.var_rfloor.set(floor_label(want))
+        self.rooms_rows = self.db.stanze_of(b["id"], want)
+        for r in self.rooms_rows:
+            occ, _ = room_occupancy(r)
+            self.tree_rooms.insert("", "end", iid=str(r["id"]),
+                                   values=(r["codice"], r["n_persone"], occ or "-",
+                                           " ".join((r["come"] or "").split())[:80]))
+        people = self.db.persone_piano(b["id"], want)
+        for p in people:
+            self.tree_rpeople.insert("", "end", iid=str(p["utente_id"]),
+                                     values=(p["nome"], p["codice"], p["numero"], p["telefono"],
+                                             p["seriale_pc"], p["imei"]))
+            self.rooms_people_map[str(p["utente_id"])] = p["stanza_id"]
+        n_pr = len([x for x in self.db.printers_of(b["id"]) if x["piano"] == want])
+        self.lbl_rfloor.configure(text="%d stanze · %d persone · %d stampanti"
+                                       % (len(self.rooms_rows), len(people), n_pr))
+        self.schedule_plan()
+
+    def selected_room_id(self):
+        sel = self.tree_rooms.selection()
+        return int(sel[0]) if sel else None
+
+    def need_room(self):
+        rid = self.selected_room_id()
+        if rid is None:
+            messagebox.showinfo(APP_NAME, "Seleziona prima una stanza dall'elenco.")
+        return rid
+
+    def new_room(self, floor=None):
+        b = self.current_building()
+        if not b:
+            messagebox.showinfo(APP_NAME, "Crea prima un edificio.")
+            return
+        fl = floor if floor is not None else self.rooms_floor()
+        if fl is None:
+            return
+        RoomNewDialog(self, "%s · %s" % (b["nome"], floor_label(fl)),
+                      lambda cod, scr: self.save_new_room(b["id"], fl, cod, scr))
+
+    def save_new_room(self, building_id, floor, codice, scrivanie):
+        txt = (scrivanie or "").strip()
+        if txt and not txt.isdigit():
+            messagebox.showwarning(APP_NAME, "Le scrivanie totali devono essere un numero (oppure "
+                                             "lascia vuoto).")
+            return False
+        try:
+            self.db.add_stanza(building_id, floor, codice, int(txt or 0))
+        except ValueError as e:
+            messagebox.showwarning(APP_NAME, str(e))
+            return False
+        self.refresh_rooms(keep_floor=floor)
+        self.set_status("Stanza %s creata." % clean_room_code(codice))
+        return True
+
+    def bulk_rooms(self):
+        b = self.current_building()
+        fl = self.rooms_floor()
+        if not b or fl is None:
+            messagebox.showinfo(APP_NAME, "Crea prima un edificio.")
+            return
+        PasteDialog(self, "Incolla più stanze",
+                    "Un codice per riga (vanno bene anche virgole o punti e virgola), per "
+                    "esempio copiati da Excel. Le stanze già presenti su questo piano non "
+                    "vengono duplicate.\n%s · %s" % (b["nome"], floor_label(fl)),
+                    lambda text: self.bulk_rooms_ok(b["id"], fl, text))
+
+    def bulk_rooms_ok(self, building_id, floor, text):
+        r = self.db.add_stanze_bulk(building_id, floor, text)
+        msg = "Stanze create: %d." % len(r["nuove"])
+        if r["esistenti"]:
+            msg += "\nGià presenti (non duplicate): %s." % ", ".join(r["esistenti"])
+        if r["scartate"]:
+            msg += "\nScartate perché più lunghe di %d caratteri: %s." % (
+                ROOM_CODE_MAX, ", ".join(r["scartate"]))
+        self.refresh_rooms(keep_floor=floor)
+        messagebox.showinfo(APP_NAME, msg)
+        return r
+
+    def open_room(self, room_id):
+        if self.db.get_stanza(room_id):
+            RoomDialog(self, room_id)
+
+    def open_selected_room(self):
+        rid = self.need_room()
+        if rid is not None:
+            self.open_room(rid)
+
+    def open_person_room(self):
+        sel = self.tree_rpeople.selection()
+        if sel and sel[0] in self.rooms_people_map:
+            self.open_room(self.rooms_people_map[sel[0]])
+
+    def open_room_anywhere(self, room_id):
+        """Dalla scheda utente: va alla stanza giusta (edificio e piano) e la apre."""
+        room = self.db.get_stanza(room_id)
+        if not room:
+            return
+        self.refresh_buildings(select_id=room["edificio_id"])
+        self.refresh_rooms(keep_floor=room["piano"])
+        self.nb.select(self.tab_print)
+        self.nb_print.select(self.tab_rooms)
+        RoomDialog(self, room_id)
+
+    def delete_selected_room(self):
+        rid = self.need_room()
+        if rid is None:
+            return
+        room = self.db.get_stanza(rid)
+        msg = "Eliminare la stanza %s?" % room["codice"]
+        if room["n_persone"]:
+            msg += "\nLe %d persone assegnate restano tra gli utenti ma senza stanza." % room[
+                "n_persone"]
+        msg += "\nLe foto della stanza vengono tolte."
+        if messagebox.askyesno(APP_NAME, msg, icon="warning"):
+            self.db.delete_stanza(rid)
+            self.refresh_rooms()
+
+    def floor_menu(self, floor, event):
+        """Click sul nome del piano nella vista Edificio: apri la pianta o aggiungi una stanza."""
+        m = tk.Menu(self, tearoff=0)
+        m.add_command(label="Apri pianta e stanze di questo piano",
+                      command=lambda: self.open_floor_plan(floor))
+        m.add_command(label="Nuova stanza su questo piano…", command=lambda: self.new_room(floor))
+        try:
+            m.tk_popup(event.x_root, event.y_root)
+        finally:
+            m.grab_release()
+
+    def open_floor_plan(self, floor):
+        self.refresh_rooms(keep_floor=floor)
+        self.nb_print.select(self.tab_rooms)
+
+    # --- la pianta (foto con i segni, oppure schema) ---
+    def schedule_plan(self):
+        if getattr(self, "_plan_job", None):
+            self.after_cancel(self._plan_job)
+        self._plan_job = self.after(80, self.draw_plan)
+
+    def plan_photo_path(self, b, floor):
+        pi = self.db.pianta_of(b["id"], floor)
+        if pi and pi["file"]:
+            path = os.path.join(piante_root(), *pi["file"].split("/"))
+            if os.path.isfile(path):
+                return path
+        return ""
+
+    def draw_plan(self):
+        self._plan_job = None
+        c = self.pcanvas
+        c.delete("all")
+        self._plan_img = None
+        b, fl = self.current_building(), self.rooms_floor()
+        width = max(c.winfo_width(), 520)
+        if not b or fl is None:
+            c.create_text(width / 2, 100, fill=GREY, font=("Segoe UI", 12),
+                          text="Nessun edificio.")
+            c.configure(scrollregion=(0, 0, width, 200))
+            self.plan_items = {"mode": "schema", "tiles": [], "markers": []}
+            return
+        rooms = self.rooms_rows
+        sel = self.selected_room_id()
+        marking = bool(self.plan_mark.get())
+        info = None
+        if self.plan_view.get() == "foto":
+            path = self.plan_photo_path(b, fl)
+            info = plan_image_b64(path, width - 24) if path else None
+        y = 10
+        if info:
+            b64, w, h = info
+            try:
+                self._plan_img = tk.PhotoImage(data=b64)
+            except Exception:
+                self._plan_img = None
+            ox = oy = 10
+            c.create_image(ox, oy, image=self._plan_img, anchor="nw")
+            markers = plan_markers(rooms, w, h)
+            for m in markers:
+                x, yy = ox + m["x"], oy + m["y"]
+                chosen = marking and m["id"] == sel
+                edge = RED if m["over"] else NAVY
+                c.create_rectangle(x - m["w"] / 2, yy - m["h"] / 2, x + m["w"] / 2,
+                                   yy + m["h"] / 2, fill=NAVY if chosen else WHITE, outline=edge,
+                                   width=2)
+                c.create_text(x, yy, text=m["label"], fill=WHITE if chosen else edge,
+                              font=("Segoe UI", 9, "bold"))
+            self.plan_items = {"mode": "foto", "ox": ox, "oy": oy, "w": w, "h": h,
+                               "markers": markers, "tiles": []}
+            y = oy + h + 14
+        else:
+            tiles, th = grid_tiles(rooms, width - 24)
+            for t in tiles:
+                chosen = marking and t["id"] == sel
+                edge = RED if t["over"] else NAVY
+                c.create_rectangle(t["x0"], t["y0"], t["x1"], t["y1"],
+                                   fill="#fde8ea" if t["over"] else "#f7fafd", outline=edge,
+                                   width=3 if chosen else 2)
+                c.create_text((t["x0"] + t["x1"]) / 2, t["y0"] + 24, text=t["label"], fill=NAVY,
+                              font=("Segoe UI", 11, "bold"))
+                if t["occ"]:
+                    c.create_text((t["x0"] + t["x1"]) / 2, t["y0"] + 46, text=t["occ"],
+                                  fill=RED if t["over"] else GREY, font=("Segoe UI", 8, "bold"))
+            self.plan_items = {"mode": "schema", "tiles": tiles, "markers": []}
+            y = th + 6
+            if self.plan_view.get() == "foto":
+                c.create_text(12, y, anchor="nw", fill=GREY, font=("Segoe UI", 9), width=width - 30,
+                              text="Per questo piano non c'è ancora la foto della pianta: "
+                                   "premi «Carica la foto della pianta…». Intanto vedi lo schema.")
+                y += 40
+        c.create_text(12, y, text="Stampanti del piano", anchor="nw", fill=NAVY,
+                      font=("Segoe UI", 11, "bold"))
+        y += 26
+        printers = [p for p in self.db.printers_of(b["id"]) if p["piano"] == fl]
+        bottom, px = y, 12
+        if not printers:
+            c.create_text(12, y, text="Nessuna stampante su questo piano.", anchor="nw", fill=GREY,
+                          font=("Segoe UI", 9))
+            bottom = y + 20
+        for p in printers:
+            slot, pb = self._draw_printer(c, p, px, y)
+            px += slot + 20
+            bottom = max(bottom, pb)
+        c.configure(scrollregion=(0, 0, width, bottom + 20))
+
+    def on_plan_click(self, event):
+        c = self.pcanvas
+        x, y = c.canvasx(event.x), c.canvasy(event.y)
+        it = self.plan_items
+        if it["mode"] == "foto":
+            fx, fy = x - it["ox"], y - it["oy"]
+            hit = plan_hit(it["markers"], fx, fy)
+            if self.plan_mark.get():
+                if hit:
+                    self.tree_rooms.selection_set(str(hit))
+                    self.schedule_plan()
+                    return
+                frac = plan_click_fraction(fx, fy, it["w"], it["h"])
+                if frac is None:
+                    return
+                rid = self.selected_room_id()
+                if rid is None:
+                    self.set_status("Prima scegli una stanza nell'elenco a sinistra.", RED)
+                    return
+                self.place_marker(rid, frac[0], frac[1])
+            elif hit:
+                self.open_room(hit)
+        else:
+            hit = tile_hit(it["tiles"], x, y)
+            if hit:
+                self.open_room(hit)
+
+    def place_marker(self, room_id, px, py):
+        """Segna la stanza sulla pianta; poi la scelta passa alla prossima stanza non ancora segnata."""
+        room = self.db.get_stanza(room_id)
+        self.db.set_stanza_pos(room_id, px, py)
+        self.refresh_rooms(keep_floor=room["piano"])
+        nxt = next((r for r in self.rooms_rows if r["px"] is None and r["id"] != room_id), None)
+        if nxt:
+            self.tree_rooms.selection_set(str(nxt["id"]))
+        self.set_status("%s segnata sulla pianta." % room["codice"])
+
+    def unmark_selected(self):
+        rid = self.need_room()
+        if rid is not None:
+            self.db.set_stanza_pos(rid, None, None)
+            self.refresh_rooms()
+
+    def start_marking(self, room_id):
+        """Dalla scheda della stanza: si va alla pianta già pronti a segnare quella stanza."""
+        room = self.db.get_stanza(room_id)
+        if not room:
+            return
+        self.refresh_buildings(select_id=room["edificio_id"])
+        self.plan_view.set("foto")
+        self.plan_mark.set(True)
+        self.refresh_rooms(keep_floor=room["piano"])
+        self.tree_rooms.selection_set(str(room_id))
+        self.nb.select(self.tab_print)
+        self.nb_print.select(self.tab_rooms)
+        self.schedule_plan()
+
+    def load_plan_photo(self):
+        b, fl = self.current_building(), self.rooms_floor()
+        if not b or fl is None:
+            messagebox.showinfo(APP_NAME, "Crea prima un edificio.")
+            return
+        path = filedialog.askopenfilename(
+            title="Scegli la foto della pianta di %s" % floor_label(fl),
+            filetypes=[("Immagini", "*.jpg *.jpeg *.png *.bmp *.webp"), ("Tutti i file", "*.*")])
+        if not path:
+            return
+        try:
+            save_plan_photo(self.db, b["id"], fl, path)
+        except ValueError as e:
+            messagebox.showwarning(APP_NAME, str(e))
+            return
+        self.plan_view.set("foto")
+        self.refresh_rooms(keep_floor=fl)
+        self.set_status("Pianta di %s salvata." % floor_label(fl))
+
+    def remove_plan_photo(self):
+        b, fl = self.current_building(), self.rooms_floor()
+        if not b or fl is None or not self.db.pianta_of(b["id"], fl):
+            messagebox.showinfo(APP_NAME, "Per questo piano non c'è nessuna foto della pianta.")
+            return
+        if messagebox.askyesno(APP_NAME, "Togliere la foto della pianta di %s?\nI segni delle "
+                                         "stanze restano salvati." % floor_label(fl)):
+            self.db.delete_pianta(b["id"], fl)
+            self.refresh_rooms(keep_floor=fl)
 
     def open_printer(self, printer_id):
         PrinterDialog(self, printer_id)
@@ -4740,6 +7440,13 @@ class App(tk.Tk):
                         APP_NAME, "Ci sono %d stampanti sui piani che vuoi togliere.\n"
                                   "Spostale prima su un altro piano (Modifica stampante)."
                                   % len(outside))
+                    return False
+                outside_rooms = [r for r in self.db.stanze_of(building["id"])
+                                 if not (pmin <= r["piano"] <= pmax)]
+                if outside_rooms:
+                    messagebox.showwarning(
+                        APP_NAME, "Ci sono %d stanze sui piani che vuoi togliere.\n"
+                                  "Eliminale prima da Piani e stanze." % len(outside_rooms))
                     return False
                 bid = building["id"]
                 self.db.update_edificio(bid, nome, sede, pmin, pmax)
@@ -5442,7 +8149,7 @@ class App(tk.Tk):
         for c, title, width, stretch in (
                 ("data", "Data", 80, False), ("tipo", "Verbale", 170, False),
                 ("soggetto", "Utente / oggetto", 190, False), ("dettaglio", "Dettaglio", 260, True),
-                ("foto", "Foto", 45, False), ("firme", "Firme", 110, False),
+                ("foto", "Foto", 45, False), ("firme", "Firme", 190, False),
                 ("stato", "Word", 100, False), ("file", "File Word", 190, False)):
             self.verb_tree.heading(c, text=title)
             self.verb_tree.column(c, width=width, anchor="center" if c == "foto" else "w",
@@ -5463,6 +8170,7 @@ class App(tk.Tk):
             side="left", padx=(8, 0))
         ttk.Button(bf, text="Modifica e ricrea…", command=self.edit_verbale).pack(
             side="left", padx=(8, 0))
+        ttk.Button(bf, text="Firme…", command=self.edit_firme).pack(side="left", padx=(8, 0))
         ttk.Button(bf, text="Togli dall'elenco", style="Danger.TButton",
                    command=self.delete_verbale).pack(side="left", padx=(8, 0))
         ttk.Label(v, style="Hint.TLabel", wraplength=1000, justify="left",
@@ -5599,6 +8307,16 @@ class App(tk.Tk):
                 old = {}
         firme_names = {k: v for k, v in (old.get("_firme") or {}).items()
                        if os.path.isfile(os.path.join(foto_dir, v))}
+        cart = {k for k, v in (old.get("_cartaceo") or {}).items()
+                if v and k in VB.FIRME_CHIAVI and k not in firme_names}
+        scelte = getattr(parent, "firme_scelte", None)    # scelte fatte nel riquadro «Firme»
+        if isinstance(scelte, dict) and scelte:
+            try:
+                firme_names, cart = VB.applica_scelte_firme(
+                    foto_dir, firme_names, cart, scelte, saved_signature())
+            except VB.VerbaleError as e:
+                messagebox.showerror(APP_NAME, str(e), parent=parent)
+                return False
         firme = {k: os.path.join(foto_dir, v) for k, v in firme_names.items()}
         avvisi = []
         ready, created = [], []
@@ -5613,7 +8331,7 @@ class App(tk.Tk):
                     ready.append(target)
                     created.append(target)
             VB.crea_verbale(tipo, d, path, templates_dir(), photos=ready, imp=self.settings,
-                            firme=firme, avvisi=avvisi)
+                            firme=firme, avvisi=avvisi, cartaceo=cart)
         except VB.VerbaleError as e:
             self._drop_files(created, foto_dir)
             messagebox.showerror(APP_NAME, str(e), parent=parent)
@@ -5635,6 +8353,7 @@ class App(tk.Tk):
         dati = dict(d)
         dati["_foto"] = [os.path.basename(p) for p in ready]
         dati["_firme"] = firme_names
+        dati["_cartaceo"] = {k: True for k in sorted(cart)}
         soggetto, dettaglio = riassunto_verbale(tipo, d)
         data_iso = (parse_date(d["data"]) or date.today()).isoformat()
         now = now_utc_iso()
@@ -5712,12 +8431,69 @@ class App(tk.Tk):
             ini = {}
         foto_dir = os.path.join(verbali_foto_root(), r["uid"])
         ini["foto"] = [os.path.join(foto_dir, n) for n in ini.pop("_foto", [])]
-        ini.pop("_firme", None)
+        firme_names = ini.pop("_firme", None) or {}
+        ini["firme_esistenti"] = {k: os.path.join(foto_dir, v) for k, v in firme_names.items()
+                                  if os.path.isfile(os.path.join(foto_dir, v))}
+        ini["firme_cartaceo"] = sorted(k for k, v in (ini.pop("_cartaceo", None) or {}).items()
+                                       if v and k not in ini["firme_esistenti"])
         if r["tipo"] not in VB.TIPI:
             messagebox.showinfo(APP_NAME, "Tipo di verbale non riconosciuto.")
             return
         VerbaleDialog(self, r["tipo"], ini,
                       lambda tipo, d, photos, parent: self.make_verbale(tipo, d, photos, parent, r))
+
+    def edit_firme(self):
+        """Cambia le firme di un verbale già nell'elenco (firma cartacea, togli la firma, la mia
+        firma salvata per il tecnico) senza riaprire tutto il modulo."""
+        r = self.selected_verbale()
+        if not r or not self.verbali_ready():
+            return
+        if r["tipo"] not in VB.TIPI:
+            messagebox.showinfo(APP_NAME, "Tipo di verbale non riconosciuto.")
+            return
+        try:
+            dati = json.loads(r["dati"] or "{}")
+        except ValueError:
+            dati = {}
+        folder = os.path.join(verbali_foto_root(), r["uid"])
+        esistenti = {k: os.path.join(folder, v) for k, v in (dati.get("_firme") or {}).items()
+                     if os.path.isfile(os.path.join(folder, v))}
+        cart = sorted(k for k, v in (dati.get("_cartaceo") or {}).items()
+                      if v and k not in esistenti)
+        FirmeDialog(self, r["tipo"], esistenti, cart, lambda scelte: self.save_firme(r, scelte))
+
+    def save_firme(self, r, scelte):
+        """Salva le scelte sulle firme del verbale r. True se riuscito."""
+        try:
+            dati = json.loads(r["dati"] or "{}")
+        except ValueError:
+            dati = {}
+        folder = os.path.join(verbali_foto_root(), r["uid"])
+        names = {k: v for k, v in (dati.get("_firme") or {}).items()
+                 if os.path.isfile(os.path.join(folder, v))}
+        cart = {k for k, v in (dati.get("_cartaceo") or {}).items()
+                if v and k in VB.FIRME_CHIAVI and k not in names}
+        try:
+            names, cart = VB.applica_scelte_firme(folder, names, cart, scelte, saved_signature())
+        except VB.VerbaleError as e:
+            messagebox.showerror(APP_NAME, str(e))
+            return False
+        for fname in os.listdir(folder) if os.path.isdir(folder) else ():
+            if fname.startswith("firma_") and fname not in names.values():
+                try:
+                    os.remove(os.path.join(folder, fname))
+                except OSError:
+                    pass
+        dati["_firme"] = names
+        dati["_cartaceo"] = {k: True for k in sorted(cart)}
+        try:
+            self.db.update_verbale(r["id"], r["data"], r["soggetto"], r["dettaglio"], dati,
+                                   r["file"], r["n_foto"], modificato=now_utc_iso())
+        except sqlite3.Error as e:
+            messagebox.showerror(APP_NAME, "Non sono riuscito a salvare le firme:\n%s" % e)
+            return False
+        self.refresh_verbali()
+        return True
 
     def delete_verbale(self):
         r = self.selected_verbale()
@@ -5854,6 +8630,8 @@ class App(tk.Tk):
         self.refresh_stats()
         self.apply_filters()
         self.refresh_verbali()
+        if hasattr(self, "refresh_rooms"):
+            self.refresh_rooms()
         lines = ["Interventi nuovi: %d" % res["interventi_nuovi"],
                  "Interventi aggiornati: %d" % res["interventi_aggiornati"],
                  "Già presenti (saltati): %d" % res["interventi_gia_presenti"],
@@ -5882,6 +8660,16 @@ class App(tk.Tk):
         if res["verbali_saltati"]:
             lines.append("Verbali ignorati (non validi o programma senza verbali.py): %d"
                          % res["verbali_saltati"])
+        if res["stanze_nuove"] or res["stanze_aggiornate"] or res["stanze_gia_presenti"] \
+                or res["postazioni"] or res["piante"] or res["stanze_foto"]:
+            lines.append("Stanze: nuove %d, aggiornate %d, già presenti %d"
+                         % (res["stanze_nuove"], res["stanze_aggiornate"],
+                            res["stanze_gia_presenti"]))
+            lines.append("Persone nelle stanze aggiornate: %d, piante: %d, foto delle stanze: %d"
+                         % (res["postazioni"], res["piante"], res["stanze_foto"]))
+        if res["stanze_saltate"] or res["postazioni_saltate"]:
+            lines.append("Stanze o persone ignorate (edificio, stanza o utente non trovati): %d"
+                         % (res["stanze_saltate"] + res["postazioni_saltate"]))
         if res["saltati"]:
             lines.append("Righe non valide ignorate: %d" % res["saltati"])
         if res["scorta_bassa"]:

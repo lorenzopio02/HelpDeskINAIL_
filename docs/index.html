@@ -50,7 +50,7 @@ h2{font-size:19px;color:var(--navy);margin:4px 0 8px}
 .full img{width:100%;border-radius:10px;margin-top:8px}
 .modal{position:fixed;inset:0;background:rgba(0,20,45,.78);z-index:20;overflow:auto;padding:16px}
 .modal img{width:100%;border-radius:10px}
-.seg{display:flex;gap:6px;margin:8px 0}.seg button{flex:1;border:1px solid var(--border);background:var(--white);color:var(--navy);font:inherit;font-weight:700;padding:10px 4px;border-radius:10px}.seg button.on{background:var(--navy);color:#fff;border-color:var(--navy)}
+.seg{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.seg button{flex:1 1 auto;border:1px solid var(--border);background:var(--white);color:var(--navy);font:inherit;font-weight:700;padding:10px 8px;border-radius:10px}.seg button.on{background:var(--navy);color:#fff;border-color:var(--navy)}.seg button:disabled{opacity:.45}
 details.flt{background:var(--white);border:1px solid var(--border);border-radius:12px;padding:2px 12px 12px;margin:8px 0}details.flt summary{font-weight:700;color:var(--navy);padding:10px 0;cursor:pointer}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.chips button{font:inherit;font-size:14px;font-weight:700;border:1px solid var(--border);background:#eef4fa;color:var(--navy);border-radius:18px;padding:8px 13px}.chips button.on{background:var(--navy);color:#fff;border-color:var(--navy)}
 .bld{border-radius:12px;overflow:hidden;border:1px solid var(--border);background:#efe6cf;margin-top:10px}
@@ -65,6 +65,16 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
 .tag.st-Risolto,.tag.st-Eseguito,.tag.st-OK{background:#e6f4ea;color:#14532d}
 .stats div.link{cursor:pointer}.stats b.red{color:var(--red)}
 .pr span.alert{display:block;color:var(--red);font-weight:700}
+.pr{position:relative}
+.dots{position:absolute;top:-6px;right:-6px;display:flex;gap:3px;z-index:1}
+.dot{display:inline-block;min-width:20px;height:20px;line-height:16px;border-radius:10px;font-style:normal;font-weight:800;font-size:11px;text-align:center;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.35);padding:0 3px;box-sizing:border-box}
+.dot.red{background:var(--red);color:#fff}.dot.yel{background:#f2c500;color:#4a3b00}
+.pr span.alert.warn{color:#8a5200}
+.tcs{margin-top:4px;padding-top:3px;border-top:1px dashed #d8cdb0;text-align:left}
+.tcs .th{font-size:10px;color:var(--grey);font-weight:700}
+.tc{display:flex;align-items:center;gap:2px;font-size:10px;line-height:1.4;color:var(--text)}
+.tc .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-style:normal;font-weight:700}.tc em{font-style:normal;white-space:nowrap}
+.legend{font-size:12px;color:var(--grey);margin-top:8px;line-height:1.9}.legend .dot{vertical-align:middle;margin-right:4px}
 .acw{position:relative}
 .ac{position:absolute;left:0;right:0;top:100%;margin-top:3px;z-index:8;max-height:224px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;background:var(--white);border:1px solid var(--navy);border-radius:10px;box-shadow:0 8px 22px rgba(0,30,64,.28)}
 .ac .aci{padding:12px;border-bottom:1px solid #e6edf4;cursor:pointer;line-height:1.25}
@@ -97,13 +107,44 @@ input[type=date]::-webkit-date-and-time-value,input[type=datetime-local]::-webki
 .slot .sgn{color:var(--grey);font-size:13px;padding:16px 0}
 .modal .slot img{width:auto;max-width:100%;max-height:72px;margin:2px 0;border-radius:0;background:#fff}
 .slot button.btn{margin-top:6px;display:block;width:100%}
-.sigm{position:fixed;inset:0;z-index:30;background:rgba(0,20,45,.88);overflow:auto;padding:16px}
+.slot .sgn.pp{color:var(--navy);font-weight:700;background:#eef4fa;border-radius:8px;margin:2px 0}.slot .sgn.pp small{font-weight:400;color:var(--grey)}
+.slot.paper{border-style:solid;border-color:var(--navy)}
+.slot label.chk{font-size:13px;justify-content:center;margin:8px 0 0}.slot label.chk input{width:20px;height:20px}
+/* firma col dito: a tutto schermo, in orizzontale (o ruotata di 90 gradi quando il telefono ha il blocco rotazione) */
+.sigm{position:fixed;inset:0;z-index:30;background:#0b1f4b;overflow:hidden;touch-action:none}
+.sigm.up{overflow:auto;padding:16px;background:rgba(0,20,45,.88);touch-action:auto}
+.sigr{position:absolute;left:0;top:0;transform-origin:0 0;display:flex;flex-direction:column;gap:10px;background:var(--light);padding:max(10px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left))}
+.sigp{flex:1;min-height:0;min-width:0;display:flex}
+.sigbox{position:relative;flex:1;min-width:0;min-height:0;background:#fff;border:2px solid var(--navy);border-radius:12px;overflow:hidden}
+.sigbox canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:crosshair}
+.sigline{position:absolute;left:14px;right:14px;bottom:30%;border-top:1px solid #9fb2c8;pointer-events:none}
+.sigx{position:absolute;left:16px;bottom:calc(30% + 4px);color:#9fb2c8;font-size:15px;pointer-events:none}
+.sigs{display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:stretch}
+.sigs .sgt{grid-column:1/-1;font-weight:700;color:var(--navy);font-size:16px}
+.sigs .sgh,.sigs .sgm2,.sigs label.chk{grid-column:1/-1;margin:0;font-size:13px;color:var(--grey)}
+.sigs .sgh:empty{display:none}
+.sigs button.btn{margin:0;padding:12px 6px}
+.sigs button[hidden]{display:none}
+.sigr.land{flex-direction:row}
+.sigr.land .sigs{display:flex;flex-direction:column;width:162px;flex:none;gap:6px;overflow:auto}
+.sigr.land .sigs button.btn{padding:9px 6px;font-size:14px}
 .sigc{background:var(--white);border-radius:14px;padding:14px}
 .sigc h3{margin:0 0 6px;font-size:17px;color:var(--navy)}
-.sigbox{position:relative;height:min(46vh,300px);background:#fff;border:2px solid var(--navy);border-radius:12px;overflow:hidden;margin:6px 0}
-.sigbox canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:crosshair}
-.sigline{position:absolute;left:12px;right:12px;bottom:32%;border-top:1px solid #9fb2c8;pointer-events:none}
-.sigx{position:absolute;left:14px;bottom:calc(32% + 4px);color:#9fb2c8;font-size:15px;pointer-events:none}
+.upprev{background:repeating-conic-gradient(#e3ebf3 0 25%,#fff 0 50%) 0 0/16px 16px;border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center;margin:8px 0}
+.upprev img{max-width:100%;max-height:120px}
+/* piani e stanze */
+.floor .fl{cursor:pointer}
+.plw{overflow:auto;max-height:68vh;border:1px solid var(--border);border-radius:10px;background:#fff;touch-action:pan-x pan-y pinch-zoom;-webkit-overflow-scrolling:touch}
+.pli{position:relative;line-height:0;max-width:none}
+.pli img{display:block;width:100%;height:auto;margin:0;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.pm{position:absolute;transform:translate(-50%,-50%);font:inherit;font-size:12px;font-weight:800;line-height:1.2;padding:4px 8px;border-radius:12px;border:2px solid var(--navy);background:rgba(255,255,255,.94);color:var(--navy);white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.pm.over{border-color:var(--red);color:var(--red)}.pm.sel{background:var(--navy);color:#fff}
+.rgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:8px}
+.gt{font:inherit;text-align:center;padding:12px 4px;border:2px solid var(--navy);border-radius:10px;background:#f7fafd;color:var(--navy);min-width:0}
+.gt b{display:block;font-size:15px;word-break:break-word}.gt small{display:block;font-size:11px;color:var(--grey);margin-top:2px}
+.gt.over{border-color:var(--red);background:#fde8ea}.gt.over small{color:var(--red);font-weight:700}
+.rc,.rp{cursor:pointer}
+.zr{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;color:var(--navy)}.zr button{width:64px!important;font-size:22px;line-height:1;padding:8px 0!important}
 </style>
 </head>
 <body>
@@ -118,8 +159,8 @@ input[type=date]::-webkit-date-and-time-value,input[type=datetime-local]::-webki
   <div class="row"><div style="flex:2"><label for="fUser">Utente *</label><input id="fUser" autocomplete="off" autocorrect="off" spellcheck="false" autocapitalize="words" placeholder="Nome e cognome"></div><div><label for="fMat">Matricola</label><input id="fMat" autocapitalize="characters" autocomplete="off"></div></div>
   <div class="hint" id="userHint"></div>
   <label for="fSede">Sede</label><input id="fSede" autocomplete="off" autocorrect="off" spellcheck="false" autocapitalize="words" placeholder="Firenze, Livorno, DR Toscana…">
-  <div class="row"><div><label for="fTel">Telefono</label><input id="fTel" inputmode="tel"></div><div><label for="fImei">IMEI cellulare</label><input id="fImei" inputmode="numeric"></div></div>
-  <label for="fSn">Seriale del PC</label><input id="fSn" autocapitalize="characters">
+  <div class="row"><div><label for="fTel">Telefono</label><input id="fTel" inputmode="tel"></div><div><label for="fImei">IMEI cellulare</label><input id="fImei" inputmode="numeric" data-scan="imei"></div></div>
+  <label for="fSn">Seriale del PC</label><input id="fSn" autocapitalize="characters" data-scan="serial">
   <button class="btn" type="button" id="btnCopy">📋 Copia dati utente</button>
   <div class="row"><div><label for="fTicket">N. ticket (facoltativo)</label><input id="fTicket" autocapitalize="characters"></div><div><label for="fStato">Stato</label><select id="fStato"><option>Risolto</option><option>In attesa</option><option>Aperto</option></select></div></div>
   <div class="hint">Aperto o In attesa = lo ritrovi in «Da seguire» (in alto).</div>
@@ -138,6 +179,7 @@ input[type=date]::-webkit-date-and-time-value,input[type=datetime-local]::-webki
  <!-- REGISTRO -->
  <section id="p-reg" class="hidden">
   <h2>Registro</h2>
+  <div class="seg" id="rSeg"><button type="button" data-v="l" class="on">Elenco</button><button type="button" data-v="m">Mappa della Toscana</button></div>
   <details class="flt" id="rFlt">
    <summary id="rFltSum">Filtri</summary>
    <label for="rUser">Utente (nome, cognome o matricola)</label><input id="rUser" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Tutti">
@@ -152,13 +194,14 @@ input[type=date]::-webkit-date-and-time-value,input[type=datetime-local]::-webki
   <div class="hint" id="rCount"></div>
   <button class="btn" type="button" id="rExport">⬇ Esporta PDF / Excel</button>
   <div id="rList"></div>
+  <div id="rMap" class="hidden"></div>
  </section>
 
  <!-- UTENTI -->
  <section id="p-usr" class="hidden">
   <h2>Utenti</h2>
   <div class="row"><div><button class="btn green" type="button" id="uNew">＋ Nuovo utente</button></div><div><button class="btn navy" type="button" id="uExport">⬇ Esporta dati</button></div></div>
-  <label for="uSearch">Cerca</label><input id="uSearch" type="search" placeholder="Nome, matricola, telefono, seriale, IMEI…">
+  <label for="uSearch">Cerca</label><input id="uSearch" type="search" data-scan="any" placeholder="Nome, matricola, telefono, seriale, IMEI…">
   <label for="uSede">Sede</label><select id="uSede"></select>
   <div class="hint" id="uCount"></div>
   <div id="uList"></div>
@@ -167,11 +210,12 @@ input[type=date]::-webkit-date-and-time-value,input[type=datetime-local]::-webki
  <!-- STAMPANTI -->
  <section id="p-prn" class="hidden">
   <h2>Stampanti</h2>
-  <div class="seg" id="prnSeg"><button type="button" data-t="a" class="on">Edificio</button><button type="button" data-t="b">Cambi toner</button><button type="button" data-t="c">Tecnico</button><button type="button" data-t="d">Scorta</button></div>
+  <div class="seg" id="prnSeg"><button type="button" data-t="a" class="on">Edificio</button><button type="button" data-t="b">Cambi toner</button><button type="button" data-t="c">Tecnico</button><button type="button" data-t="d">Scorta</button><button type="button" data-t="e">Piani e stanze</button></div>
   <div id="prnA">
    <select id="bSel"></select>
    <div id="bld"></div>
-   <div class="hint">Tocca una stampante per registrare il cambio toner o vaschetta, vedere lo storico e gli interventi del tecnico.</div>
+   <div class="hint">Tocca una stampante per registrare il cambio toner o vaschetta, vedere lo storico e gli interventi del tecnico. Tocca il nome del piano (a sinistra) per aprire la pianta e le stanze.</div>
+   <div class="legend"><i class="dot red">1</i>ticket del tecnico Konica ancora aperto (il numero dice quanti)<br><i class="dot yel">!</i>scorta toner in esaurimento (sotto la soglia)<br>Sotto ogni stampante: quanto tempo fa è stato cambiato ogni colore (gg = giorni, mai = nessun cambio registrato).</div>
   </div>
   <div id="prnB" class="hidden">
    <details class="flt" id="tFlt">
@@ -205,6 +249,7 @@ input[type=date]::-webkit-date-and-time-value,input[type=datetime-local]::-webki
    <div class="hint" id="scInfo"></div>
    <div class="hint">La scorta si imposta dal programma del PC (Stampanti › Scorta toner): qui la vedi, con i cambi che registri sul telefono già tolti.</div>
   </div>
+  <div id="prnE" class="hidden"><div id="roomsPanel"></div></div>
  </section>
 
  <!-- VERBALI -->
@@ -229,7 +274,9 @@ input[type=date]::-webkit-date-and-time-value,input[type=datetime-local]::-webki
    <label for="vs_cap">CAP</label><input id="vs_cap" inputmode="numeric" autocomplete="off">
    <label>La mia firma</label><div id="vsFirma"></div>
    <button class="btn navy" type="button" id="vsSign">✍ Fai la mia firma</button>
+   <button class="btn" type="button" id="vsUp">🖼 Carica l'immagine della mia firma</button>
    <button class="btn" type="button" id="vsDel">Togli la firma salvata</button>
+   <div class="hint">L'immagine della firma si può caricare solo per te, il tecnico. Per l'utente e per le altre persone si firma col dito oppure a mano sul foglio.</div>
   </details>
  </section>
 
@@ -275,7 +322,7 @@ input[type=date]::-webkit-date-and-time-value,input[type=datetime-local]::-webki
 <script>
 "use strict";
 /* ================== Database (IndexedDB) ================== */
-const DB_NAME = "helpdesk-inail", DB_VER = 4;
+const DB_NAME = "helpdesk-inail", DB_VER = 5;
 let db;
 function openDb() {
   return new Promise((res, rej) => {
@@ -283,6 +330,8 @@ function openDb() {
     rq.onupgradeneeded = () => {
       const d = rq.result, mk = (n, k) => { if (!d.objectStoreNames.contains(n)) d.createObjectStore(n, { keyPath: k }); };
       mk("utenti", "key"); mk("interventi", "uid"); mk("meta", "k"); mk("edifici", "uid"); mk("stampanti", "uid"); mk("toner", "uid"); mk("manut", "uid"); mk("scorta", "k"); mk("verbali", "uid");
+      mk("stanze", "uid"); mk("piante", "uid"); mk("postazioni", "k");
+      if (!d.objectStoreNames.contains("stanzefoto")) d.createObjectStore("stanzefoto", { keyPath: "uid" }).createIndex("stanza_uid", "stanza_uid");
     };
     rq.onsuccess = () => { db = rq.result; db.onversionchange = () => db.close(); res(); };
     rq.onerror = () => rej(rq.error);
@@ -362,14 +411,14 @@ async function stats() {
   const open = all.filter(i => stOf(i) !== "Risolto").length;
   $("sOpen").textContent = open; $("sOpen").classList.toggle("red", open > 0);
 }
-$("sOpenBox").onclick = () => { ["rUser", "rSede", "rTicket", "rTicketNo", "rDal", "rAl", "rSearch"].forEach(id => $(id).value = ""); $("rStato").value = "aperti"; go("reg"); };
+$("sOpenBox").onclick = () => { ["rUser", "rSede", "rTicket", "rTicketNo", "rDal", "rAl", "rSearch"].forEach(id => $(id).value = ""); $("rStato").value = "aperti"; if (window.TOSCANA) TOSCANA.setView("l"); go("reg"); };
 
 /* ================== Navigazione ================== */
 function go(p) {
   ["new", "reg", "usr", "prn", "ver", "ex"].forEach(x => $("p-" + x).classList.toggle("hidden", x !== p));
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.p === p));
   window.scrollTo(0, 0);
-  if (p === "reg") renderReg();
+  if (p === "reg") { renderReg(); if (window.TOSCANA) TOSCANA.entering(); }
   if (p === "usr") renderUsers();
   if (p === "prn") renderPrn();
   if (p === "ver") VER.render();
@@ -487,7 +536,7 @@ function clearForm() {
   $("fDt").value = localInput();
   ["fUser", "fMat", "fSede", "fTel", "fImei", "fSn", "fTicket", "fReq", "fSol", "fNote"].forEach(i => $(i).value = "");
   $("fStato").value = "Risolto";
-  $("newTitle").textContent = "Nuovo intervento"; $("btnSave").textContent = "Salva intervento"; $("btnCancelEdit").style.display = "none";
+  $("newTitle").textContent = "Nuovo intervento"; $("btnSave").textContent = "Salva intervento"; $("btnCancelEdit").style.display = "none"; $("btnCancelEdit").textContent = "Annulla modifica";
   userHint(); renderThumbs();
 }
 $("btnCancelEdit").onclick = () => { clearForm(); show($("newMsg"), ""); };
@@ -604,6 +653,7 @@ async function openDetail(uid) {
     <button class="btn" id="dCopy" type="button">📋 Copia dati utente</button><div id="dMsg"></div>
     ${stOf(i) !== "Risolto" ? `<button class="btn green" id="dDone" type="button">✔ Segna come risolto</button>` : ""}
     <button class="btn navy" id="dEdit" type="button">Modifica</button>
+    <button class="btn" id="dDup" type="button">⧉ Duplica intervento</button>
     <button class="btn red" id="dDel" type="button">Elimina dal telefono</button>
     <button class="btn" id="dClose" type="button">Chiudi</button>
     <div class="hint">L'eliminazione vale solo qui: se l'intervento è già stato importato nel PC, nel PC resta.</div></div>`;
@@ -612,14 +662,21 @@ async function openDetail(uid) {
   if ($("dDone")) $("dDone").onclick = async () => { i.stato = "Risolto"; i.modificato = nowIso(); await put("interventi", i); m.classList.add("hidden"); await stats(); renderReg(); };
   $("dCopy").onclick = async () => { const ok = await copyText(userLines({ nome: i.utente, mat: u.matricola, sede: i.sede, tel: u.telefono, sn: u.seriale_pc, imei: u.imei })); show($("dMsg"), ok ? "Dati dell'utente copiati: ora puoi incollarli nel ticket." : "Copia non riuscita.", !ok); };
   $("dDel").onclick = async () => { if (confirm("Eliminare questo intervento dal telefono?")) { await del("interventi", uid); m.classList.add("hidden"); await stats(); renderReg(); } };
-  $("dEdit").onclick = () => {
-    m.classList.add("hidden"); editUid = i.uid; autoFor = keyOf(i.utente); photos = (i.foto || []).map(f => ({ ...f }));
-    $("fDt").value = fromDataOra(i.data_ora); $("fUser").value = i.utente; $("fMat").value = u.matricola || ""; $("fStato").value = stOf(i); $("fSede").value = i.sede || "";
-    $("fTel").value = u.telefono || ""; $("fSn").value = u.seriale_pc || ""; $("fImei").value = u.imei || "";
-    $("fTicket").value = i.ticket || ""; $("fReq").value = i.richiesta; $("fSol").value = i.soluzione || ""; $("fNote").value = i.note || "";
-    $("newTitle").textContent = "Modifica intervento"; $("btnSave").textContent = "Salva modifiche"; $("btnCancelEdit").style.display = "block";
-    userHint(); renderThumbs(); go("new");
-  };
+  $("dEdit").onclick = () => { m.classList.add("hidden"); loadInForm(i, u, false); };
+  $("dDup").onclick = () => { m.classList.add("hidden"); loadInForm(i, u, true); };
+}
+/* porta un intervento nel modulo: per modificarlo (stesso intervento) o per duplicarlo (intervento nuovo:
+   stessi dati, data e ora di adesso, senza foto) */
+function loadInForm(i, u, copia) {
+  editUid = copia ? null : i.uid; autoFor = keyOf(i.utente); photos = copia ? [] : (i.foto || []).map(f => ({ ...f }));
+  $("fDt").value = copia ? localInput() : fromDataOra(i.data_ora); $("fUser").value = i.utente; $("fMat").value = u.matricola || ""; $("fStato").value = stOf(i); $("fSede").value = i.sede || "";
+  $("fTel").value = u.telefono || ""; $("fSn").value = u.seriale_pc || ""; $("fImei").value = u.imei || "";
+  $("fTicket").value = i.ticket || ""; $("fReq").value = i.richiesta; $("fSol").value = i.soluzione || ""; $("fNote").value = i.note || "";
+  $("newTitle").textContent = copia ? "Nuovo intervento (copia)" : "Modifica intervento";
+  $("btnSave").textContent = copia ? "Salva la copia" : "Salva modifiche";
+  $("btnCancelEdit").textContent = copia ? "Annulla copia" : "Annulla modifica"; $("btnCancelEdit").style.display = "block";
+  userHint(); renderThumbs(); go("new");
+  show($("newMsg"), copia ? "Copia pronta: data e ora sono quelle di adesso e le foto non vengono copiate. Cambia ciò che serve e salva." : "");
 }
 
 /* ================== Utenti ================== */
@@ -650,8 +707,9 @@ function editUser(k) {
     <label>Matricola aziendale</label><input id="eMat" autocapitalize="characters" value="${esc(u.matricola)}">
     <label>Sede</label><input id="eSede" autocomplete="off" autocorrect="off" spellcheck="false" autocapitalize="words" value="${esc(u.sede)}">
     <label>Telefono</label><input id="eTel" inputmode="tel" value="${esc(u.telefono)}">
-    <label>Seriale PC</label><input id="eSn" value="${esc(u.seriale_pc)}">
-    <label>IMEI cellulare</label><input id="eImei" inputmode="numeric" value="${esc(u.imei)}">
+    <label>Seriale PC</label><input id="eSn" data-scan="serial" value="${esc(u.seriale_pc)}">
+    <label>IMEI cellulare</label><input id="eImei" inputmode="numeric" data-scan="imei" value="${esc(u.imei)}">
+    ${isNew ? "" : `<label>Dove si siede</label><div id="eDove"></div>`}
     <button class="btn green" id="eSave" type="button">Salva</button>
     ${isNew ? "" : `<button class="btn" id="eCopy" type="button">📋 Copia dati utente</button><button class="btn navy" id="eSee" type="button">Vedi i suoi interventi</button><button class="btn" id="eVer" type="button">📝 Nuovo verbale per questo utente</button><button class="btn red" id="eDel" type="button">Elimina utente</button>`}
     <button class="btn" id="eClose" type="button">Chiudi</button><div id="eMsg"></div></div>`;
@@ -659,13 +717,14 @@ function editUser(k) {
   autoComplete($("eSede"), sedeItems);
   $("eClose").onclick = () => m.classList.add("hidden");
   if (!isNew) {
+    if (window.ROOMS) ROOMS.dove(u.key, $("eDove"));
     $("eCopy").onclick = async () => { const ok = await copyText(userLines({ nome: u.nome, mat: $("eMat").value, sede: $("eSede").value, tel: $("eTel").value, sn: $("eSn").value, imei: $("eImei").value })); show($("eMsg"), ok ? "Dati dell'utente copiati." : "Copia non riuscita.", !ok); };
     $("eVer").onclick = () => VER.chooseTipo(u);
-    $("eSee").onclick = () => { m.classList.add("hidden"); $("rUser").value = u.nome; ["rSede", "rTicket", "rTicketNo", "rDal", "rAl", "rSearch", "rStato"].forEach(id => $(id).value = ""); go("reg"); };
+    $("eSee").onclick = () => { m.classList.add("hidden"); $("rUser").value = u.nome; ["rSede", "rTicket", "rTicketNo", "rDal", "rAl", "rSearch", "rStato"].forEach(id => $(id).value = ""); if (window.TOSCANA) TOSCANA.setView("l"); go("reg"); };
     $("eDel").onclick = async () => {
       const n = (await getAll("interventi")).filter(i => keyOf(i.utente) === u.key).length;
       if (n) return show($("eMsg"), `Questo utente ha ${n} interventi: non si può eliminare.`, true);
-      if (confirm("Eliminare questo utente dal telefono?")) { await del("utenti", u.key); m.classList.add("hidden"); await loadUsers(); renderUsers(); }
+      if (confirm("Eliminare questo utente dal telefono?")) { await del("utenti", u.key); if (window.ROOMS) await ROOMS.dropUser(u.key); m.classList.add("hidden"); await loadUsers(); renderUsers(); }
     };
   }
   $("eSave").onclick = async () => {
@@ -676,6 +735,7 @@ function editUser(k) {
     if (!isNew && nk !== u.key) {
       await del("utenti", u.key);
       for (const i of await getAll("interventi")) if (keyOf(i.utente) === u.key) { i.utente = nome; i.modificato = nowIso(); await put("interventi", i); }
+      if (window.ROOMS) await ROOMS.renameUser(u.key, nk, nome);
     }
     await put("utenti", nu); m.classList.add("hidden"); await loadUsers(); renderUsers();
   };
@@ -688,6 +748,11 @@ const colHex = n => (COLORI.find(c => c[0] === n) || [])[1] || "#888";
 const colText = n => (COLORI.find(c => c[0] === n) || [])[2] || "#444";
 const floorLabel = n => n === 0 ? "Piano terra" : n === -1 ? "Seminterrato" : n < -1 ? `Interrato ${-n}` : `${n}° piano`;
 const printerName = s => s.nome || s.modello || "Stampante";
+/* giorni di calendario da "AAAA-MM-GG hh:mm" (0 = oggi); null se manca la data */
+const dayDiff = dt => { const m = /^(\d{4})-(\d\d)-(\d\d)/.exec(dt || ""); if (!m) return null; const n = new Date(); return Math.max(0, Math.round((Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()) - Date.UTC(+m[1], +m[2] - 1, +m[3])) / 864e5)); };
+const agoShort = n => n === null ? "mai" : n === 0 ? "oggi" : n === 1 ? "ieri" : `${n} gg fa`;
+const agoLong = n => n === null ? "mai registrato" : n === 0 ? "cambiato oggi" : n === 1 ? "cambiato ieri" : `cambiato ${n} giorni fa`;
+const modKey = m => (m || "").trim().replace(/\s+/g, " ").toLowerCase();
 const printerImg = s => /3351|3350|3320/i.test(s.modello || "") ? "stampante-c3351i.png" : "stampante-c360i.png";
 async function loadPrn() {
   edifici = (await getAll("edifici")).sort((a, b) => a.nome.localeCompare(b.nome, "it"));
@@ -708,9 +773,9 @@ function scorteNow() {
 }
 function prnLabel(s) { const e = edifici.find(x => x.uid === s.edificio_uid); return `${e ? e.nome : "?"} · ${floorLabel(s.piano)} · ${printerName(s)}`; }
 function renderPrn() {
-  ["a", "b", "c", "d"].forEach(t => $("prn" + t.toUpperCase()).classList.toggle("hidden", prnTab !== t));
+  ["a", "b", "c", "d", "e"].forEach(t => $("prn" + t.toUpperCase()).classList.toggle("hidden", prnTab !== t));
   document.querySelectorAll("#prnSeg button").forEach(b => b.classList.toggle("on", b.dataset.t === prnTab));
-  ({ a: renderBld, b: renderTonLog, c: renderMan, d: renderScorta })[prnTab]();
+  ({ a: renderBld, b: renderTonLog, c: renderMan, d: renderScorta, e: () => window.ROOMS && ROOMS.render() })[prnTab]();
 }
 document.querySelectorAll("#prnSeg button").forEach(b => b.onclick = () => { prnTab = b.dataset.t; renderPrn(); });
 $("bSel").addEventListener("change", e => { bSel = e.target.value; renderBld(); });
@@ -723,12 +788,24 @@ function renderBld() {
   const b = edifici.find(e => e.uid === bSel), ps = stampanti.filter(s => s.edificio_uid === b.uid);
   const floors = new Set(); for (let f = Math.max(b.piano_min, b.piano_max); f >= Math.min(b.piano_min, b.piano_max); f--) floors.add(f);
   ps.forEach(s => floors.add(s.piano));
-  const list = [...floors].sort((a, c) => c - a);
+  const list = [...floors].sort((a, c) => c - a), sc = scorteNow();
   $("bld").innerHTML = `<div class="bld"><div class="roof">${esc(b.nome)}${b.sede ? " · " + esc(b.sede) : ""}</div>` + list.map(f => {
     const here = ps.filter(s => s.piano === f);
-    return `<div class="floor"><div class="fl">${floorLabel(f)}</div><div class="ps">${here.map(s => `<div class="pr" data-u="${esc(s.uid)}"><img src="${printerImg(s)}" alt=""><b>${esc(printerName(s))}</b><span>${esc(s.modello || "")}</span>${manutAll.some(x => x.stampante_uid === s.uid && x.stato === "Richiesto") ? `<span class="alert">tecnico richiesto</span>` : ""}</div>`).join("") || `<span class="meta" style="align-self:center">nessuna stampante</span>`}</div></div>`;
+    return `<div class="floor"><div class="fl" data-f="${f}">${floorLabel(f)}</div><div class="ps">${here.map(s => prCard(s, sc)).join("") || `<span class="meta" style="align-self:center">nessuna stampante</span>`}</div></div>`;
   }).join("") + `</div>`;
   $("bld").querySelectorAll(".pr").forEach(c => c.onclick = () => openPrinter(c.dataset.u));
+  $("bld").querySelectorAll(".fl").forEach(c => c.onclick = () => window.ROOMS && ROOMS.floorMenu(b.uid, +c.dataset.f));
+}
+/* bollini: rosso = ticket Konica ancora "Richiesto" (col numero); giallo = scorta del suo modello sotto soglia */
+function prnFlags(s, sc) {
+  const red = manutAll.filter(x => x.stampante_uid === s.uid && x.stato === "Richiesto").length, mk = modKey(s.modello);
+  const low = mk ? sc.filter(r => modKey(r.modello) === mk && scStatus(r.ora, toInt(r.soglia)) !== "OK") : [];
+  return { red, low };
+}
+function prCard(s, sc) {
+  const f = prnFlags(s, sc), last = lastToner(s.uid), lowTxt = f.low.map(r => `${r.colore} (${r.ora})`).join(", ");
+  return `<div class="pr" data-u="${esc(s.uid)}">${f.red || f.low.length ? `<div class="dots">${f.red ? `<i class="dot red" title="${f.red} ${f.red === 1 ? "richiesta" : "richieste"} al tecnico Konica ancora da eseguire">${f.red}</i>` : ""}${f.low.length ? `<i class="dot yel" title="Scorta in esaurimento: ${esc(lowTxt)}">!</i>` : ""}</div>` : ""}<img src="${printerImg(s)}" alt=""><b>${esc(printerName(s))}</b><span>${esc(s.modello || "")}</span>${f.red ? `<span class="alert">tecnico richiesto</span>` : ""}${f.low.length ? `<span class="alert warn">scorta bassa: ${esc(lowTxt)}</span>` : ""}
+    <div class="tcs"><div class="th">Cambiato:</div>${COLORI.map(c => { const a = dayDiff(last[c[0]]); return `<div class="tc" data-c="${c[0]}" title="${c[0]}: ${agoLong(a)}"><i class="nm" style="color:${c[2]}">${c[0] === "Vaschetta" ? "Vasch." : c[0]}</i><em>${agoShort(a)}</em></div>`; }).join("")}</div></div>`;
 }
 function lastToner(suid) { const m = {}; tonerAll.filter(t => t.stampante_uid === suid).forEach(t => { if (!m[t.colore] || t.data_ora > m[t.colore]) m[t.colore] = t.data_ora; }); return m; }
 function openPrinter(uid, msg, err) {
@@ -739,7 +816,7 @@ function openPrinter(uid, msg, err) {
     <div class="meta">${esc(e.nome || "")} · ${floorLabel(s.piano)}${s.modello ? " · " + esc(s.modello) : ""}</div>
     ${s.ip ? `<div class="meta">IP: ${esc(s.ip)}</div>` : ""}${s.note ? `<div class="meta">Note: ${esc(s.note)}</div>` : ""}
     <label>Ultimo cambio</label>
-    <div>${COLORI.map(c => `<div class="meta"><span class="sw" style="background:${c[1]}"></span>${c[0]}: ${last[c[0]] ? fmtDt(last[c[0]]) : "mai registrato"}</div>`).join("")}</div>
+    <div>${COLORI.map(c => `<div class="meta"><span class="sw" style="background:${c[1]}"></span>${c[0]}: ${agoLong(dayDiff(last[c[0]]))}${last[c[0]] ? " (" + fmtDt(last[c[0]]) + ")" : ""}</div>`).join("")}</div>
     <label>Registra cambio toner o vaschetta</label>
     <div class="chips" id="pCols">${COLORI.map(c => `<button type="button" data-c="${c[0]}"><span class="sw" style="background:${c[1]}"></span>${c[0]}</button>`).join("")}</div>
     <label for="pDt">Data e ora</label><input id="pDt" type="datetime-local" value="${localInput()}">
@@ -980,7 +1057,8 @@ const isNewM = (m, last) => (!last || m.modificato > last) && m.modificato !== m
 async function renderEx() {
   const last = await getMeta("lastSent"), all = await getAll("interventi"), ton = await getAll("toner"), man = await getAll("manut");
   const n = all.filter(i => isNew(i, last)).length, nt = ton.filter(t => isNewT(t, last)).length, nm = man.filter(m => isNewM(m, last)).length, nv = await VER.countNew(last);
-  $("exInfo").textContent = (last ? `Ultimo invio: ${fmtDt(last.replace("T", " ").slice(0, 16))} (ora locale può differire di 1-2 ore). ` : `Non hai ancora creato nessun file. `) + `Interventi da inviare: ${n}. Cambi toner da inviare: ${nt}. Interventi del tecnico da inviare: ${nm}. Verbali da inviare: ${nv}.`;
+  const nr = window.ROOMS ? await ROOMS.countNew(last) : 0;
+  $("exInfo").textContent = (last ? `Ultimo invio: ${fmtDt(last.replace("T", " ").slice(0, 16))} (ora locale può differire di 1-2 ore). ` : `Non hai ancora creato nessun file. `) + `Interventi da inviare: ${n}. Cambi toner da inviare: ${nt}. Interventi del tecnico da inviare: ${nm}. Verbali da inviare: ${nv}.` + (nr ? ` Stanze, postazioni e foto di stanze da inviare: ${nr}.` : "");
   if (navigator.storage && navigator.storage.estimate) {
     const e = await navigator.storage.estimate(), p = navigator.storage.persisted ? await navigator.storage.persisted() : false;
     $("storInfo").textContent = `Spazio usato dall'app: ${((e.usage || 0) / 1048576).toFixed(1)} MB. Archivio protetto: ${p ? "sì" : "non garantito"}.`;
@@ -995,22 +1073,23 @@ async function buildExport(mode) {
   const needed = new Set(items.map(i => keyOf(i.utente)));
   const usersOut = [...us, ...users.filter(u => needed.has(u.key) && !us.includes(u))];
   return {
-    tipo: "helpdesk-telefono", versione: 4, creato: nowIso(),
+    tipo: "helpdesk-telefono", versione: 6, creato: nowIso(),
     utenti: usersOut.map(u => ({ nome: u.nome, matricola: u.matricola || "", sede: u.sede || "", telefono: u.telefono || "", seriale_pc: u.seriale_pc || "", imei: u.imei || "", modificato: u.modificato || nowIso() })),
     interventi: items.map(i => ({ uid: i.uid, data_ora: i.data_ora, utente: i.utente, sede: i.sede || "", richiesta: i.richiesta, soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", stato: stOf(i), modificato: i.modificato, foto: (i.foto || []).map(f => ({ nome: f.nome, data: f.data })) })),
     toner: tons.map(t => ({ uid: t.uid, stampante_uid: t.stampante_uid, colore: t.colore, data_ora: t.data_ora, note: t.note || "", modificato: t.modificato })),
     manutenzioni: mans.map(m => ({ uid: m.uid, stampante_uid: m.stampante_uid, data_ora: m.data_ora, data_tecnico: m.data_tecnico || "", ticket: m.ticket || "", tecnico: m.tecnico || "", problema: m.problema || "", intervento: m.intervento || "", stato: m.stato, modificato: m.modificato })),
     verbali: await VER.exportItems(mode, last),
+    ...(window.ROOMS ? await ROOMS.exportItems(mode, last) : {}),
     edifici: mode === "all" ? edifici : [], stampanti: mode === "all" ? stampanti : [],
     ...(mode === "all" && scortaAll.length ? { scorta: scortaAll.map(r => ({ modello: r.modello, colore: r.colore, quantita: r.quantita, soglia: r.soglia })), scorta_aggiornata: scortaAgg } : {})
   };
 }
 $("btnExport").onclick = async () => {
   const mode = $("exMode").value, data = await buildExport(mode);
-  if (!data.interventi.length && !data.utenti.length && !data.toner.length && !data.manutenzioni.length && !data.verbali.length) return show($("exMsg"), "Non c'è niente di nuovo da inviare.", true);
+  if (!data.interventi.length && !data.utenti.length && !data.toner.length && !data.manutenzioni.length && !data.verbali.length && !(data.stanze || []).length && !(data.stanze_foto || []).length && !(data.piante || []).length && !(data.postazioni || []).length) return show($("exMsg"), "Non c'è niente di nuovo da inviare.", true);
   const name = `dati_telefono_${localInput().replace(/[-:T]/g, "").slice(0, 12)}.json`;
   const file = new File([JSON.stringify(data)], name, { type: "application/json" });
-  const done = async () => { if (mode === "new") await setMeta("lastSent", data.creato); show($("exMsg"), `File creato: ${data.interventi.length} interventi, ${data.toner.length} cambi toner, ${data.manutenzioni.length} interventi del tecnico, ${data.verbali.length} verbali, ${data.utenti.length} utenti.\nNel PC: File › Importa dati dal telefono.`); renderEx(); };
+  const done = async () => { if (mode === "new") await setMeta("lastSent", data.creato); show($("exMsg"), `File creato: ${data.interventi.length} interventi, ${data.toner.length} cambi toner, ${data.manutenzioni.length} interventi del tecnico, ${data.verbali.length} verbali, ${data.utenti.length} utenti.` + ((data.stanze || []).length + (data.postazioni || []).length + (data.piante || []).length + (data.stanze_foto || []).length ? `\nStanze: ${(data.stanze || []).length}, postazioni: ${(data.postazioni || []).length}, foto di stanze: ${(data.stanze_foto || []).filter(f => f.data).length}, piante: ${(data.piante || []).length}.` : "") + `\nNel PC: File › Importa dati dal telefono.`); renderEx(); };
   try {
     if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: "Dati Help Desk" }); return done(); }
   } catch (e) { if (e && e.name === "AbortError") return show($("exMsg"), "Invio annullato: niente è stato segnato come inviato.", true); }
@@ -1082,12 +1161,14 @@ async function mergeFile(file, restore) {
     await setMeta("scortaAgg", data.scorta_aggiornata || data.creato || nowIso());
   }
   const vr = await VER.merge(data, fromPc);
+  const rr = window.ROOMS ? await ROOMS.importData(data, fromPc) : null;
   const verb = restore ? "ripristinati" : "ricevuti dal PC";
   let msg = `Utenti nuovi: ${nu}, aggiornati: ${au}`;
   if ((data.interventi || []).length) msg += `\nInterventi ${verb}: ${ni}, aggiornati: ${ai}, già presenti: ${sk}`;
   if ((data.toner || []).length) msg += `\nCambi toner ${verb}: ${nt}, già presenti: ${pt}` + (skt ? `, ignorati: ${skt}` : "");
   if ((data.manutenzioni || []).length) msg += `\nInterventi del tecnico ${verb}: ${nm}, aggiornati: ${am}, già presenti: ${pm}` + (skm ? `, ignorati: ${skm}` : "");
   if ((data.verbali || []).length) msg += `\nVerbali ${verb}: ${vr.n}, aggiornati: ${vr.a}, già presenti: ${vr.p}` + (vr.s ? `, ignorati: ${vr.s}` : "");
+  if (rr && rr.msg) msg += "\n" + rr.msg;
   if (Array.isArray(data.scorta)) msg += `\nScorta toner: ${nsc} voci aggiornate`;
   if (ne || ns) msg += `\nEdifici nuovi: ${ne}, stampanti nuove: ${ns}`;
   return msg;
@@ -1111,5 +1192,9 @@ wire("btnImport", "imFile", false); wire("btnRestore", "rsFile", true);
 })();
 </script>
 <script src="verbali.js"></script>
+<script src="stanze.js"></script>
+<script src="toscana.js"></script>
+<script src="barcode.js"></script>
+<script src="scan.js"></script>
 </body>
 </html>

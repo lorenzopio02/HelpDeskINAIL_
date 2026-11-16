@@ -2,3 +2,5 @@ openpyxl
 reportlab
 pillow
 python-docx
+numpy
+opencv-python-headless
