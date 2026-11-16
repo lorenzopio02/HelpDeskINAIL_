@@ -21,6 +21,10 @@ header h1{font-size:17px;margin:0;color:var(--navy)}
 .tri{display:flex;height:4px;position:sticky;top:calc(env(safe-area-inset-top) + 50px);z-index:5}
 .tri i{flex:1}.tri i:nth-child(1){background:var(--green)}.tri i:nth-child(2){background:#dfe9f2}.tri i:nth-child(3){background:var(--red)}
 main{padding:14px 14px calc(88px + env(safe-area-inset-bottom))}
+.syncBar{margin:0;padding:7px 14px;font-size:13px;font-weight:600;color:#4b5b6b;background:#eef2f6;border-bottom:1px solid #d9e0e8;cursor:pointer;line-height:1.35}
+.syncBar.ok{color:#14532d;background:#e6f4ea;border-bottom-color:#c9e5d1}
+.syncBar.warn{color:#6b4a00;background:#fff1c2;border-bottom-color:#f2d675}
+.syncBar.hidden{display:none}
 nav{position:fixed;left:0;right:0;bottom:0;background:var(--navy);display:flex;padding-bottom:env(safe-area-inset-bottom);z-index:10}
 nav button{flex:1;background:none;border:0;color:#b8c7d9;padding:11px 0 9px;font-size:10.5px;font-weight:600;min-width:0}
 nav button b{display:block;font-size:20px;line-height:1.1}
@@ -52,6 +56,9 @@ h2{font-size:19px;color:var(--navy);margin:4px 0 8px}
 .modal img{width:100%;border-radius:10px}
 .seg{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.seg button{flex:1 1 auto;border:1px solid var(--border);background:var(--white);color:var(--navy);font:inherit;font-weight:700;padding:10px 8px;border-radius:10px}.seg button.on{background:var(--navy);color:#fff;border-color:var(--navy)}.seg button:disabled{opacity:.45}
 details.flt{background:var(--white);border:1px solid var(--border);border-radius:12px;padding:2px 12px 12px;margin:8px 0}details.flt summary{font-weight:700;color:var(--navy);padding:10px 0;cursor:pointer}
+.bolB{display:inline-block;margin-left:6px;font-size:12px;font-weight:800;color:#7a5a00;background:#fff1c9;border-radius:9px;padding:0 6px}
+.tag.bolWait{background:#fff1c9;color:#7a5a00}.tag.bolOk{background:#d9f2e0;color:#1d6b35}
+.bolFloor{border-top:1px solid var(--border);padding:8px 0}.bolFloor:first-of-type{border-top:0}.bolRow{padding:7px 0;font-size:14px}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.chips button{font:inherit;font-size:14px;font-weight:700;border:1px solid var(--border);background:#eef4fa;color:var(--navy);border-radius:18px;padding:8px 13px}.chips button.on{background:var(--navy);color:#fff;border-color:var(--navy)}
 .bld{border-radius:12px;overflow:hidden;border:1px solid var(--border);background:#efe6cf;margin-top:10px}
 .roof{background:var(--navy);color:#fff;text-align:center;font-weight:700;padding:12px 8px;font-size:15px}
@@ -65,6 +72,7 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
 .tag.st-Risolto,.tag.st-Eseguito,.tag.st-OK{background:#e6f4ea;color:#14532d}
 .stats div.link{cursor:pointer}.stats b.red{color:var(--red)}
 .pr span.alert{display:block;color:var(--red);font-weight:700}
+.pr span.sn{display:block;font-size:9px;letter-spacing:-.02em;color:#5f6b7a;word-break:break-all;line-height:1.2}
 .pr{position:relative}
 .pr.off{border-color:var(--red);background:rgba(209,34,51,.07)}.pr.off img{opacity:.45;filter:grayscale(1)}
 .dots{position:absolute;top:-6px;right:-6px;display:flex;gap:3px;z-index:1}
@@ -75,6 +83,10 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
 .tcs .th{font-size:10px;color:var(--grey);font-weight:700}
 .tc{display:flex;align-items:center;gap:2px;font-size:10px;line-height:1.4;color:var(--text)}
 .tc .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-style:normal;font-weight:700}.tc em{font-style:normal;white-space:nowrap}
+.tb{display:block;height:5px;margin:1px 0 3px;border-radius:3px;background:#e1e6ec;overflow:hidden}.tb b{display:block;height:100%;border-radius:3px}
+.tb.lo{box-shadow:0 0 0 1px var(--red)}.tb.na{background:repeating-linear-gradient(45deg,#dfe4ea 0 3px,#f4f6f9 3px 6px)}
+.tonL small{display:block;color:var(--grey);font-size:11px;line-height:1.3}
+.tbBig{display:block;height:9px;margin:3px 0 1px;border-radius:5px;background:#e1e6ec;overflow:hidden}.tbBig b{display:block;height:100%;border-radius:5px}.tbBig.lo{box-shadow:0 0 0 1px var(--red)}.tbBig.na{background:repeating-linear-gradient(45deg,#dfe4ea 0 4px,#f4f6f9 4px 8px)}
 .legend{font-size:12px;color:var(--grey);margin-top:8px;line-height:1.9}.legend .dot{vertical-align:middle;margin-right:4px}
 .acw{position:relative}
 .ac{position:absolute;left:0;right:0;top:100%;margin-top:3px;z-index:8;max-height:224px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;background:var(--white);border:1px solid var(--navy);border-radius:10px;box-shadow:0 8px 22px rgba(0,30,64,.28)}
@@ -157,6 +169,37 @@ input[type=date]::-webkit-date-and-time-value,input[type=datetime-local]::-webki
 .dkc.free{background:#f6f2e6;border:1px dashed #b9ae8c;color:var(--grey)}.dkc.free svg{opacity:.35}.dkc.free b{color:var(--grey);font-weight:400;font-style:italic}
 .dkPics{display:flex;gap:8px;justify-content:center;align-items:flex-end;margin:10px 0 4px}.dkPics figure{margin:0;flex:1 1 0;min-width:0;text-align:center;font-size:11px;color:var(--grey);line-height:1.2}.dkPics img{display:block;margin:0 auto 4px;max-width:100%;height:auto}
 .snBig{font:700 20px/1.25 ui-monospace,Menlo,Consolas,monospace;color:var(--navy);word-break:break-all;margin:4px 0 8px;padding:10px;background:#f7fafd;border:2px solid var(--navy);border-radius:10px;user-select:all;-webkit-user-select:all}.snBig.sm{font-size:16px;border-width:1px}
+.dkPage{position:fixed;inset:0;z-index:25;overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;background:var(--light);padding:calc(env(safe-area-inset-top) + 10px) 14px calc(28px + env(safe-area-inset-bottom))}
+.dkPage .dkIn{max-width:640px;margin:0 auto}.dkPage h3{margin:10px 0 0;font-size:17px;color:var(--navy)}.dkPage .dkWho{margin:8px 0 0}
+.dkBack{font:inherit;font-weight:700;border:0;background:#dde8f3;color:var(--navy);border-radius:10px;padding:9px 14px}
+.dkStage{position:relative;margin:12px 0 6px;background:#f6f2e6;border:1px solid #cfc3a3;border-radius:14px;overflow:hidden}
+.dkDot{width:clamp(34px,11.5vw,44px);height:clamp(34px,11.5vw,44px);border-radius:50%;border:3px solid #fff;color:#fff;font:800 clamp(18px,6vw,24px)/1 -apple-system,"Segoe UI",sans-serif;padding:0;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 2px 7px rgba(0,0,0,.5)}
+.dkDot.ok{background:var(--green)}.dkDot.no{background:var(--red)}
+.dkStage .dkDot{position:absolute;transform:translate(-50%,-50%)}
+.dvList{display:flex;flex-direction:column;gap:8px;margin:10px 0}
+.dvRow{display:flex;align-items:center;gap:10px;font:inherit;text-align:left;background:var(--white);border:1px solid var(--border);border-radius:12px;padding:8px 10px;color:var(--text);width:100%}
+.dvRow .dkDot{flex:0 0 auto;width:34px;height:34px;font-size:18px;box-shadow:none}
+.dvT{flex:1;min-width:0;display:flex;flex-direction:column}.dvT b{color:var(--navy)}.dvT small{color:var(--grey);font-size:12px;overflow-wrap:anywhere}
+.dvV{font:700 13px ui-monospace,Menlo,Consolas,monospace;overflow-wrap:anywhere;text-align:right;max-width:46%}.dvV.no{font:italic 400 12px -apple-system,"Segoe UI",sans-serif;color:var(--grey)}
+.dvSheet{position:fixed;inset:0;z-index:30;background:rgba(0,20,45,.78);display:flex;align-items:flex-end;justify-content:center;overflow:auto}
+.dvCard{background:var(--white);width:100%;max-width:520px;border-radius:18px 18px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));max-height:100%;overflow:auto}
+.dvCard h3{margin:0;color:var(--navy);font-size:18px}.dvCard h3 small{display:block;font-weight:400;color:var(--grey);font-size:13px;overflow-wrap:anywhere}
+#dvIn{font:700 18px ui-monospace,Menlo,Consolas,monospace;letter-spacing:.4px;padding-right:11px!important}#dvSheet .scbtn{display:none}
+.r3Page{position:fixed;inset:0;z-index:24;display:flex;flex-direction:column;background:linear-gradient(#0b2a4d,#1c3f66 55%,#27537f);color:#fff;overscroll-behavior:contain}
+.r3Page.hidden{display:none}
+.r3Top{display:flex;align-items:center;gap:10px;padding:calc(env(safe-area-inset-top) + 8px) 12px 8px}.r3Top b{flex:1;min-width:0;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.r3Zm{display:flex;gap:6px}.r3Zm button{width:40px;height:40px;border:0;border-radius:10px;background:#dde8f3;color:var(--navy);font:700 22px/1 sans-serif;padding:0}
+.r3View{flex:1;min-height:0;position:relative;overflow:hidden;perspective:1000px;perspective-origin:50% 38%;touch-action:none;-webkit-user-select:none;user-select:none}
+.r3World{position:absolute;left:50%;top:50%;width:0;height:0;transform-style:preserve-3d;transform:scale3d(var(--zm,1),var(--zm,1),var(--zm,1)) rotateX(var(--tilt,-52deg)) rotateY(var(--yaw,-25deg))}
+.r3Floor{position:absolute;left:50%;top:50%;transform:rotateX(90deg);background:repeating-linear-gradient(0deg,rgba(0,0,0,.06) 0 1px,transparent 1px 40px),repeating-linear-gradient(90deg,rgba(0,0,0,.06) 0 1px,transparent 1px 40px),#e9dfc6;border:3px solid #b9ae8c;box-shadow:0 0 0 6px rgba(255,255,255,.08)}
+.r3Mat{position:absolute;width:168px;height:84px;border-radius:8px;background:#d9c9a2;border:1px solid #b9ae8c}.r3Mat.free{background:#e7dfca;border-style:dashed}
+.r3Wall{position:absolute;left:50%;top:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(#e4eef8,#c9dbee);border:2px solid #9db8e6;color:var(--navy);opacity:.95}
+.r3Wall b{font-size:34px;line-height:1}.r3Wall span{font-size:13px;margin-top:4px}.r3Wall.side{opacity:.35}
+.r3Desk{position:absolute;left:50%;top:50%;width:160px;margin:-124px 0 0 -80px;padding:0;border:0;background:none;color:#fff;font:inherit;text-align:center;transform-origin:50% 100%;transform:translate3d(var(--x),0,var(--z)) rotateY(calc(var(--yaw,-25deg) * -1)) rotateX(calc(var(--tilt,-52deg) * -1))}
+.r3Desk svg{display:block;margin:0 auto;border-radius:6px;background:#f6f2e6}
+.r3Name{display:block;background:rgba(0,20,45,.82);border:1px solid rgba(255,255,255,.35);border-radius:8px;padding:2px 6px;margin:0 auto 4px;font-size:12px;font-weight:700;line-height:1.2;max-width:160px;overflow-wrap:anywhere}.r3Desk.free .r3Name{font-weight:400;font-style:italic;opacity:.8}
+.r3Dots{display:flex;gap:4px;justify-content:center;margin-top:4px}.r3Dots i{width:12px;height:12px;border-radius:50%;border:2px solid #fff}.r3Dots i.ok{background:var(--green)}.r3Dots i.no{background:var(--red)}
+.r3Hint{padding:8px 14px calc(10px + env(safe-area-inset-bottom));font-size:12px;color:#c4d4e6;text-align:center}
 .rc,.rp{cursor:pointer}
 .zr{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;color:var(--navy)}.zr button{width:64px!important;font-size:22px;line-height:1;padding:8px 0!important}
 </style>
@@ -164,6 +207,7 @@ input[type=date]::-webkit-date-and-time-value,input[type=datetime-local]::-webki
 <body>
 <header><img src="logo_header.png" alt="INAIL"><h1>Help Desk</h1></header>
 <div class="tri"><i></i><i></i><i></i></div>
+<div id="syncBar" class="syncBar hidden" role="button" tabindex="0" aria-live="polite"></div>
 <main>
  <!-- NUOVO INTERVENTO -->
  <section id="p-new">
@@ -229,9 +273,10 @@ input[type=date]::-webkit-date-and-time-value,input[type=datetime-local]::-webki
    <select id="bSel"></select>
    <div id="bld"></div>
    <div class="hint">Tocca una stampante per registrare il cambio toner o vaschetta, vedere lo storico e gli interventi del tecnico. Tocca il nome del piano (a sinistra) per aprire la pianta e le stanze.</div>
-   <div class="legend"><i class="dot red">1</i>ticket del tecnico Konica ancora aperto (il numero dice quanti)<br><i class="dot yel">!</i>scorta toner in esaurimento (sotto la soglia)<br>Sotto ogni stampante: quanto tempo fa è stato cambiato ogni colore (gg = giorni, mai = nessun cambio registrato).</div>
+   <div class="legend"><i class="dot red">1</i>ticket del tecnico Konica ancora aperto (il numero dice quanti)<br><i class="dot yel">!</i>scorta toner in esaurimento (sotto la soglia)<br>Sotto ogni stampante: quanto tempo fa è stato cambiato ogni colore (gg = giorni, mai = nessun cambio registrato).<br>Barretta sotto ogni colore: <b>stima</b> di quanto toner resta, calcolata dai giorni passati dall'ultimo cambio e da quanto sono durati i cambi precedenti. Non è il livello vero letto dalla stampante. Barretta a righe = non ci sono abbastanza cambi per stimare; contorno rosso = quasi finito.</div>
   </div>
   <div id="prnB" class="hidden">
+   <div id="bolBox"></div>
    <details class="flt" id="tFlt">
     <summary id="tFltSum">Filtri</summary>
     <div class="row"><div><label for="tEd">Edificio</label><select id="tEd"></select></div><div><label for="tCol">Colore</label><select id="tCol"></select></div></div>
@@ -259,6 +304,7 @@ input[type=date]::-webkit-date-and-time-value,input[type=datetime-local]::-webki
   </div>
   <div id="prnD" class="hidden">
    <div id="scAlert"></div>
+   <div id="bolStock"></div>
    <div id="scList"></div>
    <div class="hint" id="scInfo"></div>
    <div class="hint">La scorta si imposta dal programma del PC (Stampanti › Scorta toner): qui la vedi, con i cambi che registri sul telefono già tolti.</div>
@@ -336,7 +382,7 @@ input[type=date]::-webkit-date-and-time-value,input[type=datetime-local]::-webki
 <script>
 "use strict";
 /* ================== Database (IndexedDB) ================== */
-const DB_NAME = "helpdesk-inail", DB_VER = 5;
+const DB_NAME = "helpdesk-inail", DB_VER = 6;
 let db;
 function openDb() {
   return new Promise((res, rej) => {
@@ -344,7 +390,7 @@ function openDb() {
     rq.onupgradeneeded = () => {
       const d = rq.result, mk = (n, k) => { if (!d.objectStoreNames.contains(n)) d.createObjectStore(n, { keyPath: k }); };
       mk("utenti", "key"); mk("interventi", "uid"); mk("meta", "k"); mk("edifici", "uid"); mk("stampanti", "uid"); mk("toner", "uid"); mk("manut", "uid"); mk("scorta", "k"); mk("verbali", "uid");
-      mk("stanze", "uid"); mk("piante", "uid"); mk("postazioni", "k");
+      mk("stanze", "uid"); mk("piante", "uid"); mk("postazioni", "k"); mk("bolle", "uid");
       if (!d.objectStoreNames.contains("stanzefoto")) d.createObjectStore("stanzefoto", { keyPath: "uid" }).createIndex("stanza_uid", "stanza_uid");
     };
     rq.onsuccess = () => { db = rq.result; db.onversionchange = () => db.close(); res(); };
@@ -422,6 +468,7 @@ async function loadUsers() {
     $(id).innerHTML = `<option value="">Tutte</option>` + list.map(s => `<option>${esc(s)}</option>`).join("");
     $(id).value = list.includes(cur) ? cur : "";
   }
+  renderSync();
 }
 async function stats() {
   const all = await getAll("interventi"), d = new Date();
@@ -444,6 +491,7 @@ function go(p) {
   if (p === "prn") renderPrn();
   if (p === "ver") VER.render();
   if (p === "ex") renderEx();
+  renderSync();
 }
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => go(b.dataset.p));
 
@@ -798,6 +846,7 @@ async function loadPrn() {
   stampanti = await getAll("stampanti"); tonerAll = await getAll("toner");
   manutAll = await getAll("manut"); scortaAll = await getAll("scorta"); scortaAgg = (await getMeta("scortaAgg")) || "";
   if (window.ROOMS) await ROOMS.load();   /* serve per scrivere in che stanza sta ogni stampante */
+  if (window.BOL) await BOL.load();       /* bolle dei toner: arrivati e da montare */
 }
 const prnRoom = s => (window.ROOMS && ROOMS.roomCode && s.stanza_uid) ? ROOMS.roomCode(s.stanza_uid) : "";
 /* scorta toner: i numeri arrivano dal PC; qui tolgo i cambi registrati sul telefono dopo l'ultimo scambio */
@@ -810,7 +859,8 @@ function scorteNow() {
     const s = stampanti.find(x => x.uid === t.stampante_uid); if (!s) return;
     const k = scKey(s.modello, t.colore); used[k] = (used[k] || 0) + 1;
   });
-  return scortaAll.map(r => ({ ...r, ora: Math.max(0, toInt(r.quantita) - (used[r.k] || 0)) }));
+  const arr = window.BOL ? BOL.arrivalsByKey(scortaAgg) : {};   /* toner arrivati (bolle) dopo l'ultimo invio del PC */
+  return scortaAll.map(r => ({ ...r, ora: Math.max(0, toInt(r.quantita) - (used[r.k] || 0) + (arr[r.k] || 0)) }));
 }
 function prnLabel(s) { const e = edifici.find(x => x.uid === s.edificio_uid); return `${e ? e.nome : "?"} · ${floorLabel(s.piano)} · ${printerName(s)}`; }
 function renderPrn() {
@@ -830,12 +880,13 @@ function renderBld() {
   const floors = new Set(); for (let f = Math.max(b.piano_min, b.piano_max); f >= Math.min(b.piano_min, b.piano_max); f--) floors.add(f);
   ps.forEach(s => floors.add(s.piano));
   const list = [...floors].sort((a, c) => c - a), sc = scorteNow();
-  $("bld").innerHTML = `<div class="bld"><div class="roof">${esc(b.nome)}${b.sede ? " · " + esc(b.sede) : ""}</div>` + list.map(f => {
+  $("bld").innerHTML = `<button class="btn navy" id="bldTower" type="button">🏢 Edificio in 3D</button><div class="bld"><div class="roof">${esc(b.nome)}${b.sede ? " · " + esc(b.sede) : ""}</div>` + list.map(f => {
     const here = ps.filter(s => s.piano === f);
-    return `<div class="floor"><div class="fl" data-f="${f}">${floorLabel(f)}</div><div class="ps">${here.map(s => prCard(s, sc)).join("") || `<span class="meta" style="align-self:center">nessuna stampante</span>`}</div></div>`;
+    return `<div class="floor"><div class="fl" data-f="${f}">${floorLabel(f)}${window.BOL ? BOL.badge(b.uid, f) : ""}</div><div class="ps">${here.map(s => prCard(s, sc)).join("") || `<span class="meta" style="align-self:center">nessuna stampante</span>`}</div></div>`;
   }).join("") + `</div>`;
   $("bld").querySelectorAll(".pr").forEach(c => c.onclick = () => openPrinter(c.dataset.u));
   $("bld").querySelectorAll(".fl").forEach(c => c.onclick = () => window.ROOMS && ROOMS.floorMenu(b.uid, +c.dataset.f));
+  if ($("bldTower")) $("bldTower").onclick = () => window.CORR && CORR.openTower(b.uid);
 }
 /* bollini: rosso = ticket Konica ancora "Richiesto" (col numero); giallo = scorta del suo modello sotto soglia */
 function prnFlags(s, sc) {
@@ -846,9 +897,34 @@ function prnFlags(s, sc) {
 function prCard(s, sc) {
   const f = prnFlags(s, sc), last = lastToner(s.uid), lowTxt = f.low.map(r => `${r.colore} (${r.ora})`).join(", ");
   const off = s.fuori_servizio ? 1 : 0;
-  return `<div class="pr${off ? " off" : ""}" data-u="${esc(s.uid)}">${off || f.red || f.low.length ? `<div class="dots">${off ? `<i class="dot red" title="Fuori servizio (rotta)">✕</i>` : ""}${f.red ?`<i class="dot red" title="${f.red} ${f.red === 1 ? "richiesta" : "richieste"} al tecnico Konica ancora da eseguire">${f.red}</i>` : ""}${f.low.length ? `<i class="dot yel" title="Scorta in esaurimento: ${esc(lowTxt)}">!</i>` : ""}</div>` : ""}<img src="${printerImg(s)}" alt=""><b>${esc(printerName(s))}</b><span>${esc(s.modello || "")}</span>${prnRoom(s) ? `<span>Stanza ${esc(prnRoom(s))}</span>` : ""}${off ? `<span class="alert">FUORI SERVIZIO</span>` : ""}${f.red ? `<span class="alert">tecnico richiesto</span>` : ""}${f.low.length ? `<span class="alert warn">scorta bassa: ${esc(lowTxt)}</span>` : ""}
-    <div class="tcs"><div class="th">Cambiato:</div>${COLORI.map(c => { const a = dayDiff(last[c[0]]); return `<div class="tc" data-c="${c[0]}" title="${c[0]}: ${agoLong(a)}"><i class="nm" style="color:${c[2]}">${c[0] === "Vaschetta" ? "Vasch." : c[0]}</i><em>${agoShort(a)}</em></div>`; }).join("")}</div></div>`;
+  return `<div class="pr${off ? " off" : ""}" data-u="${esc(s.uid)}">${off || f.red || f.low.length ? `<div class="dots">${off ? `<i class="dot red" title="Fuori servizio (rotta)">✕</i>` : ""}${f.red ?`<i class="dot red" title="${f.red} ${f.red === 1 ? "richiesta" : "richieste"} al tecnico Konica ancora da eseguire">${f.red}</i>` : ""}${f.low.length ? `<i class="dot yel" title="Scorta in esaurimento: ${esc(lowTxt)}">!</i>` : ""}</div>` : ""}<img src="${printerImg(s)}" alt=""><b>${esc(printerName(s))}</b><span>${esc(s.modello || "")}</span>${s.seriale ? `<span class="sn">S/N ${esc(s.seriale)}</span>` : ""}${prnRoom(s) ? `<span>Stanza ${esc(prnRoom(s))}</span>` : ""}${off ? `<span class="alert">FUORI SERVIZIO</span>` : ""}${f.red ? `<span class="alert">tecnico richiesto</span>` : ""}${f.low.length ? `<span class="alert warn">scorta bassa: ${esc(lowTxt)}</span>` : ""}
+    <div class="tcs"><div class="th">Cambiato:</div>${COLORI.map(c => { const a = dayDiff(last[c[0]]), e = tonerEst(s, c[0]); return `<div class="tc" data-c="${c[0]}" title="${c[0]}: ${agoLong(a)} · ${esc(tonerEstTxt(e))}"><i class="nm" style="color:${c[2]}">${c[0] === "Vaschetta" ? "Vasch." : c[0]}</i><em>${agoShort(a)}</em></div>${tonBar(e, c[1])}`; }).join("")}</div></div>`;
 }
+/* ---- barrette del toner: STIMA del livello, dai giorni dall'ultimo cambio e da quanto sono durati i cambi precedenti ---- */
+const TON_MIN_GAP = 3;   /* due cambi a meno di 3 giorni uno dall'altro non contano come «durata» (correzioni, doppioni) */
+const TON_LOW = 20;      /* sotto questa percentuale la barretta ha il contorno rosso */
+const dayNo = dt => { const m = /^(\d{4})-(\d\d)-(\d\d)/.exec(dt || ""); return m ? Math.round(Date.UTC(+m[1], +m[2] - 1, +m[3]) / 864e5) : null; };
+const medianInt = a => { const s = [...a].sort((x, y) => x - y), n = s.length, h = n >> 1; return n % 2 ? s[h] : Math.round((s[h - 1] + s[h]) / 2); };
+/* i giorni tra un cambio e il successivo (stesso colore, stessa stampante), senza doppioni e senza intervalli troppo corti */
+function tonGaps(dates) {
+  const d = [...new Set(dates.map(dayNo).filter(x => x !== null))].sort((a, b) => a - b), out = [];
+  for (let i = 1; i < d.length; i++) if (d[i] - d[i - 1] >= TON_MIN_GAP) out.push(d[i] - d[i - 1]);
+  return out;
+}
+function tonerEst(s, colore) {
+  const mine = tonerAll.filter(t => t.stampante_uid === s.uid && t.colore === colore).map(t => t.data_ora).filter(Boolean);
+  const last = mine.length ? mine.reduce((a, b) => (a > b ? a : b)) : null, days = last ? dayDiff(last) : null;
+  let g = tonGaps(mine), src = "stampante";
+  if (!g.length) {   /* pochi cambi di questa stampante: uso quelli delle stampanti dello stesso modello */
+    const mk = modKey(s.modello); src = "modello";
+    if (mk) stampanti.filter(x => x.uid !== s.uid && modKey(x.modello) === mk).forEach(x => { g = g.concat(tonGaps(tonerAll.filter(t => t.stampante_uid === x.uid && t.colore === colore).map(t => t.data_ora).filter(Boolean))); });
+  }
+  if (days === null || !g.length) return { pct: null, days, last };
+  const life = medianInt(g), pct = Math.max(0, Math.min(100, Math.round(100 * (1 - days / life))));
+  return { pct, life, days, src, n: g.length, last };
+}
+const tonerEstTxt = e => e.pct === null ? "stima non disponibile (servono almeno due cambi di questo colore, di questa stampante o di una dello stesso modello)" : `stima: circa ${e.pct}% · di solito dura ${e.life} giorni (${e.src === "stampante" ? "dai cambi di questa stampante" : "dai cambi di stampanti dello stesso modello"})`;
+const tonBar = (e, hex, big) => `<span class="${big ? "tbBig" : "tb"}${e.pct === null ? " na" : e.pct <= TON_LOW ? " lo" : ""}" data-p="${e.pct === null ? "" : e.pct}"><b style="width:${e.pct === null ? 0 : e.pct}%;background:${hex}"></b></span>`;
 function lastToner(suid) { const m = {}; tonerAll.filter(t => t.stampante_uid === suid).forEach(t => { if (!m[t.colore] || t.data_ora > m[t.colore]) m[t.colore] = t.data_ora; }); return m; }
 function openPrinter(uid, msg, err) {
   const s = stampanti.find(x => x.uid === uid); if (!s) return;
@@ -858,7 +934,9 @@ function openPrinter(uid, msg, err) {
     <div class="meta">${esc(e.nome || "")} · ${floorLabel(s.piano)}${prnRoom(s) ? " · stanza " + esc(prnRoom(s)) : ""}${s.modello ? " · " + esc(s.modello) : ""}</div>
     ${s.fuori_servizio ? `<div class="meta" style="color:var(--red);font-weight:800">FUORI SERVIZIO (stampante rotta)</div>` : ""}${s.seriale ? `<div class="meta">N. di serie: <b>${esc(s.seriale)}</b></div>` : ""}${s.ip ? `<div class="meta">IP: ${esc(s.ip)}</div>` : ""}${s.note ? `<div class="meta">Note: ${esc(s.note)}</div>` : ""}
     <label>Ultimo cambio</label>
-    <div>${COLORI.map(c => `<div class="meta"><span class="sw" style="background:${c[1]}"></span>${c[0]}: ${agoLong(dayDiff(last[c[0]]))}${last[c[0]] ? " (" + fmtDt(last[c[0]]) + ")" : ""}</div>`).join("")}</div>
+    <div>${COLORI.map(c => `<div class="meta tonL" data-c="${c[0]}"><span class="sw" style="background:${c[1]}"></span>${c[0]}: ${agoLong(dayDiff(last[c[0]]))}${last[c[0]] ? " (" + fmtDt(last[c[0]]) + ")" : ""}${(() => { const e = tonerEst(s, c[0]); return tonBar(e, c[1], true) + `<small>${esc(tonerEstTxt(e))}</small>`; })()}</div>`).join("")}</div>
+    <div class="hint">Le barrette sono una <b>stima</b>, non il livello vero letto dalla stampante.</div>
+    <div id="pBol">${window.BOL ? BOL.pendingAt(s.edificio_uid, s.piano).map(b => `<div class="card" data-bol="${esc(b.uid)}"><h3><span class="sw" style="background:${colHex(b.colore)}"></span>📦 ${esc(b.colore)} da montare</h3><div class="meta">Arrivato ${fmtDt(b.data_arrivo)}${b.numero ? " · bolla " + esc(b.numero) : ""} · tocca per montarlo qui</div></div>`).join("") : ""}</div>
     <label>Registra cambio toner o vaschetta</label>
     <div class="chips" id="pCols">${COLORI.map(c => `<button type="button" data-c="${c[0]}"><span class="sw" style="background:${c[1]}"></span>${c[0]}</button>`).join("")}</div>
     <label for="pDt">Data e ora</label><input id="pDt" type="datetime-local" value="${localInput()}">
@@ -875,6 +953,7 @@ function openPrinter(uid, msg, err) {
   $("pClose").onclick = () => m.classList.add("hidden");
   $("pMan").querySelectorAll("[data-m]").forEach(c => c.onclick = () => openManut(c.dataset.m, uid));
   $("pManNew").onclick = () => openManut(null, uid);
+  $("pBol").querySelectorAll("[data-bol]").forEach(c => c.onclick = () => BOL.open(c.dataset.bol, uid));
   $("pCols").querySelectorAll("button").forEach(b => b.onclick = () => { const c = b.dataset.c; picked.has(c) ? picked.delete(c) : picked.add(c); b.classList.toggle("on", picked.has(c)); });
   $("pSave").onclick = async () => {
     if (!picked.size) return show($("pMsg"), "Tocca almeno un colore di toner o la vaschetta.", true);
@@ -897,6 +976,7 @@ function tonRows() {
     .sort((a, b) => (b.t.data_ora + b.t.modificato).localeCompare(a.t.data_ora + a.t.modificato));
 }
 function renderTonLog() {
+  if (window.BOL) BOL.renderList($("bolBox"));
   const edSel = $("tEd"), curEd = edSel.value;
   edSel.innerHTML = `<option value="">(Tutti)</option>` + edifici.map(e => `<option value="${esc(e.uid)}">${esc(e.nome)}</option>`).join("");
   edSel.value = edifici.some(e => e.uid === curEd) ? curEd : "";
@@ -987,6 +1067,7 @@ function openManut(uid, pUid) {
 
 /* ================== Scorta toner ================== */
 function renderScorta() {
+  if (window.BOL) BOL.renderStock($("bolStock"));
   const rows = scorteNow().sort((a, b) => a.modello.localeCompare(b.modello, "it") || COLORI.findIndex(c => c[0] === a.colore) - COLORI.findIndex(c => c[0] === b.colore));
   const low = rows.filter(r => scStatus(r.ora, toInt(r.soglia)) !== "OK");
   $("scAlert").innerHTML = !rows.length ? `<div class="hint">Non ho ancora i dati della scorta. Nel PC imposta i toner in Stampanti › Scorta toner, poi manda i dati al telefono (File › Esporta dati per il telefono).</div>`
@@ -1091,16 +1172,56 @@ function openExport(kind) {
   };
 }
 
+/* ================== Promemoria dello scambio col PC ================== */
+const SYNC_WARN_DAYS = 3;   /* da quanti giorni senza inviare la barra diventa gialla (se c'è qualcosa da inviare) */
+const isNewU = (u, last) => (!last || (u.modificato || "") > last) && u.modificato !== u.daPC;
+/* l'ultimo momento in cui ho creato un file per il PC (solo novità o tutto) */
+async function sentRef() { const a = await getMeta("lastSent"), b = await getMeta("lastExport"); return [a, b].filter(Boolean).sort().pop() || null; }
+const agoDays = iso => { const t = Date.parse(iso || ""); return Number.isNaN(t) ? null : Math.max(0, Math.floor((Date.now() - t) / 86400000)); };
+const agoWords = n => n === null ? "mai" : n === 0 ? "oggi" : n === 1 ? "ieri" : `${n} giorni fa`;
+async function syncState() {
+  const last = await sentRef(), recv = await getMeta("lastRecv");
+  const all = await getAll("interventi"), ton = await getAll("toner"), man = await getAll("manut"), usr = await getAll("utenti");
+  const n = all.filter(i => isNew(i, last)).length + ton.filter(t => isNewT(t, last)).length + man.filter(m => isNewM(m, last)).length + usr.filter(u => isNewU(u, last)).length
+    + (window.VER ? await VER.countNew(last) : 0) + (window.ROOMS ? await ROOMS.countNew(last) : 0) + (window.BOL ? BOL.exportCount("new", last) : 0);
+  const days = last ? agoDays(last) : null;
+  return { last, recv, days, daysRecv: recv ? agoDays(recv) : null, total: n, level: !n ? "ok" : (days === null || days >= SYNC_WARN_DAYS) ? "warn" : "info" };
+}
+let syncBusy = false, syncAgain = false;
+async function renderSync() {
+  const el = $("syncBar"); if (!el) return;
+  if (syncBusy) { syncAgain = true; return; }
+  syncBusy = true;
+  try {
+    const s = await syncState(), cose = s.total === 1 ? "1 cosa da inviare" : `${s.total} cose da inviare`;
+    const tail = (s.recv ? ` · ricevuto dal PC ${agoWords(s.daysRecv)}` : "");
+    let t;
+    if (!s.last && !s.recv && !s.total) t = "Nessuno scambio col PC finora.";
+    else if (!s.total) t = `✓ Tutto inviato al PC · ultimo invio ${agoWords(s.days)}${tail}`;
+    else if (s.level === "warn") t = `⚠ Ultimo invio al PC: ${agoWords(s.days)} · ${cose}. Tocca per inviare.${tail ? "\n" + tail.slice(3) : ""}`;
+    else t = `${cose} al PC · ultimo invio ${agoWords(s.days)}${tail}`;
+    el.className = "syncBar" + (s.total && s.level === "warn" ? " warn" : !s.total && (s.last || s.recv) ? " ok" : "");
+    el.style.whiteSpace = "pre-line"; el.textContent = t; el.dataset.level = s.total ? s.level : "ok";
+  } catch (e) { $("syncBar").classList.add("hidden"); }
+  syncBusy = false;
+  if (syncAgain) { syncAgain = false; renderSync(); }
+}
+$("syncBar").onclick = () => go("ex");
+$("syncBar").onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go("ex"); } };
+document.addEventListener("visibilitychange", () => { if (!document.hidden) renderSync(); });
+setInterval(renderSync, 300000);
+
 /* ================== Scambio ================== */
 /* da inviare = modificato dopo l'ultimo invio e non ancora toccato dopo l'arrivo dal PC */
 const isNew = (i, last) => (!last || i.modificato > last) && i.modificato !== i.daPC;
 const isNewT = (t, last) => (!last || t.modificato > last) && !t.daPC;
 const isNewM = (m, last) => (!last || m.modificato > last) && m.modificato !== m.daPC;
 async function renderEx() {
+  renderSync();
   const last = await getMeta("lastSent"), all = await getAll("interventi"), ton = await getAll("toner"), man = await getAll("manut");
   const n = all.filter(i => isNew(i, last)).length, nt = ton.filter(t => isNewT(t, last)).length, nm = man.filter(m => isNewM(m, last)).length, nv = await VER.countNew(last);
-  const nr = window.ROOMS ? await ROOMS.countNew(last) : 0;
-  $("exInfo").textContent = (last ? `Ultimo invio: ${fmtDt(last.replace("T", " ").slice(0, 16))} (ora locale può differire di 1-2 ore). ` : `Non hai ancora creato nessun file. `) + `Interventi da inviare: ${n}. Cambi toner da inviare: ${nt}. Interventi del tecnico da inviare: ${nm}. Verbali da inviare: ${nv}.` + (nr ? ` Stanze, postazioni e foto di stanze da inviare: ${nr}.` : "");
+  const nr = window.ROOMS ? await ROOMS.countNew(last) : 0, nb = window.BOL ? BOL.exportCount("new", last) : 0;
+  $("exInfo").textContent = (last ? `Ultimo invio: ${fmtDt(last.replace("T", " ").slice(0, 16))} (ora locale può differire di 1-2 ore). ` : `Non hai ancora creato nessun file. `) + `Interventi da inviare: ${n}. Cambi toner da inviare: ${nt}. Interventi del tecnico da inviare: ${nm}. Verbali da inviare: ${nv}.` + (nb ? ` Bolle toner da inviare: ${nb}.` : "") + (nr ? ` Stanze, postazioni e foto di stanze da inviare: ${nr}.` : "");
   if (navigator.storage && navigator.storage.estimate) {
     const e = await navigator.storage.estimate(), p = navigator.storage.persisted ? await navigator.storage.persisted() : false;
     $("storInfo").textContent = `Spazio usato dall'app: ${((e.usage || 0) / 1048576).toFixed(1)} MB. Archivio protetto: ${p ? "sì" : "non garantito"}.`;
@@ -1118,7 +1239,8 @@ async function buildExport(mode) {
     tipo: "helpdesk-telefono", versione: 6, creato: nowIso(),
     utenti: usersOut.map(u => ({ nome: u.nome, ufficio: u.ufficio || "", matricola: u.matricola || "", sede: u.sede || "", telefono: u.telefono || "", seriale_pc: u.seriale_pc || "", imei: u.imei || "", dotazione: cleanDot(u.dotazione), modificato: u.modificato || nowIso() })),
     interventi: items.map(i => ({ uid: i.uid, data_ora: i.data_ora, utente: i.utente, sede: i.sede || "", richiesta: i.richiesta, soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", stato: stOf(i), modificato: i.modificato, foto: (i.foto || []).map(f => ({ nome: f.nome, data: f.data })) })),
-    toner: tons.map(t => ({ uid: t.uid, stampante_uid: t.stampante_uid, colore: t.colore, data_ora: t.data_ora, note: t.note || "", modificato: t.modificato })),
+    toner: tons.map(t => ({ uid: t.uid, stampante_uid: t.stampante_uid, colore: t.colore, data_ora: t.data_ora, note: t.note || "", bolla_uid: t.bolla_uid || "", modificato: t.modificato })),
+    bolle: window.BOL ? BOL.exportItems(mode, last) : [],
     manutenzioni: mans.map(m => ({ uid: m.uid, stampante_uid: m.stampante_uid, data_ora: m.data_ora, data_tecnico: m.data_tecnico || "", ticket: m.ticket || "", tecnico: m.tecnico || "", problema: m.problema || "", intervento: m.intervento || "", stato: m.stato, modificato: m.modificato })),
     verbali: await VER.exportItems(mode, last),
     ...(window.ROOMS ? await ROOMS.exportItems(mode, last) : {}),
@@ -1128,10 +1250,10 @@ async function buildExport(mode) {
 }
 $("btnExport").onclick = async () => {
   const mode = $("exMode").value, data = await buildExport(mode);
-  if (!data.interventi.length && !data.utenti.length && !data.toner.length && !data.manutenzioni.length && !data.verbali.length && !(data.stanze || []).length && !(data.stanze_foto || []).length && !(data.piante || []).length && !(data.postazioni || []).length) return show($("exMsg"), "Non c'è niente di nuovo da inviare.", true);
+  if (!data.interventi.length && !data.utenti.length && !data.toner.length && !(data.bolle || []).length && !data.manutenzioni.length && !data.verbali.length && !(data.stanze || []).length && !(data.stanze_foto || []).length && !(data.piante || []).length && !(data.postazioni || []).length) return show($("exMsg"), "Non c'è niente di nuovo da inviare.", true);
   const name = `dati_telefono_${localInput().replace(/[-:T]/g, "").slice(0, 12)}.json`;
   const file = new File([JSON.stringify(data)], name, { type: "application/json" });
-  const done = async () => { if (mode === "new") await setMeta("lastSent", data.creato); show($("exMsg"), `File creato: ${data.interventi.length} interventi, ${data.toner.length} cambi toner, ${data.manutenzioni.length} interventi del tecnico, ${data.verbali.length} verbali, ${data.utenti.length} utenti.` + ((data.stanze || []).length + (data.postazioni || []).length + (data.piante || []).length + (data.stanze_foto || []).length ? `\nStanze: ${(data.stanze || []).length}, postazioni: ${(data.postazioni || []).length}, foto di stanze: ${(data.stanze_foto || []).filter(f => f.data).length}, piante: ${(data.piante || []).length}.` : "") + `\nNel PC: File › Importa dati dal telefono.`); renderEx(); };
+  const done = async () => { if (mode === "new") await setMeta("lastSent", data.creato); await setMeta("lastExport", data.creato); show($("exMsg"), `File creato: ${data.interventi.length} interventi, ${data.toner.length} cambi toner, ${data.manutenzioni.length} interventi del tecnico, ${data.verbali.length} verbali, ${data.utenti.length} utenti.` + ((data.stanze || []).length + (data.postazioni || []).length + (data.piante || []).length + (data.stanze_foto || []).length ? `\nStanze: ${(data.stanze || []).length}, postazioni: ${(data.postazioni || []).length}, foto di stanze: ${(data.stanze_foto || []).filter(f => f.data).length}, piante: ${(data.piante || []).length}.` : "") + `\nNel PC: File › Importa dati dal telefono.`); renderEx(); };
   try {
     if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: "Dati Help Desk" }); return done(); }
   } catch (e) { if (e && e.name === "AbortError") return show($("exMsg"), "Invio annullato: niente è stato segnato come inviato.", true); }
@@ -1150,6 +1272,7 @@ async function mergeFile(file, restore) {
     const nome = normName(u.nome || ""); if (!nome) continue;
     const k = keyOf(nome), cur = users.find(x => x.key === k), mod = u.modificato || "";
     const rec = { key: k, nome: cur ? cur.nome : nome, ufficio: "ufficio" in u ? oneLine(u.ufficio) : (cur ? cur.ufficio || "" : ""), dotazione: "dotazione" in u ? cleanDot(u.dotazione) : (cur ? cleanDot(cur.dotazione) : []), matricola: "matricola" in u ? String(u.matricola || "").trim() : (cur ? cur.matricola || "" : ""), sede: normName(u.sede || ""), telefono: String(u.telefono || "").trim(), seriale_pc: String(u.seriale_pc || "").trim(), imei: String(u.imei || "").trim(), modificato: mod || nowIso() };
+    if (fromPc) rec.daPC = rec.modificato;   /* arrivato dal PC: non conta come «da inviare» finché non lo modifichi */
     if (!cur) { await put("utenti", rec); nu++; }
     else if (mod && mod > (cur.modificato || "")) { await put("utenti", rec); au++; }
     users = (await getAll("utenti"));
@@ -1170,8 +1293,16 @@ async function mergeFile(file, restore) {
     await put("edifici", { uid: String(e.uid), nome: String(e.nome), sede: String(e.sede || ""), piano_min: toInt(e.piano_min), piano_max: toInt(e.piano_max) });
     if (!cur) ne++;
   }
+  /* stampanti doppie unite sul PC: ricordo «vecchio uid → nuovo uid» e non faccio tornare la vecchia */
+  const uni = (await getMeta("unite")) || {}; let nun = 0, uniNew = false;
+  for (const m of data.stampanti_unite || []) {
+    if (!m || !m.da || !m.a || m.da === m.a || uni[String(m.da)] === String(m.a)) continue;
+    uni[String(m.da)] = String(m.a); uniNew = true;
+  }
+  if (uniNew) await setMeta("unite", uni);
+  const rs = uid => { let u = String(uid || ""), n = 0; while (uni[u] && n++ < 8) u = uni[u]; return u; };
   for (const s of data.stampanti || []) {
-    if (!s.uid || !s.edificio_uid) continue;
+    if (!s.uid || !s.edificio_uid || uni[String(s.uid)]) continue;
     const cur = await getKey("stampanti", s.uid); if (cur && !fromPc) continue;
     await put("stampanti", { uid: String(s.uid), edificio_uid: String(s.edificio_uid), piano: toInt(s.piano), nome: String(s.nome || ""), modello: String(s.modello || ""), ip: String(s.ip || ""), note: String(s.note || ""), seriale: "seriale" in s ? String(s.seriale || "") : (cur ? cur.seriale || "" : ""), fuori_servizio: "fuori_servizio" in s ? (s.fuori_servizio ? 1 : 0) : (cur ? cur.fuori_servizio || 0 : 0), stanza_uid: "stanza_uid" in s ? String(s.stanza_uid || "") : (cur ? cur.stanza_uid || "" : "") });
     if (!cur) ns++;
@@ -1179,7 +1310,7 @@ async function mergeFile(file, restore) {
   for (const t of data.toner || []) {
     if (!t.uid || !t.stampante_uid || !COLORI.some(c => c[0] === t.colore) || !/^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(t.data_ora || "")) { skt++; continue; }
     if (await getKey("toner", t.uid)) { pt++; continue; }
-    const rec = { uid: String(t.uid), stampante_uid: String(t.stampante_uid), colore: t.colore, data_ora: t.data_ora, note: String(t.note || ""), modificato: t.modificato || nowIso() };
+    const rec = { uid: String(t.uid), stampante_uid: rs(t.stampante_uid), colore: t.colore, data_ora: t.data_ora, note: String(t.note || ""), bolla_uid: String(t.bolla_uid || ""), modificato: t.modificato || nowIso() };
     if (fromPc) rec.daPC = true;
     await put("toner", rec); nt++;
   }
@@ -1188,7 +1319,7 @@ async function mergeFile(file, restore) {
     const cur = await getKey("manut", x.uid);
     if (cur && !((x.modificato || "") > (cur.modificato || ""))) { pm++; continue; }
     const dt = /^\d{4}-\d\d-\d\d$/.test(x.data_tecnico || "") ? x.data_tecnico : "";
-    const rec = { uid: String(x.uid), stampante_uid: String(x.stampante_uid), data_ora: x.data_ora, data_tecnico: dt, ticket: String(x.ticket || ""), tecnico: String(x.tecnico || ""), problema: String(x.problema || ""), intervento: String(x.intervento || ""), stato: STATI_T.includes(x.stato) ? x.stato : (dt ? "Eseguito" : "Richiesto"), modificato: x.modificato || nowIso() };
+    const rec = { uid: String(x.uid), stampante_uid: rs(x.stampante_uid), data_ora: x.data_ora, data_tecnico: dt, ticket: String(x.ticket || ""), tecnico: String(x.tecnico || ""), problema: String(x.problema || ""), intervento: String(x.intervento || ""), stato: STATI_T.includes(x.stato) ? x.stato : (dt ? "Eseguito" : "Richiesto"), modificato: x.modificato || nowIso() };
     if (fromPc) rec.daPC = rec.modificato;
     await put("manut", rec);
     cur ? am++ : nm++;
@@ -1203,16 +1334,30 @@ async function mergeFile(file, restore) {
     await setMeta("scortaAgg", data.scorta_aggiornata || data.creato || nowIso());
   }
   const vr = await VER.merge(data, fromPc);
+  const br = window.BOL ? await BOL.merge(data, fromPc) : null;
   const rr = window.ROOMS ? await ROOMS.importData(data, fromPc) : null;
+  /* sposto sulla stampante giusta quello che era rimasto sulla vecchia (cambi toner, interventi, bolle) e tolgo la vecchia */
+  for (const da of Object.keys(uni)) {
+    const to = rs(da); if (!to || to === da) continue;
+    const old = await getKey("stampanti", da); if (!old) continue;
+    if (!(await getKey("stampanti", to))) continue;      /* la nuova non c'è ancora: aspetto che arrivi dal PC */
+    for (const t of await getAll("toner")) if (t.stampante_uid === da) await put("toner", { ...t, stampante_uid: to });
+    for (const x of await getAll("manut")) if (x.stampante_uid === da) await put("manut", { ...x, stampante_uid: to });
+    for (const b of await getAll("bolle")) if (b.stampante_uid === da || b.stampante_montata_uid === da) await put("bolle", { ...b, stampante_uid: b.stampante_uid === da ? to : b.stampante_uid, stampante_montata_uid: b.stampante_montata_uid === da ? to : b.stampante_montata_uid });
+    await del("stampanti", da); nun++;
+  }
   const verb = restore ? "ripristinati" : "ricevuti dal PC";
+  if (fromPc && !restore) await setMeta("lastRecv", nowIso());
   let msg = `Utenti nuovi: ${nu}, aggiornati: ${au}`;
   if ((data.interventi || []).length) msg += `\nInterventi ${verb}: ${ni}, aggiornati: ${ai}, già presenti: ${sk}`;
   if ((data.toner || []).length) msg += `\nCambi toner ${verb}: ${nt}, già presenti: ${pt}` + (skt ? `, ignorati: ${skt}` : "");
   if ((data.manutenzioni || []).length) msg += `\nInterventi del tecnico ${verb}: ${nm}, aggiornati: ${am}, già presenti: ${pm}` + (skm ? `, ignorati: ${skm}` : "");
   if ((data.verbali || []).length) msg += `\nVerbali ${verb}: ${vr.n}, aggiornati: ${vr.a}, già presenti: ${vr.p}` + (vr.s ? `, ignorati: ${vr.s}` : "");
+  if (br && (br.n || br.a || br.p || br.s)) msg += `\nBolle toner ${verb}: ${br.n}, aggiornate: ${br.a}, già presenti: ${br.p}` + (br.s ? `, ignorate: ${br.s}` : "");
   if (rr && rr.msg) msg += "\n" + rr.msg;
   if (Array.isArray(data.scorta)) msg += `\nScorta toner: ${nsc} voci aggiornate`;
   if (ne || ns) msg += `\nEdifici nuovi: ${ne}, stampanti nuove: ${ns}`;
+  if (nun) msg += `\nStampanti doppie unite: ${nun} (lo storico è passato alla stampante col seriale)`;
   return msg;
 }
 function wire(btn, inp, restore) {
@@ -1235,8 +1380,11 @@ wire("btnImport", "imFile", false); wire("btnRestore", "rsFile", true);
 </script>
 <script src="verbali.js"></script>
 <script src="stanze.js"></script>
+<script src="bolle.js"></script>
 <script src="toscana.js"></script>
 <script src="barcode.js"></script>
+<script src="qr.js"></script>
 <script src="scan.js"></script>
+<script src="corridoio.js"></script>
 </body>
 </html>

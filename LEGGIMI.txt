@@ -2,10 +2,113 @@ HELP DESK INAIL - PC + app per iPhone
 =====================================
 
 NOVITA' DI QUESTA VERSIONE
+ - PASSEGGIATA NEL PIANO IN 3D (PC e telefono): vedi il piano come un vero corridoio. Due modi:
+     * DALL'ALTO: il piano come una casa delle bambole, con le stanze, le scrivanie, le stampanti nel
+       corridoio e una TARGHETTA in piedi davanti a ogni stanza. Si gira trascinando, ci si avvicina
+       (rotellina o + e -), si scorre lungo il corridoio col cursore.
+     * CAMMINA (prima persona): cammini nel corridoio con le frecce (o W A S D), ti giri a destra e a
+       sinistra e sulle PORTE vedi le TARGHETTE come quelle vere: pannello blu col NUMERO NUOVO della
+       stanza in bianco grassetto e, sotto, il pannello chiaro con l'UFFICIO in grassetto e il NOME
+       delle persone. Il pallino sulla targhetta e' verde se i codici sono tutti scritti, rosso se ne
+       manca qualcuno, grigio se la stanza e' libera. In basso (PC) o nel riquadro (telefono) compare
+       la targhetta che stai guardando con il pulsante "Entra" che apre la stanza. "Vai a..." ti porta
+       davanti a una stanza. In alto a destra c'e' la MINI-MAPPA del piano con il tuo segnaposto
+       (clic o tocco su una stanza = ci vai).
+     * Sul PC: File > "Passeggiata nel piano in 3D..." oppure, in "Piani e stanze", il pulsante
+       "Passeggiata nel piano 3D" (apre il piano scelto). Sul telefono: nella scheda del piano
+       ("Piani e stanze") i pulsanti "Passeggiata nel piano" e "Edificio in 3D".
+ - EDIFICIO INTERO IN 3D (PC e telefono): tutti i piani impilati. Giri intorno al palazzo
+   trascinando, ti avvicini con rotellina / + e -, e clicchi (o tocchi) un piano per entrarci a
+   camminare. A sinistra c'e' l'elenco dei piani con stanze, persone e stampanti (ticket aperti,
+   toner basso). Sul PC: File > "Edificio intero in 3D...", oppure il pulsante "Edificio in 3D"
+   nella scheda Edificio e in "Piani e stanze". Sul telefono: scheda Edificio, pulsante "Edificio in
+   3D". Le targhette e i colori sono disegnati dai dati che l'app ha gia' (stanze, persone,
+   stampanti): se cambi un nome e chiudi la scheda, la passeggiata si aggiorna.
+ - LA MIA FACCIA (PC e telefono): pulsante "La mia faccia..." (PC) / smile (telefono) nella
+   passeggiata in prima persona. Scegli una tua foto: viene ritagliata quadrata e messa al posto
+   del pallino verde sulla mini-mappa. La foto resta SOLO sul dispositivo dove l'hai scelta (sul PC
+   nella cartella dei dati, file la_mia_faccia.png; sul telefono dentro l'app): NON va nei file di
+   scambio, NON va nel backup, NON va su GitHub. Con "Togli la foto" la cancelli.
+ - BARRETTE DEL TONER STIMATE (PC e telefono): sotto ogni colore di ogni stampante c'e' una barretta
+   che STIMA quanto toner resta, dai giorni passati dall'ultimo cambio e da quanto sono durati i
+   cambi precedenti di quel colore. Non e' il livello vero letto dalla stampante. Tratteggiata =
+   servono piu' cambi registrati per stimare; contorno rosso = quasi finito.
+ - STAMPANTI DOPPIE (PC e telefono): se avevi gia' le stampanti scritte a mano e poi hai importato
+   l'elenco con i numeri di serie, ti ritrovavi doppioni. Ora:
+     * l'importazione NON duplica piu': una vecchia stampante senza seriale (stesso edificio, piano e
+       modello, e sicuramente quella) prende il seriale e il nome del file e tiene tutto lo storico;
+     * dove non e' chiaro quale sia, resta una stampante nuova e la UNISCI TU: File > "Unisci doppioni
+       stampanti..." (anche pulsante nella scheda Edificio). Per ogni vecchia scegli la nuova: resta la
+       NUOVA (nome e seriale del file) e ci passano storico toner, interventi e bolle; la vecchia
+       sparisce. Fai prima un backup (File > Salva una copia di backup);
+     * dopo l'unione fai "Esporta dati per il telefono" e sul telefono "Ricevi dal PC": il telefono
+       toglie da solo le vecchie e non le fa tornare;
+     * il NUMERO DI SERIE ora si vede sulla scheda di ogni stampante (PC: sotto il modello, "S/N ...";
+       telefono: sulla scheda nell'edificio).
+ - BOLLINO "PRESA DI RETE" (PC e telefono): sulla scrivania a pagina intera c'e' un bollino in piu',
+   sul muro dietro la scrivania: la PRESA DI RETE. Tocchi (o clicchi) il bollino e scrivi il
+   codice che c'e' sulla placca (esempio PD12-07) oppure lo leggi con la fotocamera; se vuoi scrivi
+   anche la PORTA DELLO SWITCH (facoltativa, esempio "SW1 porta 12"). Verde = codice scritto, rosso
+   = manca. La presa sta nella dotazione della persona (riga "Presa di rete"), quindi viaggia nei file
+   di scambio come il resto. ATTENZIONE: la presa e' della SCRIVANIA, non della persona: se sposti
+   la persona in un'altra stanza (o la togli dalla stanza) la presa viene TOLTA e l'app te lo dice,
+   cosi' non resta un codice sbagliato. Nella visita 3D compare anche il suo pallino (verde/rosso)
+   sotto la scrivania. Non conta tra gli "+ N apparecchi". Vedi "PRESA DI RETE".
+ - PROMEMORIA DELLO SCAMBIO COL PC (telefono): sotto l'intestazione c'e' una barra che dice quando
+   hai mandato l'ultima volta i dati al PC e quante cose nuove ci sono da mandare.
+     * GRIGIA: "Nessuno scambio col PC finora."
+     * VERDE: "Tutto inviato al PC" con la data dell'ultimo invio.
+     * NEUTRA: "3 cose da inviare al PC" (ultimo invio da meno di 3 giorni).
+     * GIALLA con "!": ci sono cose da inviare e l'ultimo invio e' di 3 giorni fa o piu' (o non e'
+       mai stato fatto).
+   Toccando la barra vai direttamente a "Scambio". Si aggiorna da sola. Le cose arrivate dal PC non
+   contano come "da inviare". Vedi "PROMEMORIA DELLO SCAMBIO".
+ - LAMPO VERDE E SUONO NELLA LETTURA DEI CODICI (telefono): quando l'app legge un codice lo schermo
+   della fotocamera fa un LAMPO VERDE (circa un terzo di secondo) e poi si chiude. Il bip e la
+   vibrazione c'erano gia'; adesso in alto c'e' un pulsante con l'altoparlante per SPEGNERE il
+   suono (la scelta resta ricordata sul telefono). La vibrazione resta. Nella lettura a catena del
+   censimento il lampo c'e' a ogni codice e la fotocamera resta accesa.
+ - BOLLE DEI TONER (telefono + PC): quando il toner ARRIVA registri la bolla (inquadri il codice a
+   barre della bolla, per esempio LE:920245766, oppure lo scrivi; in piu' puoi fotografare la
+   bolla). Scegli edificio e PIANO (come c'e' scritto sulla bolla: "Edifici:Unico;Piano:Terzo"), il
+   colore del toner (lo propone da solo dal codice: TNP79M = Magenta) e, se la sai, la stampante.
+   Appena salvi, il toner entra nell'INVENTARIO diviso per edificio e piano ("Toner nei piani") e, se
+   hai scelto la stampante (il modello), la SCORTA di quel modello sale di uno. Quando vai a CAMBIARE
+   il toner apri la bolla da montare e inquadri il QR (o il codice a barre) col numero di serie
+   della stampante: l'app controlla che sia la stampante giusta, segna data e ora del montaggio,
+   registra il cambio toner e la scorta scende di uno. Se il seriale letto e' diverso da quello
+   scritto sulla bolla ti avvisa (puo' essere una bolla fatta per un'altra stampante) e decidi tu.
+   Se sbagli c'e' "Annulla il montaggio". Sul PC trovi tutto nella scheda Stampanti > "Bolle toner"
+   (con la foto della bolla), dopo "Importa dati dal telefono". Vedi "BOLLE DEI TONER".
+ - QR CODE ANCHE SUL TELEFONO: adesso l'app per iPhone legge anche i QR code (prima solo i codici a
+   barre). Sulle etichette delle stampanti il QR vicino al numero di serie contiene il seriale: lo
+   inquadri e il seriale va nel campo, come per i codici a barre.
+ - VISITA 3D DELLA STANZA (solo telefono): nella scheda di una stanza c'e' il pulsante "Entra nella
+   stanza (3D)". Entri nella stanza vista in 3D, con il pavimento, le pareti e una SCRIVANIA PER OGNI
+   PERSONA (due persone = due scrivanie; quelle libere sono sbiadite). Giri intorno alla stanza
+   trascinando il dito, ti avvicini con due dita o con + e -. Sotto ogni scrivania ci sono i pallini
+   dei codici (verde = scritto, rosso = manca). Tocchi una scrivania e si apre a pagina intera con i
+   bollini; "Torna alla stanza 3D" ti riporta dentro. Non e' una realta' aumentata con la fotocamera
+   (su iPhone da una pagina web non si puo'): e' una visita 3D disegnata dai dati. I corridoi e
+   l'edificio sono nelle visite 3D del piano (vedi sopra). Sul PC la stanza resta la vista a scrivanie. Si puo'
+   aprire anche dal browser del PC, ma i dati stanno nel telefono (o nel browser dove li importi).
+ - SCRIVANIA A PAGINA INTERA CON I BOLLINI (PC e telefono): quando apri una scrivania si apre a
+   PAGINA INTERA, con la scrivania in grande e un BOLLINO su ogni dispositivo: computer, MONITOR
+   AOC, cellulare (se c'e') e telefono Teams (se c'e'). Il bollino e' VERDE con la spunta se il
+   codice e' scritto, ROSSO col + se manca. Tocchi (o clicchi) il bollino e si apre la schermata
+   del dispositivo: S/N del computer, S/N del monitor AOC, S/N del telefono Teams, IMEI del
+   cellulare. Il codice lo scrivi a mano OPPURE lo leggi con la FOTOCAMERA (sul PC "Fotocamera...",
+   sul telefono "Leggi con la fotocamera"). Vedi "SCRIVANIA A PAGINA INTERA E BOLLINI".
+ - MONITOR AOC: e' parte della dotazione come cellulare e PC. Il suo S/N sta nella dotazione della
+   persona (riga "Monitor", modello AOC...), quindi viaggia nei file di scambio e nell'elenco.
+   Per i monitor ti ho preparato un elenco gia' compilato con i numeri di serie della lista che
+   mi hai dato (vedi "IMPORTARE L'ELENCO DI STANZE E PERSONE").
+ - FOTO KONICA MINOLTA nuove (bizhub C3350i e C250i): sostituite sul PC e sul telefono, senza
+   la scritta C360i sulla foto grande.
  - SCRIVANIE DISEGNATE (PC e telefono): ogni postazione di una stanza e' disegnata come una vera
    scrivania (pannello azzurro, monitor con webcam, tastiera, mouse). Tocchi (o clicchi) la
-   scrivania e vedi il NUMERO DI SERIE DEL PC (con "Copia S/N"), l'IMEI del cellulare e la
-   dotazione. Per ogni scrivania scegli tu il CELLULARE (Samsung Galaxy S24, S24 Plus, S25), il
+   scrivania e si apre a pagina intera (vedi sopra) col NUMERO DI SERIE DEL PC (con "Copia S/N"),
+   l'IMEI del cellulare e la dotazione. Per ogni scrivania scegli tu il CELLULARE (Samsung Galaxy S24, S24 Plus, S25), il
    PORTATILE DELL (13 pollici o 15 pollici) e se c'e' il TELEFONO TEAMS da scrivania (AudioCodes
    C435HD): sulla scrivania compaiono le FOTO di quei dispositivi e cambiano con la scelta. Le
    scrivanie libere sono sbiadite. Vedi "SCRIVANIE DISEGNATE".
@@ -43,8 +146,9 @@ NOVITA' DI QUESTA VERSIONE
      * PC: usa la webcam del portatile (o una USB). Legge i codici a barre (Code 128 e Code 39) e
        anche i QR code. Se la webcam non basta o non c'e': "Scegli una foto...", "Incolla immagine"
        (per esempio una foto o uno screenshot copiato) oppure "Scrivi a mano".
-     * Telefono (anche iPhone): fotocamera in diretta, senza rete e senza programmi in piu'. Codici
-       a barre si', QR code NO (Safari su iPhone non ha il lettore di QR e non l'ho aggiunto).
+     * Telefono (anche iPhone): fotocamera in diretta, senza rete e senza programmi in piu'. Legge i
+       codici a barre e anche i QR code (Safari su iPhone non ha il suo lettore: l'app ne ha uno
+       scritto apposta, qr.js e barcode.js).
      * Dove: Nuovo intervento (seriale PC, IMEI), scheda utente (seriale PC, IMEI), Utenti > Cerca
        (trovi la persona dal seriale o dall'IMEI) e Verbali (numero di serie, codice della dotazione,
        codici del censimento).
@@ -170,7 +274,9 @@ NOVITA' DI QUESTA VERSIONE
  - Nel repository: Add file > Upload files.
  - Trascina helpdesk.py (sostituisce il vecchio), printer_images.py, verbali.py, verbali_modelli.py,
    requirements.txt (sostituisce il vecchio: ora comprende numpy e opencv per la fotocamera) e,
-   NUOVO, codici.py (la lettura dei codici con la fotocamera).
+   codici.py (la lettura dei codici con la fotocamera) e, NUOVO, corridoio3d.py (le visite 3D
+   del PC: passeggiata nel piano ed edificio intero). Se dimentichi corridoio3d.py il programma si
+   apre lo stesso, ma i pulsanti 3D dicono che manca il file.
  - Cambia anche build.yml (serve per i verbali e per la fotocamera): su GitHub apri
    .github/workflows/build.yml, tasto matita, cancella tutto e incolla il contenuto del build.yml
    di questo zip, poi Commit. (Oppure trascina la cartella .github di questo zip.)
@@ -183,7 +289,8 @@ NOVITA' DI QUESTA VERSIONE
  - Trascina l'INTERA cartella "docs" di questo zip (se non si carica la cartella, carica
    i file che ci sono dentro e scrivi "docs/" davanti al nome quando GitHub lo chiede).
    File nuovi rispetto a prima: verbali.js (scheda Verbali), stanze.js (Piani e stanze), toscana.js
-   (Mappa della Toscana), barcode.js e scan.js (lettura dei codici con la fotocamera).
+   (Mappa della Toscana), barcode.js e scan.js (lettura dei codici con la fotocamera) e, NUOVO,
+   corridoio.js (passeggiata nel piano ed edificio in 3D).
  - Commit changes.
  - La prima volta: Settings > Pages > "Build and deployment": Source = "Deploy from a branch",
    Branch = main, cartella = /docs > Save.
@@ -406,22 +513,51 @@ PERSONE, UFFICIO E DOTAZIONE
  - Scambio col telefono: ufficio e dotazione viaggiano nei file di scambio nei due sensi. Vince la
    modifica piu' recente. Un file vecchio (senza ufficio e dotazione) non cancella quello che c'e'.
 
+SCRIVANIA A PAGINA INTERA E BOLLINI (PC e telefono)
+ - Si apre toccando (o cliccando) una scrivania occupata: sul PC una finestra a pagina intera
+   (si apre ingrandita), sul telefono una pagina che copre tutto lo schermo ("Indietro" in alto per
+   tornare). La scrivania e' disegnata in grande, con le foto dei dispositivi scelti.
+ - Un bollino su ogni dispositivo:
+     * Computer: S/N del computer (e' il "Seriale del PC" della persona).
+     * Monitor AOC: S/N del monitor (c'e' sempre; la riga "Monitor" si crea da sola alla prima volta,
+       con modello AOC).
+     * Cellulare: IMEI. Il bollino c'e' se sulla scrivania c'e' un cellulare (modello scelto) oppure
+       se la persona ha un IMEI. Per averlo scegli prima il "Cellulare sulla scrivania".
+     * Telefono Teams: S/N. Il bollino c'e' se spunti "Telefono Teams".
+   Verde con la spunta = codice scritto. Rosso col + = da inserire. Sotto la scrivania trovi lo
+   stesso elenco con i codici scritti: tocchi la riga e si apre la stessa schermata.
+ - La schermata del dispositivo: un campo dove SCRIVI il codice e il pulsante della FOTOCAMERA
+   ("Fotocamera..." sul PC, "Leggi con la fotocamera" sul telefono): inquadri il codice a barre
+   dell'etichetta e il codice va nel campo, poi premi Salva. Salva = il codice e' scritto subito
+   (non serve altro). "Cancella il codice" lo toglie. "Annulla" non cambia niente.
+ - Controlli: il S/N viene scritto senza spazi e in MAIUSCOLO (da 4 a 40 caratteri). L'IMEI deve
+   essere di 15 cifre con la cifra di controllo giusta: se ne manca una o ce n'e' una sbagliata
+   lo dice e non salva (si possono scrivere anche con spazi, trattini o "IMEI:" davanti). Un codice
+   letto con la fotocamera passa gli stessi controlli.
+ - Dove si scrive: S/N del computer e IMEI nei dati della persona; S/N del monitor e del telefono
+   Teams nella dotazione (righe "Monitor" e "Telefono Teams"). Viaggiano tutti nei file di scambio
+   tra PC e telefono come il resto; vince la modifica piu' recente.
+ - Cambiare cellulare, portatile o Teams NON cancella il monitor ne' i codici gia' scritti.
+ - NON provato qui con una fotocamera vera, un iPhone vero e finestre vere del PC (le prove sono
+   fatte con un finto schermo e un browser di prova): al primo uso controlla che la scrivania si
+   apra a pagina intera e che la fotocamera legga un'etichetta.
+
 SCRIVANIE DISEGNATE (PC e telefono)
  - Una scrivania per ogni postazione della stanza: prima quelle occupate (con il nome della
    persona), poi le libere (sbiadite) fino al numero di "Scrivanie totali" della stanza. Se in una
    stanza non hai scritto le scrivanie totali, vedi solo quelle occupate.
  - Sulla scrivania: sotto al disegno ci sono il nome, "S/N" del PC (oppure "S/N non inserito"),
    il portatile, il cellulare e il telefono Teams scelti, e "+ N apparecchi" per il resto della
-   dotazione.
+   dotazione (il monitor AOC non si conta in piu': ha il suo bollino).
  - PC: Stampanti > Piani e stanze > scegli "Scrivanie" (accanto a Edificio e Piano): vedi le
    scrivanie di tutte le stanze del piano. Clic su una scrivania occupata = finestra "Postazione"
-   con il S/N grande e il pulsante "Copia S/N", IMEI, telefono, matricola, sede, la dotazione e i
-   pulsanti "Modifica la persona..." e "Apri la stanza...". Clic su una scrivania libera = apre
-   la stanza. Anche dentro la scheda della stanza c'e' la scheda "Scrivanie" (accanto a
+   a PAGINA INTERA con la scrivania in grande e i bollini, il S/N del PC con il pulsante "Copia S/N",
+   IMEI, telefono, matricola, sede, la dotazione e i pulsanti "Modifica la persona..." e "Apri la
+   stanza...". Clic su una scrivania libera = apre la stanza. Anche dentro la scheda della stanza c'e' la scheda "Scrivanie" (accanto a
    "Elenco").
  - Telefono: Stampanti > Piani e stanze: sotto la pianta c'e' "Scrivanie del piano" (una riga per
    stanza); dentro la scheda della stanza c'e' la sezione "Scrivanie". Tocchi la scrivania e si
-   apre il dettaglio con il S/N, "Copia il S/N" e la dotazione.
+   apre a pagina intera con i bollini, il S/N, "Copia il S/N del computer" e la dotazione.
  - Scegliere cellulare, portatile e telefono Teams: nella finestra "Postazione" (PC) o nel
    dettaglio (telefono) ci sono le tre scelte:
      * Cellulare sulla scrivania: Non indicato / S24 / S24 Plus / S25 (Samsung Galaxy). Cambia la
@@ -447,7 +583,7 @@ SCRIVANIE DISEGNATE (PC e telefono)
    quelli in uso, non dei tuoi apparecchi: se non ti piacciono si cambiano.
  - Un modello diverso dai tre cellulari o dai due Dell (voce "Altro: ...") ha un disegno semplice,
    senza foto. Senza nessuna scelta la scrivania mostra solo monitor, tastiera e mouse.
- - Telefono: dopo aver caricato i file nuovi su GitHub riapri l'app (versione "helpdesk-v19"),
+ - Telefono: dopo aver caricato i file nuovi su GitHub riapri l'app (versione "helpdesk-v24"),
    poi rifai l'esportazione dal PC e "Ricevi dal PC", cosi' scrivanie, cellulari e portatili
    arrivano uguali.
 
@@ -462,7 +598,12 @@ IMPORTARE L'ELENCO DI STANZE E PERSONE (solo PC)
    vuoto lo riceve; se siede gia' in un'altra stanza la lascio dov'e' e te lo dico nel messaggio
    finale. Si puo' ripetere senza danni.
  - Alla fine un messaggio riassume: stanze nuove, persone nuove, persone sedute, uffici scritti,
-   stampanti nuove e quello che non e' stato importato.
+   stampanti nuove, matricole e dotazioni scritte e quello che non e' stato importato.
+ - Il file puo' avere anche la MATRICOLA di ogni persona e la sua DOTAZIONE con il MONITOR AOC (tipo
+   "Monitor", modello, seriale): matricola e dotazione si completano solo dove mancano, niente si
+   sovrascrive. Il file che ti ho preparato ha 92 monitor abbinati a persone sedute e, in piu', 40
+   colleghi dell'elenco monitor che non hanno ancora una stanza: sono nella parte "persone senza
+   stanza" (si creano come persone, senza postazione; poi li siedi tu nella stanza giusta).
  - Sul telefono arriva tutto con il solito scambio: File > Esporta dati per il telefono, poi sul
    telefono Scambio > Ricevi dal PC.
  - Il file contiene nomi di persone: non pubblicarlo su GitHub e non lasciarlo in giro.
@@ -474,7 +615,7 @@ LETTURA DEI CODICI CON LA FOTOCAMERA (PC E TELEFONO)
    nell'assegnazione, codice degli apparecchi nel censimento) e, solo sul PC, "Numero di serie" della
    stampante. Per il resto e' lo stesso sul PC e sul telefono.
  - Come si usa: tocchi il pulsante, inquadri il codice a barre e lo tieni fermo nel riquadro. Appena
-   lo legge (suono, e vibrazione dove il telefono la ha) il codice va nel campo e la schermata si
+   lo legge (lampo verde, suono - spegnibile con l'altoparlante in alto - e vibrazione dove il telefono la ha) il codice va nel campo e la schermata si
    chiude. La prima volta Safari chiede il permesso della fotocamera: rispondi "Consenti". Se avevi
    negato, si cambia nelle impostazioni di Safari (o dell'app sulla schermata Home).
  - Se non parte: "Scatta una foto" (scatti una foto al codice o scegli una foto dalla libreria; il
@@ -492,10 +633,12 @@ LETTURA DEI CODICI CON LA FOTOCAMERA (PC E TELEFONO)
    utente (se ancora vuoto) si compilano da soli, come quando scrivi il seriale a mano.
  - Utenti > Cerca: leggi il seriale o l'IMEI di un apparecchio e vedi a chi e' assegnato.
  - Che codici legge: i codici a barre classici che si trovano su seriali, IMEI ed etichette
-   (Code 128 e Code 39). Il PC legge anche i QR code. Il telefono NO (solo se il browser ha un suo
-   lettore, nel campo Cerca di Utenti, quelli li legge). Dal QR il PC prende il numero di serie se
-   c'e' nel testo ("S/N: ...", "serial=..." o l'ultimo pezzo dell'indirizzo): e' un'euristica, se
-   il QR contiene solo un indirizzo senza seriale non scrive niente e te lo dice.
+   (Code 128 e Code 39) e i QR code, sia sul PC sia sul telefono. Dal QR l'app prende il numero di
+   serie se c'e' nel testo ("S/N: ...", "serial=..." o l'ultimo pezzo dell'indirizzo): e' una
+   regola, se il QR contiene solo un indirizzo senza seriale non scrive niente e te lo dice. Il QR
+   sul telefono e' provato con la foto vera della tua etichetta (bizhub C3350i, S/N A93E021032278)
+   e con altre 6 foto vere: su un QR piccolo e lontano puo' servire avvicinarsi, oppure fare la foto
+   da vicino o scrivere il seriale a mano.
  - Come e' fatto: su iPhone Safari tiene SPENTO il lettore di codici del browser, quindi l'app ha un
    lettore suo (barcode.js, scritto per questa app, nessuna libreria esterna, funziona senza rete).
    Dove il browser ha il suo lettore, l'app usa quello e, se non trova niente, prova anche il suo.
@@ -513,6 +656,77 @@ LETTURA DEI CODICI CON LA FOTOCAMERA (PC E TELEFONO)
  - NON provato qui: iPhone vero, fotocamera vera (provata solo una fotocamera simulata che mostra
    immagini di codici), etichette vere dell'INAIL, luce vera, tremolio della mano. Se una etichetta
    non si legge, scrivimi che tipo di codice e' (oppure una foto) e lo aggiungo.
+
+BOLLE DEI TONER (come funzionano)
+ - Telefono, scheda Stampanti: in alto "Bolle toner" con "Nuova bolla (arrivo toner)" e l'elenco
+   delle bolle da montare. Sotto, in "Scorta toner", l'inventario dei toner arrivati per edificio e
+   piano (colonne Nero, Azzurro, Magenta, Giallo, Vaschetta).
+ - ARRIVO: codice della bolla (barcode o a mano), numero della bolla (facoltativo), foto della
+   bolla (facoltativa), codice del toner (il colore si propone da solo: ultima lettera K, C, M, Y =
+   Nero, Azzurro, Magenta, Giallo), edificio, piano, stampante (facoltativa: se la scegli si
+   compila modello e seriale della bolla), data e ora (di default adesso), note. Salva = il toner
+   entra nell'inventario del piano.
+ - SCORTA: sale di uno all'arrivo SOLO se il modello e' noto (hai scelto la stampante). Se non lo
+   conosci, il modello si prende al montaggio e la scorta sale in quel momento: la stessa bolla non
+   viene mai contata due volte. Al montaggio la scorta scende di uno (come ogni cambio toner).
+ - MONTAGGIO: apri la bolla, inquadra il QR/barcode del seriale sulla stampante (o scrivilo),
+   l'app trova la stampante con quel seriale. Se il seriale non e' in nessuna scheda puoi sceglierla
+   a mano. Se e' diverso dal seriale scritto sulla bolla c'e' l'avviso: puoi confermare lo stesso.
+   Si salvano data e ora e il seriale letto, e si crea il cambio toner nella stampante.
+ - SBAGLIATO? "Annulla il montaggio" riporta la bolla in "da montare" e toglie dal telefono il
+   cambio toner collegato; "Elimina la bolla" la toglie dal telefono (e dall'inventario del
+   piano). Se avevi gia' mandato i dati al PC, sul PC restano: toglile anche li'.
+ - SCAMBIO COL PC: le bolle viaggiano nel file telefono -> PC e PC -> telefono (anche la foto, se
+   scegli di mandare le foto). Sul PC: scheda Stampanti > "Bolle toner": inventario per piano,
+   elenco (Da montare / Montati / Tutte) e "Vedi la foto della bolla". Nella scheda "Scorta toner"
+   del PC i numeri comprendono gia' gli arrivi. Le foto delle bolle stanno nella cartella dati del
+   programma (sottocartella delle bolle), non dentro il database.
+ - NON provato qui: una bolla vera con il lettore vero e un iPhone vero (provato con foto di
+   etichette e bolle, e con una fotocamera simulata). Gli esempi delle foto (seriali diversi tra
+   bolla e stampante) erano solo esempi: nell'uso vero i due seriali coincidono.
+
+PRESA DI RETE (PC e telefono)
+ - Dove: scrivania a pagina intera (PC: Stampanti > Piani e stanze > clic sulla scrivania occupata;
+   telefono: scheda stanza > Scrivanie > tocca la scrivania, oppure dalla visita 3D). Il bollino della
+   presa e' l'ULTIMO della fila, disegnato su una placca bianca sul muro dietro la scrivania (la placca
+   si vede solo a pagina intera; nelle scrivanie piccole c'e' solo il bollino).
+ - Cosa scrivi: il CODICE DELLA PRESA (lettere, numeri, spazio, trattino, punto, barra; massimo 30
+   caratteri; si scrive in maiuscolo) e, se vuoi, la PORTA DELLO SWITCH. Il codice si puo' leggere con
+   la fotocamera (barcode o QR della placca). Se lasci vuoti codice e porta, la riga si toglie.
+   "Cancella il codice" toglie tutto.
+ - Dove sta: nella dotazione della persona, riga "Presa di rete" (modello = porta dello switch,
+   seriale = codice della presa). Non e' un apparecchio: non si conta tra gli "+ N apparecchi" e non
+   cambia il disegno degli altri dispositivi.
+ - Se la persona CAMBIA SCRIVANIA: la presa e' del posto, non della persona. Quando la sposti in
+   un'altra stanza, o la togli dalla stanza, la riga "Presa di rete" viene cancellata e compare un
+   messaggio ("La presa di rete X era della scrivania di prima: l'ho tolta..."). Alla nuova scrivania
+   scrivi la presa giusta. Se la sposti dentro la stessa stanza non cambia niente.
+ - Attenzione: se modifichi la dotazione dalla scheda della persona (non dalla scrivania) la riga
+   "Presa di rete" e' una riga come le altre: se la lasci la presa resta, se la togli la presa sparisce.
+   Se salvi una scheda persona modificata DOPO lo spostamento, la scheda vince (vale sempre la
+   modifica piu' recente): se compare una presa che non ti aspetti controlla il bollino dopo lo
+   scambio.
+ - Scambio PC <-> telefono: la presa viaggia con il resto della dotazione. Dopo aver caricato i file
+   nuovi su GitHub riapri l'app (versione "helpdesk-v24") e rifai "Ricevi dal PC".
+ - NON provato qui: PC e iPhone veri, fotocamera vera su una placca vera (provato con finestre finte,
+   con un browser di prova e con una fotocamera simulata).
+
+PROMEMORIA DELLO SCAMBIO (telefono)
+ - Cosa conta come "da inviare": utenti nuovi o modificati sul telefono, interventi, cambi toner,
+   manutenzioni, bolle, verbali, stanze e postazioni cambiati dopo l'ultimo invio al PC (le foto
+   viaggiano con la cosa a cui appartengono). Cio' che arriva dal PC non conta.
+ - "Ultimo invio" = l'ultima volta che hai preparato un file per il PC (anche se hai scelto "Tutto").
+   Dopo un invio "Tutto" la barra diventa verde, ma "Solo le novita'" continua a contare dall'ultimo
+   invio delle novita': l'invio "Tutto" non fa saltare niente al file successivo.
+   Il ricevere un file dal PC non cambia l'ultimo invio, ma la barra scrive anche "ricevuto dal PC
+   ieri / 4 giorni fa" (l'ultima volta che hai fatto "Ricevi dal PC").
+ - Soglia: 3 giorni (si cambia solo nel codice). Con cose da inviare e 3 giorni (o piu') dall'ultimo
+   invio la barra diventa gialla. Con niente da inviare resta verde, anche dopo molti giorni.
+ - Tocchi la barra: si apre "Scambio" (la preparazione del file e' sempre una tua scelta, la barra
+   non manda niente da sola). Si aggiorna quando riapri l'app, cambi scheda, salvi qualcosa, e ogni
+   5 minuti. Funziona senza rete: usa solo i dati del telefono.
+ - Non sostituisce la regola "importa SEMPRE il file del telefono prima di cambiare le stanze sul
+   PC": e' solo un promemoria.
 
 SUL PC: LA FINESTRA DELLA FOTOCAMERA
  - Premi "Fotocamera..." accanto al campo: si apre una finestra con l'immagine della webcam e un
@@ -535,6 +749,47 @@ SUL PC: LA FINESTRA DELLA FOTOCAMERA
    (la creazione del .exe avviene su GitHub e non l'ho potuta eseguire). Provato con una webcam
    simulata (video di codici), con finestre finte e con foto. Se dopo l'aggiornamento il programma
    non parte o la finestra della fotocamera da' errore, dimmelo con il messaggio che compare.
+
+PASSEGGIATA NEL PIANO E EDIFICIO IN 3D
+ - Come e' disegnato: il corridoio ha le stanze con i NUMERI DISPARI da una parte e i PARI
+   dall'altra (come nei corridoi veri); se i codici non hanno numeri (per esempio "Sala riunioni")
+   le stanze si alternano a sinistra e a destra. Ogni stanza ha la sua porta e, accanto, la
+   targhetta. In fondo al corridoio c'e' la scritta USCITA e, davanti, le stampanti del piano che
+   non sono dentro una stanza (con i bollini rossi dei ticket aperti e giallo del toner basso, e una
+   croce rossa se sono fuori servizio).
+ - Targhetta: numero della stanza (nuovo), ufficio, nomi (fino a 3, poi "+N"). Se la scritta e'
+   lunga si rimpicciolisce o va a capo. Pallino: verde = tutti i codici delle scrivanie scritti,
+   rosso = ne manca qualcuno, grigio = stanza libera.
+ - PC, comandi in prima persona: frecce su/giu (o W/S) = avanti/indietro; frecce destra/sinistra
+   (o D/A) = ti giri; trascini il mouse = guardi intorno; rotellina = avanti/indietro; clic su una
+   porta o su una targhetta, oppure Invio, oppure il pulsante "Entra nella stanza" = apri la stanza
+   (quando chiudi la scheda la passeggiata si aggiorna); "Vai a..." = ti porta davanti a una stanza;
+   clic sulla mini-mappa = ci vai. Esc chiude la finestra.
+ - PC, vista dall'alto: trascini = giri e inclini; rotellina o + e - = ti avvicini; il cursore
+   "Lungo il corridoio" (o le frecce su/giu) ti sposta lungo il piano; clic su una stanza o su una
+   targhetta = apri la stanza. Passando col mouse sopra una stanza o una porta si illumina.
+ - Come funziona sul PC: Tk non ha il 3D, quindi il programma lo disegna da solo con Pillow (la
+   libreria delle immagini che c'e' gia'). Mentre ti muovi il disegno e' piu' rapido; appena ti fermi
+   si rifa' con i bordi lisci. Se il computer e' lento la camminata puo' scattare un po': nulla di
+   grave, e' solo grafica, i dati non vengono toccati.
+ - Telefono: stessi modi (Dall'alto / Cammina), ma con i quattro tasti (avanti, indietro, gira a sinistra, gira a destra) da tenere premuti (o il dito
+   per guardare intorno) e il pulsante "Vai a...". Il disegno e' fatto con la grafica 3D del browser.
+ - LA FOTO NON ESCE DAL DISPOSITIVO: sul PC sta in %APPDATA%\HelpDeskINAIL\la_mia_faccia.png (la
+   cartella che si apre con File > Apri la cartella dei dati) ed e' fuori da backup, file per il
+   telefono e GitHub. Non caricarla mai su GitHub.
+ - NON provato qui: PC, iPhone e fotocamera veri. Provato il motore con immagini di prova (targhette
+   a sinistra/destra, ritaglio vicino ai muri, clic sulle porte), le finestre con una finta finestra
+   e il telefono con un browser di prova. Se una finestra non si apre o scatta troppo, dimmelo.
+
+STAMPANTI DOPPIE (come sistemarle)
+ 1) File > Salva una copia di backup (per sicurezza).
+ 2) File > "Unisci doppioni stampanti...": per ogni stampante VECCHIA (senza seriale) l'app propone
+    la NUOVA piu' probabile (stesso piano e modello, nome simile). Controlla e scegli; "(non unire)"
+    lascia com'e'. Conferma: resta la nuova (nome e seriale del file) con tutto lo storico.
+ 3) Se l'importazione dell'elenco ti dice "ATTENZIONE: N stampanti da unire", e' questo il momento.
+ 4) "Esporta dati per il telefono" e, sul telefono, "Ricevi dal PC": il telefono toglie le vecchie.
+ - Resta della vecchia, se mancano nella nuova: IP, note, modello, stanza (le note si accodano
+   separate da " | "); "fuori servizio" resta se lo era una delle due.
 
 NUMERO DI SERIE DELLE STAMPANTI
  - Dove si scrive: PC > Stampanti > Edificio e stampanti > scegli la stampante > "Modifica

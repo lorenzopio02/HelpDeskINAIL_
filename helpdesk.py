@@ -47,6 +47,11 @@ try:
 except ImportError:
     CD = None
 
+try:
+    import corridoio3d as C3D     # visite 3D: passeggiata nel piano e edificio intero
+except ImportError:
+    C3D = None
+
 APP_NAME = "Help Desk INAIL"
 
 # Colori presi dal logo INAIL
@@ -171,6 +176,25 @@ def clean_dotazione(value):
     return out
 
 
+def merge_dotazione(old, new):
+    """Aggiunge alla dotazione `old` le righe di `new` senza toccare quello che c'è già: una riga
+    dello stesso tipo (stesso apparecchio) resta com'è e riceve solo il seriale o il modello che le
+    mancano. Non cancella e non sovrascrive niente."""
+    rows = clean_dotazione(old)
+
+    def ident(r):
+        return _row_kind(r) or r["tipo"].casefold()
+    for r in clean_dotazione(new):
+        same = next((x for x in rows if ident(x) == ident(r)), None)
+        if same is None:
+            rows.append(dict(r))
+            continue
+        for k in ("seriale", "modello"):
+            if not same[k] and r[k]:
+                same[k] = r[k]
+    return rows
+
+
 def dotazione_text(items, sep="; "):
     """Riassunto in una riga: «Smartphone Samsung A54 (IMEI 3567…); Monitor Dell»."""
     parts = []
@@ -283,6 +307,78 @@ def ago_long(n):
     return "cambiato oggi" if n == 0 else "cambiato ieri" if n == 1 else "cambiato %d giorni fa" % n
 
 
+TONER_GAP_MIN = 3    # due cambi a meno di 3 giorni uno dall'altro non contano come "durata"
+TONER_BASSO = 20     # sotto questa percentuale la barretta ha il contorno rosso
+
+
+def _day_no(data_ora):
+    try:
+        return datetime.strptime((data_ora or "")[:10], "%Y-%m-%d").date().toordinal()
+    except ValueError:
+        return None
+
+
+def toner_gaps(dates):
+    """Giorni tra un cambio e il successivo (stesso colore, stessa stampante), senza doppioni
+    e senza intervalli troppo corti."""
+    d = sorted({n for n in (_day_no(x) for x in dates) if n is not None})
+    return [b - a for a, b in zip(d, d[1:]) if b - a >= TONER_GAP_MIN]
+
+
+def median_int(values):
+    s = sorted(values)
+    n, h = len(s), len(s) // 2
+    return s[h] if n % 2 else (s[h - 1] + s[h] + 1) // 2
+
+
+def toner_estimate(own_dates, pool_gaps, today=None):
+    """STIMA del toner che resta, in percentuale: dai giorni dall'ultimo cambio e da quanto sono
+    durati i cambi precedenti (della stampante, o di quelle dello stesso modello). Non e' il
+    livello vero letto dalla stampante."""
+    own = [d for d in own_dates if d]
+    last = max(own) if own else None
+    days = days_ago(last, today) if last else None
+    g, src = toner_gaps(own), "stampante"
+    if not g:
+        g, src = list(pool_gaps), "modello"
+    if days is None or not g:
+        return {"pct": None, "days": days}
+    life = median_int(g)
+    pct = max(0, min(100, int(math.floor(100 * (1 - days / life) + 0.5))))
+    return {"pct": pct, "life": life, "days": days, "src": src, "n": len(g)}
+
+
+def toner_estimate_text(e):
+    if e.get("pct") is None:
+        return ("stima non disponibile (servono almeno due cambi di questo colore, di questa "
+                "stampante o di una dello stesso modello)")
+    return "stima: circa %d%% - di solito dura %d giorni (%s)" % (
+        e["pct"], e["life"], "dai cambi di questa stampante" if e["src"] == "stampante"
+        else "dai cambi di stampanti dello stesso modello")
+
+
+def compute_toner_estimates(printers, toner_rows, today=None):
+    """printers = [(id, modello)], toner_rows = [(id stampante, colore, data_ora)].
+    Restituisce {id stampante: {colore: stima}}."""
+    dates, model = {}, {}
+    for sid, colore, d in toner_rows:
+        dates.setdefault((sid, colore), []).append(d)
+    for sid, modello in printers:
+        model[sid] = model_key(modello)
+    out = {}
+    for sid, _m in printers:
+        per = {}
+        for colore in TONER_NOMI:
+            pool = []
+            if model[sid]:
+                for oid, om in printers:
+                    if oid != sid and model[oid] == model[sid]:
+                        pool += toner_gaps(dates.get((oid, colore), []))
+            per[colore] = toner_estimate(dates.get((sid, colore), []), pool, today)
+        out[sid] = per
+    return out
+
+
 def tec_date(m):
     """Data in cui è venuto il tecnico, già scritta gg/mm/aaaa (vuota se non è ancora venuto)."""
     if not m.get("data_tecnico"):
@@ -378,6 +474,13 @@ def attachments_root():
 
 def attachment_dir(iid):
     return os.path.join(attachments_root(), str(iid))
+
+
+def bolle_foto_root():
+    """Foto delle bolle dei toner (incluse nel backup insieme agli allegati)."""
+    path = os.path.join(attachments_root(), "bolle")
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
 def staging_dir():
@@ -1015,6 +1118,11 @@ CREATE TABLE IF NOT EXISTS stampanti (
     seriale     TEXT NOT NULL DEFAULT '',
     fuori_servizio INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS stampanti_unite (
+    da_uid TEXT PRIMARY KEY,
+    a_uid  TEXT NOT NULL,
+    quando TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS toner (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     stampante_id INTEGER NOT NULL REFERENCES stampanti(id) ON DELETE CASCADE,
@@ -1057,6 +1165,31 @@ CREATE TABLE IF NOT EXISTS scorta (
     modificato TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (modello, colore)
 );
+
+CREATE TABLE IF NOT EXISTS bolle (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid                  TEXT NOT NULL UNIQUE,
+    codice               TEXT NOT NULL DEFAULT '',
+    numero               TEXT NOT NULL DEFAULT '',
+    toner_codice         TEXT NOT NULL DEFAULT '',
+    colore               TEXT NOT NULL,
+    edificio_id          INTEGER REFERENCES edifici(id) ON DELETE CASCADE,
+    piano                INTEGER NOT NULL DEFAULT 0,
+    stampante_id         INTEGER REFERENCES stampanti(id) ON DELETE SET NULL,
+    modello              TEXT NOT NULL DEFAULT '',
+    seriale_bolla        TEXT NOT NULL DEFAULT '',
+    data_arrivo          TEXT NOT NULL,
+    stato                TEXT NOT NULL DEFAULT 'da_montare',
+    data_montaggio       TEXT NOT NULL DEFAULT '',
+    stampante_montata_id INTEGER REFERENCES stampanti(id) ON DELETE SET NULL,
+    seriale_letto        TEXT NOT NULL DEFAULT '',
+    toner_uid            TEXT NOT NULL DEFAULT '',
+    note                 TEXT NOT NULL DEFAULT '',
+    foto                 TEXT NOT NULL DEFAULT '',
+    scorta_ok            INTEGER NOT NULL DEFAULT 0,
+    modificato           TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_bolle_stato ON bolle(stato);
 
 CREATE TABLE IF NOT EXISTS stanze (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1257,6 +1390,25 @@ class Database:
                                                user_id))
         return True
 
+    def set_user_codes(self, user_id, seriale_pc=None, imei=None, matricola=None, modificato=None):
+        """Scrive solo i codici indicati (None = lascia com'è): seriale del PC, IMEI, matricola.
+        Restituisce True se qualcosa è cambiato (con valori uguali non cambia nemmeno la data)."""
+        row = self.conn.execute("SELECT seriale_pc, imei, matricola FROM utenti WHERE id = ?",
+                                (user_id,)).fetchone()
+        if not row:
+            return False
+        new = {"seriale_pc": row["seriale_pc"] if seriale_pc is None else clean_serial(seriale_pc),
+               "imei": row["imei"] if imei is None else " ".join(str(imei).split()),
+               "matricola": row["matricola"] if matricola is None else " ".join(str(matricola).split())}
+        if all(new[k] == row[k] for k in new):
+            return False
+        with self.conn:
+            self.conn.execute("UPDATE utenti SET seriale_pc = ?, imei = ?, matricola = ?, "
+                              "modificato = ? WHERE id = ?",
+                              (new["seriale_pc"], new["imei"], new["matricola"],
+                               modificato or now_utc_iso(), user_id))
+        return True
+
     def uffici(self):
         """Gli uffici già scritti (senza doppioni), per il completamento automatico."""
         found = {}
@@ -1452,7 +1604,17 @@ class Database:
                                       (prefix + uuid.uuid4().hex, r["id"]))
 
     def find_stampante_by_uid(self, uid):
+        """La stampante con questo uid; se è stata unita a un'altra (doppione tolto) segue l'unione,
+        così i cambi toner e gli interventi che arrivano ancora col vecchio uid finiscono sulla giusta."""
         row = self.conn.execute("SELECT id FROM stampanti WHERE uid = ?", (uid,)).fetchone()
+        hops = 0
+        while row is None and uid and hops < 8:
+            al = self.conn.execute("SELECT a_uid FROM stampanti_unite WHERE da_uid = ?",
+                                   (uid,)).fetchone()
+            if not al:
+                break
+            uid, hops = al["a_uid"], hops + 1
+            row = self.conn.execute("SELECT id FROM stampanti WHERE uid = ?", (uid,)).fetchone()
         return row["id"] if row else None
 
     def toner_uid_exists(self, uid):
@@ -1590,12 +1752,22 @@ class Database:
                 "GROUP BY t.stampante_id, t.colore", (edificio_id,)):
             ultimi.setdefault(r["sid"], {})[r["colore"]] = r["d"]
         scorta = [r for r in self.scorta_all() if scorta_status(r["quantita"], r["soglia"]) != "OK"]
+        stime = self.toner_estimates()
         for p in out:
             p["ultimi"] = ultimi.get(p["id"], {})
+            p["stima"] = stime.get(p["id"], {})
             mk = model_key(p["modello"])
             p["scorta_bassa"] = [(r["colore"], r["quantita"]) for r in scorta
                                  if mk and model_key(r["modello"]) == mk]
         return out
+
+    def toner_estimates(self):
+        """Stima del toner che resta per ogni stampante e colore: {id stampante: {colore: stima}}."""
+        printers = [(r["id"], r["modello"]) for r in self.conn.execute(
+            "SELECT id, modello FROM stampanti")]
+        rows = [(r["stampante_id"], r["colore"], r["data_ora"]) for r in self.conn.execute(
+            "SELECT stampante_id, colore, data_ora FROM toner")]
+        return compute_toner_estimates(printers, rows)
 
     def all_printers(self):
         rows = self.conn.execute(
@@ -1712,6 +1884,100 @@ class Database:
             "AND (? IS NULL OR s.id <> ?) ORDER BY s.id LIMIT 1", (s, escludi_id, escludi_id)).fetchone()
         return dict(row) if row else None
 
+    def printer_merge_proposals(self, edificio_id):
+        """Stampanti SENZA numero di serie che potrebbero essere la stessa di una CON numero di serie
+        (stesso edificio, stesso piano, stesso modello): tipico quando il file con i seriali ha
+        aggiunto quelle nuove accanto alle vecchie. Per ognuna: le candidate e, se è chiaro, quella
+        suggerita (stessa stanza, stesso nome, l'unica del piano o il nome che somiglia di più)."""
+        rows = self.printers_of(edificio_id)
+        news = [r for r in rows if (r["seriale"] or "").strip()]
+        olds = [r for r in rows if not (r["seriale"] or "").strip()]
+
+        def compat(o, n):
+            return n["piano"] == o["piano"] and (not model_key(o["modello"])
+                                                  or model_key(o["modello"]) == model_key(n["modello"]))
+
+        def words(s):
+            skip = {"stampante", "bizhub", "konica", "minolta", "di", "del", "della", "la", "il",
+                    "lo", "a", "e", "in"}
+            return {w for w in re.findall(r"[0-9a-zà-ÿ]+", (s or "").casefold())
+                    if (len(w) >= 2 or w.isdigit()) and w not in skip}
+
+        out = []
+        for o in olds:
+            plaus = [n for n in news if compat(o, n)]
+            if not plaus:
+                continue
+            same = [x for x in olds if any(compat(x, n) for n in plaus) and x["piano"] == o["piano"]
+                    and (not model_key(x["modello"]) or model_key(x["modello"]) == model_key(o["modello"]))]
+            pick = None
+            by_room = [n for n in plaus if o.get("stanza_uid") and n.get("stanza_uid") == o["stanza_uid"]]
+            by_name = [n for n in plaus if o["nome"].strip() and
+                       n["nome"].strip().casefold() == o["nome"].strip().casefold()]
+            if len(by_room) == 1:
+                pick = by_room[0]
+            elif len(by_name) == 1:
+                pick = by_name[0]
+            elif len(same) == 1 and len(plaus) == 1:
+                pick = plaus[0]
+            else:
+                sc = sorted(((len(words(o["nome"]) & words(n["nome"])), n["id"], n) for n in plaus),
+                            key=lambda t: (-t[0], t[1]))
+                if sc and sc[0][0] > 0 and (len(sc) == 1 or sc[0][0] > sc[1][0]):
+                    pick = sc[0][2]
+            n_t = self.conn.execute("SELECT COUNT(*) FROM toner WHERE stampante_id = ?",
+                                    (o["id"],)).fetchone()[0]
+            n_m = self.conn.execute("SELECT COUNT(*) FROM manutenzioni WHERE stampante_id = ?",
+                                    (o["id"],)).fetchone()[0]
+            rest = [n for n in news if n not in plaus]
+            out.append({"old": o, "plausibili": plaus, "altre": rest,
+                        "suggerita": pick["id"] if pick else None, "n_toner": n_t, "n_manut": n_m})
+        return out
+
+    def merge_printers(self, old_id, keep_id):
+        """Unisce due stampanti che sono la stessa: tutto lo storico di «old» (cambi toner,
+        interventi del tecnico, bolle) passa a «keep», poi «old» si toglie. «keep» tiene nome,
+        seriale e stanza; IP, note, modello e stanza si prendono dalla vecchia solo se mancano
+        alla nuova; se una delle due era «fuori servizio» resta tale. Il telefono lo viene a sapere
+        dal file di scambio (stampanti_unite). Restituisce {"toner": n, "manutenzioni": n}."""
+        if old_id == keep_id:
+            raise ValueError("Sono la stessa stampante.")
+        self.ensure_sync_ids()
+        old, keep = self.get_stampante(old_id), self.get_stampante(keep_id)
+        if not old or not keep:
+            raise ValueError("Stampante non trovata.")
+        o_uid = self.conn.execute("SELECT uid FROM stampanti WHERE id = ?", (old_id,)).fetchone()["uid"]
+        k_uid = self.conn.execute("SELECT uid FROM stampanti WHERE id = ?", (keep_id,)).fetchone()["uid"]
+        with self.conn:
+            n_t = self.conn.execute("UPDATE toner SET stampante_id = ? WHERE stampante_id = ?",
+                                    (keep_id, old_id)).rowcount
+            n_m = self.conn.execute("UPDATE manutenzioni SET stampante_id = ? WHERE stampante_id = ?",
+                                    (keep_id, old_id)).rowcount
+            self.conn.execute("UPDATE bolle SET stampante_id = ? WHERE stampante_id = ?",
+                              (keep_id, old_id))
+            self.conn.execute("UPDATE bolle SET stampante_montata_id = ? WHERE stampante_montata_id = ?",
+                              (keep_id, old_id))
+            ip = keep["ip"] or old["ip"]
+            note = keep["note"]
+            if old["note"] and old["note"] not in (note or ""):
+                note = ("%s | %s" % (note, old["note"])) if note else old["note"]
+            self.conn.execute(
+                "UPDATE stampanti SET ip = ?, note = ?, modello = ?, fuori_servizio = ?, "
+                "stanza_uid = ? WHERE id = ?",
+                (ip, note, keep["modello"] or old["modello"],
+                 1 if (keep["fuori_servizio"] or old["fuori_servizio"]) else 0,
+                 keep.get("stanza_uid") or old.get("stanza_uid") or "", keep_id))
+            self.conn.execute("UPDATE stampanti_unite SET a_uid = ? WHERE a_uid = ?", (k_uid, o_uid))
+            self.conn.execute("INSERT OR REPLACE INTO stampanti_unite(da_uid, a_uid, quando) "
+                              "VALUES (?,?,?)", (o_uid, k_uid, now_utc_iso()))
+            self.conn.execute("DELETE FROM stampanti WHERE id = ?", (old_id,))
+        return {"toner": n_t, "manutenzioni": n_m}
+
+    def printer_merges(self):
+        """Le unioni fatte (uid vecchio -> uid nuovo), da dire al telefono."""
+        return [{"da": r["da_uid"], "a": r["a_uid"]} for r in self.conn.execute(
+            "SELECT da_uid, a_uid FROM stampanti_unite ORDER BY quando, da_uid")]
+
     def delete_stampante(self, sid):
         with self.conn:
             self.conn.execute("DELETE FROM stampanti WHERE id=?", (sid,))
@@ -1802,6 +2068,61 @@ class Database:
     def scorta_bassa(self):
         return [r for r in self.scorta_all()
                 if scorta_status(r["quantita"], r["soglia"]) != "OK"]
+
+    # --- bolle dei toner (arrivi e montaggi registrati con il telefono) ---
+    def find_bolla_by_uid(self, uid):
+        r = self.conn.execute("SELECT * FROM bolle WHERE uid = ?", (uid,)).fetchone()
+        return dict(r) if r else None
+
+    def bolle_all(self, stato=None):
+        """Le bolle con i nomi di edificio e stampanti; stato: 'da_montare', 'montato' o None (tutte)."""
+        sql = ("SELECT b.*, COALESCE(e.nome, '?') AS edificio, COALESCE(s.nome, '') AS stampante_nome, "
+               "COALESCE(m.nome, '') AS montata_nome, COALESCE(m.modello, '') AS montata_modello "
+               "FROM bolle b LEFT JOIN edifici e ON e.id = b.edificio_id "
+               "LEFT JOIN stampanti s ON s.id = b.stampante_id "
+               "LEFT JOIN stampanti m ON m.id = b.stampante_montata_id")
+        params = ()
+        if stato:
+            sql += " WHERE b.stato = ?"
+            params = (stato,)
+        sql += " ORDER BY b.data_arrivo DESC, b.id DESC"
+        return [dict(r) for r in self.conn.execute(sql, params)]
+
+    def bolle_inventario(self):
+        """Toner arrivati e ancora da montare, divisi per edificio e piano: una riga per piano con i
+        colori contati."""
+        rows = {}
+        for b in self.bolle_all("da_montare"):
+            k = (b["edificio"], b["piano"])
+            r = rows.setdefault(k, {"edificio": b["edificio"], "piano": b["piano"],
+                                    "colori": {c: 0 for c in TONER_NOMI}, "totale": 0})
+            if b["colore"] in r["colori"]:
+                r["colori"][b["colore"]] += 1
+            r["totale"] += 1
+        return [rows[k] for k in sorted(rows, key=lambda k: (k[0].casefold(), -k[1]))]
+
+    def save_phone_bolla(self, existing, uid, f):
+        """Salva una bolla arrivata dal telefono (nuova o aggiornata). La scorta del modello sale di uno
+        quando il modello è noto e la bolla non è ancora stata contata (se quel toner non è tracciato,
+        la bolla conta come già gestita)."""
+        with self.conn:
+            cols = ("codice", "numero", "toner_codice", "colore", "edificio_id", "piano", "stampante_id",
+                    "modello", "seriale_bolla", "data_arrivo", "stato", "data_montaggio",
+                    "stampante_montata_id", "seriale_letto", "toner_uid", "note", "foto", "modificato")
+            vals = [f[c] for c in cols]
+            if existing:
+                self.conn.execute("UPDATE bolle SET " + ", ".join("%s=?" % c for c in cols)
+                                  + " WHERE id = ?", vals + [existing["id"]])
+                bid, contata = existing["id"], existing["scorta_ok"]
+            else:
+                cur = self.conn.execute(
+                    "INSERT INTO bolle(uid, " + ", ".join(cols) + ") VALUES (?" + ",?" * len(cols) + ")",
+                    [uid] + vals)
+                bid, contata = cur.lastrowid, 0
+            if not contata and f["modello"]:
+                self._scorta_scale(f["modello"], f["colore"], +1)
+                self.conn.execute("UPDATE bolle SET scorta_ok = 1 WHERE id = ?", (bid,))
+        return bid
 
     # --- piani e stanze ---
     ROOM_COLS = ("s.id, s.uid, s.edificio_id, s.piano, s.codice, s.scrivanie, s.note, s.come, "
@@ -1977,6 +2298,7 @@ class Database:
         old = self.posto_of_user(utente_id)
         if old and old["stanza_id"] == stanza_id:
             return {"numero": old["numero"], "gia": True, "da": None, "sopra": False}
+        presa = self.togli_presa(utente_id, now) if old else ""
         with self.conn:
             if old:
                 self.conn.execute("UPDATE postazioni SET stanza_id = NULL, numero = 0, modificato = ? "
@@ -1990,7 +2312,8 @@ class Database:
                 "numero = excluded.numero, modificato = excluded.modificato",
                 (utente_id, stanza_id, n, now))
         tot = room["scrivanie"] or 0
-        return {"numero": n, "gia": False, "da": old, "sopra": bool(tot and n > tot)}
+        return {"numero": n, "gia": False, "da": old, "sopra": bool(tot and n > tot),
+                "presa_tolta": presa}
 
     def rimuovi_persona(self, utente_id, modificato=None):
         """Libera la postazione (la riga resta con "nessuna stanza" così il telefono lo sa)."""
@@ -1998,11 +2321,27 @@ class Database:
         old = self.posto_of_user(utente_id)
         if not old:
             return False
+        self.togli_presa(utente_id, now)
         with self.conn:
             self.conn.execute("UPDATE postazioni SET stanza_id = NULL, numero = 0, modificato = ? "
                               "WHERE utente_id = ?", (now, utente_id))
             self._renumber(old["stanza_id"], now)
         return True
+
+    def togli_presa(self, utente_id, modificato=None):
+        """La presa di rete è della scrivania, non della persona: quando la persona cambia scrivania
+        il codice della presa di prima si toglie dalla dotazione. Restituisce il codice tolto ('' se
+        non c'era)."""
+        row = self.conn.execute("SELECT dotazione FROM utenti WHERE id = ?", (utente_id,)).fetchone()
+        if not row:
+            return ""
+        dot = clean_dotazione(row["dotazione"])
+        old = next((r for r in dot if _row_kind(r) == "presa"), None)
+        if not old:
+            return ""
+        self.set_user_extra(utente_id, dotazione=[r for r in dot if _row_kind(r) != "presa"],
+                            modificato=modificato)
+        return old["seriale"] or old["modello"]
 
     def apply_stanza(self, sid, codice, scrivanie, note, come, px, py, modificato, eliminata=False):
         """Aggiorna una stanza con i dati arrivati dall'altro dispositivo (senza toccare "adesso").
@@ -2457,6 +2796,88 @@ def import_phone_toner(db, items, res):
                 res["scorta_bassa"].append(tag)
 
 
+def _valid_dt(text):
+    try:
+        datetime.strptime(text, "%Y-%m-%d %H:%M")
+        return True
+    except ValueError:
+        return False
+
+
+def import_phone_bolle(db, items, res):
+    """Bolle dei toner registrate sul telefono (arrivo ed eventuale montaggio). Quelle già presenti si
+    aggiornano solo se sul telefono sono state modificate dopo; la foto si salva una volta sola.
+    All'arrivo la scorta del modello sale di uno (la stessa cosa di «Ho ricevuto toner»)."""
+    for k in ("bolle_nuove", "bolle_aggiornate", "bolle_gia_presenti", "bolle_saltate", "bolle_foto"):
+        res.setdefault(k, 0)
+    ed = {r["uid"]: r["id"] for r in db.conn.execute("SELECT id, uid FROM edifici")}
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        uid = re.sub(r"[^\w\-]", "_", _clean(it.get("uid")))
+        eid = ed.get(_clean(it.get("edificio_uid")))
+        colore, arrivo = _clean(it.get("colore")), _clean(it.get("data_arrivo"))
+        try:
+            piano = int(it.get("piano"))
+        except (TypeError, ValueError):
+            piano = None
+        if not uid or eid is None or piano is None or colore not in TONER_NOMI or not _valid_dt(arrivo):
+            res["bolle_saltate"] += 1
+            continue
+        mod = _clean(it.get("modificato")) or now_utc_iso()
+        cur = db.find_bolla_by_uid(uid)
+        if cur and not mod > cur["modificato"]:
+            res["bolle_gia_presenti"] += 1
+            continue
+        data_m = _clean(it.get("data_montaggio"))
+        montato = _clean(it.get("stato")) == "montato" and _valid_dt(data_m)
+        foto = cur["foto"] if cur else ""
+        payload = _clean(it.get("foto"))
+        if payload.startswith("data:") and not foto:
+            name = uid + ".jpg"
+            if _write_data_url(payload, os.path.join(bolle_foto_root(), name), 12 * 1024 * 1024):
+                foto = name
+                res["bolle_foto"] += 1
+        db.save_phone_bolla(cur, uid, {
+            "codice": _clean(it.get("codice")), "numero": _clean(it.get("numero")),
+            "toner_codice": _clean(it.get("toner_codice")), "colore": colore, "edificio_id": eid,
+            "piano": piano, "stampante_id": db.find_stampante_by_uid(_clean(it.get("stampante_uid"))),
+            "modello": " ".join(_clean(it.get("modello")).split()),
+            "seriale_bolla": _clean(it.get("seriale_bolla")), "data_arrivo": arrivo,
+            "stato": "montato" if montato else "da_montare", "data_montaggio": data_m if montato else "",
+            "stampante_montata_id": db.find_stampante_by_uid(
+                _clean(it.get("stampante_montata_uid"))) if montato else None,
+            "seriale_letto": _clean(it.get("seriale_letto")) if montato else "",
+            "toner_uid": _clean(it.get("toner_uid")) if montato else "", "note": _clean(it.get("note")),
+            "foto": foto, "modificato": mod})
+        res["bolle_aggiornate" if cur else "bolle_nuove"] += 1
+
+
+def bolle_for_phone(db, with_photos):
+    """Le bolle per il telefono (serve a ripristinarle se il telefono viene azzerato)."""
+    out, n_foto = [], 0
+    rows = db.conn.execute(
+        "SELECT b.*, e.uid AS e_uid, s.uid AS s_uid, m.uid AS m_uid FROM bolle b "
+        "JOIN edifici e ON e.id = b.edificio_id LEFT JOIN stampanti s ON s.id = b.stampante_id "
+        "LEFT JOIN stampanti m ON m.id = b.stampante_montata_id ORDER BY b.id").fetchall()
+    for r in rows:
+        item = {"uid": r["uid"], "codice": r["codice"], "numero": r["numero"],
+                "toner_codice": r["toner_codice"], "colore": r["colore"], "edificio_uid": r["e_uid"],
+                "piano": r["piano"], "stampante_uid": r["s_uid"] or "", "modello": r["modello"],
+                "seriale_bolla": r["seriale_bolla"], "data_arrivo": r["data_arrivo"], "stato": r["stato"],
+                "data_montaggio": r["data_montaggio"], "stampante_montata_uid": r["m_uid"] or "",
+                "seriale_letto": r["seriale_letto"], "toner_uid": r["toner_uid"], "note": r["note"],
+                "modificato": r["modificato"]}
+        if with_photos and r["foto"]:
+            path = os.path.join(bolle_foto_root(), r["foto"])
+            data = photo_data_url(path) if os.path.isfile(path) else None
+            if data:
+                item["foto"] = data
+                n_foto += 1
+        out.append(item)
+    return out, n_foto
+
+
 def import_phone_manutenzioni(db, items, res):
     """Interventi del tecnico Konica registrati sul telefono (stessa regola degli interventi:
     se ci sono già si aggiornano solo se sul telefono sono stati modificati dopo)."""
@@ -2511,7 +2932,8 @@ def import_phone_data(db, data):
            "verbali_nuovi": 0, "verbali_aggiornati": 0, "verbali_gia_presenti": 0,
            "verbali_saltati": 0, "verbali_foto": 0, "stanze_nuove": 0, "stanze_aggiornate": 0,
            "stanze_gia_presenti": 0, "stanze_saltate": 0, "piante": 0, "stanze_foto": 0,
-           "postazioni": 0, "postazioni_saltate": 0}
+           "postazioni": 0, "postazioni_saltate": 0, "bolle_nuove": 0, "bolle_aggiornate": 0,
+           "bolle_gia_presenti": 0, "bolle_saltate": 0, "bolle_foto": 0}
 
     for u in data.get("utenti") or []:
         nome = normalize_name(_clean(u.get("nome")))
@@ -2547,6 +2969,7 @@ def import_phone_data(db, data):
     if data.get("tipo") != "helpdesk-telefono":
         return res
     import_phone_toner(db, data.get("toner") or [], res)
+    import_phone_bolle(db, data.get("bolle") or [], res)
     import_phone_manutenzioni(db, data.get("manutenzioni") or [], res)
     import_phone_verbali(db, data.get("verbali") or [], res)
     import_phone_stanze(db, data, res)
@@ -2742,7 +3165,11 @@ def import_rooms_list(db, data, edificio_id):
       dotazione (facoltativa nel file: [{"tipo", "modello", "seriale"}]) si scrivono solo se erano
       vuoti; chi siede già in un'altra stanza non viene spostato;
     - una stampante con lo stesso numero di serie non si duplica: le si collega la stanza (se non
-      ne aveva) e, se serve, il modello e lo stato «fuori servizio»."""
+      ne aveva) e, se serve, il modello e lo stato «fuori servizio»;
+    - una stampante vecchia SENZA seriale (stesso piano e modello, e sicuramente quella: l'unica,
+      o stesso nome, o stessa stanza) non si duplica: prende il seriale e il nome del file e tiene
+      tutto lo storico. Se non è chiaro quale sia, ne resta una nuova e la si unisce a mano con
+      «Unisci doppioni stampanti»."""
     if not isinstance(data, dict) or data.get("tipo") != ELENCO_TIPO:
         raise ValueError("Questo non è un elenco di stanze e persone dell'app Help Desk.")
     edificio = db.conn.execute("SELECT id, sede FROM edifici WHERE id = ?", (edificio_id,)).fetchone()
@@ -2751,14 +3178,28 @@ def import_rooms_list(db, data, edificio_id):
     res = {"stanze_nuove": 0, "stanze_esistenti": 0, "stanze_aggiornate": 0,
            "persone_nuove": 0, "persone_esistenti": 0, "persone_assegnate": 0,
            "persone_gia_in_stanza": 0, "persone_altrove": [], "uffici_scritti": 0,
+           "matricole_scritte": 0, "dotazioni_scritte": 0, "persone_senza_stanza": 0,
            "stampanti_nuove": 0, "stampanti_aggiornate": 0, "stampanti_gia_presenti": 0,
-           "scartati": []}
+           "stampanti_adottate": 0, "stampanti_da_unire": 0, "scartati": []}
 
     def to_int(v, default=0):
         try:
             return int(v)
         except (TypeError, ValueError):
             return default
+
+    def fill_person(uid, user, p, uff):
+        """Ufficio, matricola e dotazione di una persona, solo dove mancano (non sovrascrive)."""
+        if uff and not (user or {}).get("ufficio") and db.set_user_extra(uid, uff):
+            res["uffici_scritti"] += 1
+        mat = " ".join(_clean(p.get("matricola")).split())
+        if mat and not (user or {}).get("matricola") and db.set_user_codes(uid, matricola=mat):
+            res["matricole_scritte"] += 1
+        dot = clean_dotazione(p.get("dotazione"))
+        if dot:
+            cur = db.conn.execute("SELECT dotazione FROM utenti WHERE id = ?", (uid,)).fetchone()
+            if db.set_user_extra(uid, dotazione=merge_dotazione(cur["dotazione"], dot)):
+                res["dotazioni_scritte"] += 1
 
     for r in data.get("stanze") or []:
         if not isinstance(r, dict):
@@ -2796,11 +3237,7 @@ def import_rooms_list(db, data, edificio_id):
             else:
                 uid, _ = db.add_user(nome, normalize_name(edificio["sede"]))
                 res["persone_nuove"] += 1
-            if uff and not (user or {}).get("ufficio") and db.set_user_extra(uid, uff):
-                res["uffici_scritti"] += 1
-            dot = clean_dotazione(p.get("dotazione"))
-            if dot and not clean_dotazione((user or {}).get("dotazione")):
-                db.set_user_extra(uid, dotazione=dot)       # solo se la persona non ha già una dotazione
+            fill_person(uid, user, p, uff)
             posto = db.posto_of_user(uid)
             if posto and posto["stanza_id"] == rid:
                 res["persone_gia_in_stanza"] += 1
@@ -2810,6 +3247,46 @@ def import_rooms_list(db, data, edificio_id):
             else:
                 db.assegna_persona(uid, rid)
                 res["persone_assegnate"] += 1
+
+    for p in data.get("persone_senza_stanza") or []:       # persone che non siedono in nessuna stanza
+        p = p if isinstance(p, dict) else {"nome": p}
+        nome = normalize_name(_clean(p.get("nome")))
+        if not nome:
+            continue
+        user = db.find_user_like(nome)
+        if user:
+            uid = user["id"]
+        else:
+            uid, _ = db.add_user(nome, normalize_name(edificio["sede"]))
+            res["persone_senza_stanza"] += 1
+        fill_person(uid, user, p, " ".join(_clean(p.get("ufficio")).split()))
+
+    in_file = Counter()                  # quante stampanti con seriale ci sono nel file, per piano e modello
+    for pr in data.get("stampanti") or []:
+        if isinstance(pr, dict) and clean_serial(pr.get("seriale")):
+            in_file[(to_int(pr.get("piano")), model_key(" ".join(_clean(pr.get("modello")).split())))] += 1
+    adopted = set()
+
+    def old_twin(piano, nome, modello, stanza_uid):
+        """La vecchia stampante (senza seriale) che è sicuramente questa: stesso piano e modello, e
+        o è l'unica da una parte e dall'altra, o ha lo stesso nome, o è nella stessa stanza.
+        Se non è chiaro non indovina: ne resta una nuova e la si unisce a mano."""
+        mk = model_key(modello)
+        if not mk:
+            return None, 0
+        olds = [x for x in db.printers_of(edificio_id)
+                if not (x["seriale"] or "").strip() and x["id"] not in adopted
+                and x["piano"] == piano and model_key(x["modello"]) == mk]
+        if not olds:
+            return None, 0
+        by_room = [x for x in olds if stanza_uid and x.get("stanza_uid") == stanza_uid]
+        by_name = [x for x in olds if nome and x["nome"].strip().casefold() == nome.casefold()]
+        for grp in (by_room, by_name):
+            if len(grp) == 1:
+                return grp[0], len(olds)
+        if len(olds) == 1 and in_file[(piano, mk)] == 1:
+            return olds[0], 1
+        return None, len(olds)
 
     for pr in data.get("stampanti") or []:
         if not isinstance(pr, dict):
@@ -2832,6 +3309,19 @@ def import_rooms_list(db, data, edificio_id):
         if seriale:
             other = db.printer_with_serial(seriale)
             cur = db.get_stampante(other["id"]) if other else None
+            if cur is None:
+                twin, n_old = old_twin(piano, nome, modello, stanza_uid)
+                if twin:                   # è la vecchia stampante: prende il seriale e il nome del file
+                    adopted.add(twin["id"])
+                    cur0 = db.get_stampante(twin["id"])
+                    db.update_stampante(cur0["id"], cur0["piano"], nome or cur0["nome"],
+                                        modello or cur0["modello"], cur0["ip"], cur0["note"],
+                                        seriale=seriale, fuori_servizio=True if fuori else None,
+                                        stanza_uid=stanza_uid if (stanza_uid and not cur0.get("stanza_uid")) else None)
+                    res["stampanti_adottate"] += 1
+                    continue
+                if n_old:
+                    res["stampanti_da_unire"] += 1
         else:
             for x in db.printers_of(edificio_id):
                 if x["piano"] == piano and x["nome"].casefold() == nome.casefold() \
@@ -2904,14 +3394,16 @@ def build_phone_export(db, with_photos=False, settings=None):
                         "ORDER BY m.id").fetchall()]
     verbali, n_foto_v = verbali_for_phone(db, with_photos)
     piani, n_foto_s = stanze_for_phone(db, with_photos)
+    bolle, n_foto_b = bolle_for_phone(db, with_photos)
     out = {"tipo": "helpdesk-pc", "versione": 7, "creato": now, "utenti": users,
            "interventi": items, "edifici": edifici, "stampanti": stampanti,
-           "toner": toner, "manutenzioni": manutenzioni, "scorta": db.scorta_all(),
+           "stampanti_unite": db.printer_merges(),
+           "toner": toner, "bolle": bolle, "manutenzioni": manutenzioni, "scorta": db.scorta_all(),
            "scorta_aggiornata": now, "verbali": verbali,
            "impostazioni_verbali": {k: _clean((settings or {}).get(k))
                                     for k in ("tecnico", "sede_citta", "indirizzo", "cap")}}
     out.update(piani)
-    return out, n_foto + n_foto_v + n_foto_s
+    return out, n_foto + n_foto_v + n_foto_s + n_foto_b
 
 
 FOTO_STANZA_PX = 1600
@@ -3035,6 +3527,7 @@ CELL_MODELLI = ("S24", "S24 Plus", "S25")
 CELL_KEYS = {"s24": ("s24", "S24"), "s24plus": ("s24plus", "S24 Plus"), "s25": ("s25", "S25"),
              "s4": ("s24", "S24"), "s4plus": ("s24plus", "S24 Plus"), "s5": ("s25", "S25")}
 TEAMS_TIPO, TEAMS_MODELLO = "Telefono Teams", "AudioCodes C435HD"
+PRESA_TIPO = "Presa di rete"      # riga della dotazione: seriale = codice della presa, modello = porta dello switch
 LAPTOP_MODELLI = {"13": "Dell 13 pollici", "15": "Dell 15 pollici"}
 
 
@@ -3046,16 +3539,20 @@ def _norm_model(txt):
 
 
 def _row_kind(r):
-    """'teams' (telefono Teams da scrivania), 'mobile' (cellulare / smartphone), 'laptop'
-    (notebook / portatile) oppure ''."""
+    """'presa' (presa di rete a muro), 'teams' (telefono Teams da scrivania), 'mobile' (cellulare /
+    smartphone), 'laptop' (notebook / portatile), 'monitor' (il monitor AOC) oppure ''."""
     tipo = str(r.get("tipo") or "").lower()
     both = tipo + " " + str(r.get("modello") or "").lower()
+    if tipo.strip().startswith("presa"):
+        return "presa"
     if "teams" in both or "audiocodes" in both:
         return "teams"
     if "cellulare" in tipo or "smartphone" in tipo:
         return "mobile"
     if "notebook" in tipo or "portatile" in tipo or "laptop" in tipo:
         return "laptop"
+    if "monitor" in tipo:
+        return "monitor"
     return ""
 
 
@@ -3093,7 +3590,7 @@ def with_desk_phones(dotazione, mobile="", teams=False, laptop=None):
     old_teams = next((r for r in rows if _row_kind(r) == "teams"), None)
     laps = [r for r in rows if _row_kind(r) == "laptop"]
     old_lap = laps[0] if laps else None
-    out = [r for r in rows if _row_kind(r) == ""] + laps[1:]
+    out = [r for r in rows if _row_kind(r) in ("", "monitor", "presa")] + laps[1:]   # monitor AOC e presa restano
     if laptop is None:
         out += laps[:1]
     elif laptop in LAPTOP_MODELLI:
@@ -3109,6 +3606,148 @@ def with_desk_phones(dotazione, mobile="", teams=False, laptop=None):
     if teams:
         out.append(old_teams or {"tipo": TEAMS_TIPO, "modello": TEAMS_MODELLO, "seriale": ""})
     return clean_dotazione(out)
+
+
+# ---- i dispositivi di una scrivania: PC, monitor AOC, cellulare (IMEI) e telefono Teams ----
+# Ognuno ha il suo bollino (verde = codice scritto, rosso = manca): si clicca e si scrive il codice a
+# mano oppure si legge con la fotocamera. Posizione del bollino nella scena 130 x 66.
+DESK_BOLLINI_POS = {"pc": (36, 50), "monitor": (65, 19), "mobile": (113, 50), "teams": (16, 58),
+                    "presa": (113, 33)}
+DESK_BIG = 5                    # la scrivania a pagina intera: la scena ingrandita 5 volte
+DESK_BOLLINO_R = 18             # raggio del bollino a pagina intera (px)
+
+
+def desk_devices(person):
+    """I dispositivi della scrivania di una persona (dizionario con seriale_pc, imei, dotazione):
+    [{"key": "pc"|"monitor"|"mobile"|"teams"|"presa", "kind": "serial"|"imei"|"presa", "name", "sub",
+    "label", "value", "pos"}]. Il PC, il monitor e la presa di rete ci sono sempre; il cellulare solo
+    se c'è sulla scrivania (modello scelto o IMEI scritto), il telefono Teams solo se è stato aggiunto."""
+    dot = clean_dotazione(person.get("dotazione"))
+    ph = desk_phone_info(dot, person.get("imei"))
+    mon = next((r for r in dot if _row_kind(r) == "monitor"), None)
+    tm = next((r for r in dot if _row_kind(r) == "teams"), None)
+    out = [{"key": "pc", "kind": "serial", "name": "Computer", "sub": ph["laptop_label"],
+            "label": "S/N del computer", "value": (person.get("seriale_pc") or "").strip()},
+           {"key": "monitor", "kind": "serial", "name": "Monitor AOC",
+            "sub": mon["modello"] if mon and mon["modello"] and mon["modello"].lower() != "aoc" else "",
+            "label": "S/N del monitor AOC", "value": mon["seriale"] if mon else ""}]
+    if ph["mobile"]:
+        out.append({"key": "mobile", "kind": "imei", "name": "Cellulare",
+                    "sub": ph["label"] if ph["mobile"] == "altro" else "Samsung Galaxy " + ph["label"],
+                    "label": "IMEI del cellulare", "value": str(person.get("imei") or "").strip()})
+    if ph["teams"]:
+        out.append({"key": "teams", "kind": "serial", "name": "Telefono Teams", "sub": TEAMS_MODELLO,
+                    "label": "S/N del telefono Teams", "value": tm["seriale"] if tm else ""})
+    presa = next((r for r in dot if _row_kind(r) == "presa"), None)
+    out.append({"key": "presa", "kind": "presa", "name": PRESA_TIPO,
+                "sub": presa["modello"] if presa else "",
+                "label": "Codice della presa di rete", "value": presa["seriale"] if presa else "",
+                "port": presa["modello"] if presa else ""})
+    for d in out:
+        d["pos"] = DESK_BOLLINI_POS[d["key"]]
+    return out
+
+
+def with_device_serial(dotazione, key, value, port=None):
+    """La dotazione con il seriale del monitor ("monitor") o del telefono Teams ("teams") cambiato;
+    se la riga non c'è si crea (Monitor AOC, Telefono Teams AudioCodes). Per la presa di rete
+    ("presa") `value` è il codice della presa e `port` la porta dello switch (None = lascia com'è);
+    senza codice e senza porta la riga sparisce. Il resto non si tocca."""
+    rows = [dict(r) for r in clean_dotazione(dotazione)]
+    if key == "presa":
+        row = next((r for r in rows if _row_kind(r) == "presa"), None)
+        code = clean_serial(value)
+        porta = (" ".join(str(port or "").split())[:80] if port is not None
+                 else (row["modello"] if row else ""))
+        rows = [r for r in rows if _row_kind(r) != "presa"]
+        if code or porta:
+            rows.append({"tipo": PRESA_TIPO, "modello": porta, "seriale": code})
+        return clean_dotazione(rows)
+    kind = "teams" if key == "teams" else "monitor"
+    row = next((r for r in rows if _row_kind(r) == kind), None)
+    if row is not None:
+        row["seriale"] = clean_serial(value)
+    elif value:
+        rows.append({"tipo": TEAMS_TIPO, "modello": TEAMS_MODELLO, "seriale": clean_serial(value)}
+                    if kind == "teams" else {"tipo": "Monitor", "modello": "AOC",
+                                             "seriale": clean_serial(value)})
+    return clean_dotazione(rows)
+
+
+def _luhn_ok(s):
+    total = 0
+    for i, ch in enumerate(reversed(s)):
+        d = int(ch)
+        if i % 2 == 1:
+            d = d * 2 - 9 if d > 4 else d * 2
+        total += d
+    return total % 10 == 0
+
+
+PRESA_MAX = 30       # lunghezza massima del codice di una presa di rete
+
+
+def check_device_code(kind, text):
+    """Controlla un codice scritto a mano o letto con la fotocamera. Restituisce (valore, errore):
+    il S/N senza spazi e in maiuscolo (da 4 a 40 caratteri), l'IMEI di 15 cifre con la cifra di
+    controllo giusta; testo vuoto = codice cancellato ("", ""). Se non va: (None, spiegazione)."""
+    raw = "".join(ch for ch in str(text or "") if ch >= " " and ch != "\x7f")
+    if kind == "imei":
+        t = re.sub(r"[\s\-]", "", re.sub(r"^\s*imei[\s:\-]*", "", raw, flags=re.I))
+        if not t:
+            return "", ""
+        if not re.fullmatch(r"\d{15}", t):
+            return None, ("L'IMEI ha 15 cifre: ne hai scritte %d. Controlla di non aver saltato un "
+                          "numero." % len(t))
+        if not _luhn_ok(t):
+            return None, ("Questo IMEI non torna con la cifra di controllo: c'è un numero sbagliato. "
+                          "Riguardalo, oppure leggilo con la fotocamera.")
+        return t, ""
+    if kind == "presa":
+        t = " ".join(raw.split()).upper()
+        if not t:
+            return "", ""
+        if len(t) > PRESA_MAX:
+            return None, "Il codice della presa può avere al massimo %d caratteri (ne hai scritti %d)." % (
+                PRESA_MAX, len(t))
+        if not re.fullmatch(r"[A-Z0-9][A-Z0-9 \-./_]*", t):
+            return None, ("Il codice della presa può avere lettere, numeri e i segni - . / _ "
+                          "(per esempio A12-34).")
+        return t, ""
+    t = re.sub(r"\s+", "", raw).upper()
+    if not t:
+        return "", ""
+    if not 4 <= len(t) <= 40:
+        return None, "Il S/N deve avere da 4 a 40 caratteri (ne hai scritti %d)." % len(t)
+    return t, ""
+
+
+def set_device_code(db, utente_id, key, value, dotazione=None, port=None):
+    """Scrive il codice di un dispositivo: S/N del PC o IMEI nei dati della persona, S/N del monitor,
+    del telefono Teams o codice della presa di rete (con la porta dello switch, `port`) nella sua
+    dotazione (`dotazione` = quella attuale della persona). Restituisce True se qualcosa è cambiato."""
+    if key == "pc":
+        return db.set_user_codes(utente_id, seriale_pc=value)
+    if key == "mobile":
+        return db.set_user_codes(utente_id, imei=value)
+    return db.set_user_extra(utente_id, dotazione=with_device_serial(dotazione, key, value, port))
+
+
+def desk_bollini(devices, cx, y, scale=DESK_BIG):
+    """Dove cadono i bollini nella scena ingrandita (centrata in cx, bordo alto a y):
+    [(chiave, x, y)]."""
+    return [(d["key"], cx - 65 * scale + d["pos"][0] * scale, y + d["pos"][1] * scale)
+            for d in devices]
+
+
+def desk_bollino_hit(devices, cx, y, px, py, scale=DESK_BIG, r=DESK_BOLLINO_R):
+    """La chiave del dispositivo il cui bollino è sotto il clic (px, py), oppure None."""
+    best, dist = None, (r + 4) ** 2
+    for key, bx, by in desk_bollini(devices, cx, y, scale):
+        d = (bx - px) ** 2 + (by - py) ** 2
+        if d <= dist:
+            best, dist = key, d
+    return best
 
 
 def desk_cards(room, people):
@@ -3200,33 +3839,38 @@ def desk_photo_keys(phones):
             "teams": "teams" if ph.get("teams") else None}
 
 
-def draw_desk_scene(c, cx, y, tags, phones=None, faded=False, bg="#f6f2e6"):
+def draw_desk_scene(c, cx, y, tags, phones=None, faded=False, bg="#f6f2e6", scale=1, big=False):
     """La scrivania vista da davanti, come nelle foto: pannello azzurro, monitor con la webcam,
     tastiera, mouse e, con le FOTO dei dispositivi scelti, il portatile Dell (13 o 15 pollici),
     il cellulare Galaxy (S24, S24 Plus, S25) a destra e il telefono Teams AudioCodes a sinistra.
-    Occupa 130 x 66 px attorno a cx. Senza le foto (file mancante) disegna dei rettangoli."""
+    Occupa 130 x 66 px (per `scale`) attorno a cx. Senza le foto (file mancante) disegna dei
+    rettangoli. scale > 1: la scena ingrandita (con le foto «_l»); big: la scrivania a pagina
+    intera, con la scritta AOC sul monitor e sempre un PC (coperchio generico se non c'è il Dell)."""
     ph = phones or {}
-    ox = cx - 65
+    k = scale
+    ox = cx - 65 * k
+    suf = "_l" if k > 1 else "_s"
 
     def col(h):
         return _mix(h, bg, 0.62) if faded else h
 
     def rect(x, yy, w, h, fill):
-        c.create_rectangle(ox + x, y + yy, ox + x + w, y + yy + h, fill=col(fill),
-                           outline=col(fill), tags=tags)
+        c.create_rectangle(ox + x * k, y + yy * k, ox + (x + w) * k, y + (yy + h) * k,
+                           fill=col(fill), outline=col(fill), tags=tags)
 
     def oval(x, yy, w, h, fill):
-        c.create_oval(ox + x, y + yy, ox + x + w, y + yy + h, fill=col(fill), outline=col(fill),
-                      tags=tags)
+        c.create_oval(ox + x * k, y + yy * k, ox + (x + w) * k, y + (yy + h) * k, fill=col(fill),
+                      outline=col(fill), tags=tags)
 
     def photo(key, x, yy, fallback):
         """La foto «key» con l'angolo in alto a sinistra in (x, yy); se manca un rettangolo."""
         w, h = DESK_IMG_SIZE[key]
-        img = desk_photo(key + "_s")
+        img = desk_photo(key + suf)
         if img is None:
             rect(x, yy, w, h, fallback)
             return
-        c.create_image(ox + x, y + yy, image=img, anchor="nw", tags=tuple(tags) + ("dkimg:" + key,))
+        c.create_image(ox + x * k, y + yy * k, image=img, anchor="nw",
+                       tags=tuple(tags) + ("dkimg:" + key,))
     rect(0, 40, 130, 26, "#ecd3a8")          # piano della scrivania
     rect(2, 28, 126, 14, "#9db8e6")          # pannello azzurro dietro il monitor
     rect(54, 41, 22, 3, "#15181d")           # base del monitor
@@ -3235,15 +3879,24 @@ def draw_desk_scene(c, cx, y, tags, phones=None, faded=False, bg="#f6f2e6"):
     rect(44.5, 8.5, 41, 22, "#2b313b")       # schermo spento
     rect(60, 3, 10, 3.5, "#0b0d10")          # webcam
     rect(44, 48, 40, 8, "#1d2026")           # tastiera
-    for k in range(3):
-        rect(47, 50 + k * 2.2, 34, 0.9, "#3a3f49")
+    for i in range(3):
+        rect(47, 50 + i * 2.2, 34, 0.9, "#3a3f49")
     oval(88.5, 47, 7, 9, "#1d2026")          # mouse
+    if big:
+        c.create_text(ox + 65 * k, y + 34.3 * k, text="AOC", fill="#c9ced6",
+                      font=("Segoe UI", 9, "bold"), tags=tags)
+        rect(108, 29, 10, 9, "#f4f6f8")      # presa di rete a muro: placca con la porta
+        rect(111, 32.5, 4, 3, "#2b313b")
+        rect(112.2, 31.6, 1.6, 1, "#2b313b")
     keys = desk_photo_keys(ph)
     if keys["laptop"]:                       # portatile Dell chiuso, visto dall'alto (centro a x 27)
         w, h = DESK_IMG_SIZE[keys["laptop"]]
         photo(keys["laptop"], 27 - w / 2, 63 - h, "#a9b2bd")
-    elif ph.get("laptop") == "altro":        # un altro modello: coperchio generico
+    elif ph.get("laptop") == "altro" or big:  # un altro modello (o PC senza modello): coperchio generico
         rect(13, 44, 28, 19, "#a9b2bd")
+        if big and ph.get("laptop") != "altro":
+            c.create_text(ox + 21 * k, y + 59 * k, text="PC", fill="#5b6b7d",
+                          font=("Segoe UI", 12, "bold"), tags=tags)
     if keys["teams"]:                        # telefono Teams (AudioCodes), davanti, a sinistra
         photo("teams", 0, 66 - DESK_IMG_SIZE["teams"][1], "#15181d")
     if keys["mobile"]:                       # cellulare Samsung Galaxy (centro a x 113)
@@ -3252,6 +3905,19 @@ def draw_desk_scene(c, cx, y, tags, phones=None, faded=False, bg="#f6f2e6"):
     elif ph.get("mobile") == "altro":        # un altro modello: cellulare generico
         rect(108.5, 45, 9, 17, "#14171c")
         rect(109.5, 46.5, 7, 14, "#2b313b")
+
+
+def draw_desk_big(c, phones, devices, cx, y):
+    """La scrivania a pagina intera: la scena ingrandita 5 volte con un bollino su ogni dispositivo
+    (verde con la spunta = codice scritto, rosso col + = da inserire)."""
+    draw_desk_scene(c, cx, y, ("dkbig",), phones=phones, scale=DESK_BIG, big=True)
+    for key, bx, by in desk_bollini(devices, cx, y):
+        ok = bool(next(d for d in devices if d["key"] == key)["value"])
+        c.create_oval(bx - DESK_BOLLINO_R, by - DESK_BOLLINO_R, bx + DESK_BOLLINO_R,
+                      by + DESK_BOLLINO_R, fill=GREEN if ok else RED, outline=WHITE, width=3,
+                      tags=("bollino", "bol:" + key))
+        c.create_text(bx, by, text="\u2713" if ok else "+", fill=WHITE,
+                      font=("Segoe UI", 16, "bold"), tags=("bollino", "bol:" + key))
 
 
 def draw_desk_rows(c, layout, tag_prefix="dk", cursor=True):
@@ -3994,6 +4660,90 @@ class BuildingDialog(ModalDialog):
             self.destroy()
 
 
+class MergePrintersDialog(ModalDialog):
+    """Stampanti doppie: a sinistra le vecchie (senza numero di serie), a destra la nuova (col numero
+    di serie) con cui unirle. Lo storico (cambi toner, interventi del tecnico, bolle) passa alla nuova,
+    la vecchia si toglie. Il programma propone da solo i casi chiari; gli altri li scegli tu."""
+
+    NESSUNA = "(non unire)"
+
+    def __init__(self, parent, building, proposals, on_merge):
+        super().__init__(parent, "Unisci doppioni stampanti")
+        self.on_merge = on_merge
+        self.rows = []                           # (id della vecchia, variabile, {etichetta: id nuova})
+        body = ttk.Frame(self, padding=16)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="Edificio: %s" % building["nome"],
+                  font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        ttk.Label(body, text="A sinistra le stampanti vecchie (senza numero di serie), a destra quella "
+                             "nuova (col numero di serie) con cui unirle. Lo storico (cambi toner, "
+                             "interventi del tecnico, bolle) passa alla nuova e la vecchia si toglie; "
+                             "la nuova tiene nome, seriale e stanza. Dove il programma non è sicuro "
+                             "non sceglie: scegli tu, o lascia «(non unire)».",
+                  style="Hint.TLabel", wraplength=820, justify="left").pack(anchor="w", pady=(2, 10))
+        grid = ttk.Frame(body)
+        grid.pack(fill="x")
+        ttk.Label(grid, text="Stampante vecchia", font=("Segoe UI", 9, "bold")).grid(
+            row=0, column=0, sticky="w", padx=(0, 16))
+        ttk.Label(grid, text="Unisci con la nuova", font=("Segoe UI", 9, "bold")).grid(
+            row=0, column=1, sticky="w")
+        for i, pr in enumerate(proposals[:30], start=1):
+            o = pr["old"]
+            info = "%s - %s\n%s: %d cambi toner, %d interventi del tecnico" % (
+                o["nome"] or o["modello"] or "senza nome", floor_label(o["piano"]),
+                o["modello"] or "modello non indicato", pr["n_toner"], pr["n_manut"])
+            ttk.Label(grid, text=info, justify="left").grid(row=i, column=0, sticky="w",
+                                                            padx=(0, 16), pady=5)
+            labels = {}
+            for n in pr["plausibili"] + pr["altre"]:
+                labels["%s - S/N %s - %s" % (n["nome"] or n["modello"] or "senza nome",
+                                             n["seriale"], floor_label(n["piano"]))] = n["id"]
+            sugg = next((k for k, v in labels.items() if v == pr["suggerita"]), self.NESSUNA)
+            var = tk.StringVar(value=sugg)
+            ttk.Combobox(grid, textvariable=var, values=[self.NESSUNA] + list(labels),
+                         state="readonly", width=58).grid(row=i, column=1, sticky="w", pady=5)
+            self.rows.append((o["id"], var, labels))
+        if len(proposals) > 30:
+            ttk.Label(body, text="Ce ne sono altre %d: unisci queste e riapri questa finestra." %
+                      (len(proposals) - 30), style="Hint.TLabel").pack(anchor="w", pady=(6, 0))
+        bf = ttk.Frame(body)
+        bf.pack(fill="x", pady=(14, 0))
+        ttk.Button(bf, text="Unisci quelle scelte", style="Save.TButton",
+                   command=self.go).pack(side="left")
+        ttk.Button(bf, text="Chiudi", command=self.destroy).pack(side="left", padx=(8, 0))
+
+    def pairs(self):
+        out = []
+        for old_id, var, labels in self.rows:
+            keep = labels.get(var.get())
+            if keep:
+                out.append((old_id, keep))
+        return out
+
+    def go(self):
+        pairs = self.pairs()
+        if not pairs:
+            messagebox.showinfo(APP_NAME, "Non hai scelto nessuna unione.", parent=self)
+            return
+        if not messagebox.askyesno(
+                APP_NAME, "Unisco %d %s?\n\nLo storico passa alla stampante nuova e quella vecchia "
+                          "viene tolta. Non si può annullare (se vuoi, prima fai File › Salva una "
+                          "copia di backup)." % (len(pairs), "stampante" if len(pairs) == 1 else "stampanti"),
+                parent=self):
+            return
+        try:
+            n_t, n_m = self.on_merge(pairs)
+        except (ValueError, sqlite3.Error) as e:
+            messagebox.showerror(APP_NAME, "Non sono riuscito a unirle:\n%s" % e, parent=self)
+            return
+        messagebox.showinfo(APP_NAME, "Fatto: %d %s unite.\nSpostati %d cambi toner e %d interventi del "
+                                      "tecnico.\n\nAl prossimo «Esporta dati per il telefono» anche il "
+                                      "telefono toglie i doppioni." % (
+                                          len(pairs), "stampante" if len(pairs) == 1 else "stampanti",
+                                          n_t, n_m), parent=self)
+        self.destroy()
+
+
 class PrinterEditDialog(ModalDialog):
     def __init__(self, parent, printer, building, floor, models, on_save, rooms_fn=None):
         super().__init__(parent, "Nuova stampante" if printer is None else "Modifica stampante")
@@ -4210,10 +4960,12 @@ class PrinterDialog(ModalDialog):
             lines.append("Note: %s" % p["note"])
         ultimi = {r["colore"]: r["data_ora"] for r in reversed(self.app.db.toner_of(self.printer_id))}
         lines.append("Ultimo cambio:")
+        stime = self.app.db.toner_estimates().get(self.printer_id, {})
         for colore in TONER_NOMI:
             quando = ultimi.get(colore)
             lines.append("   %s: %s%s" % (colore, ago_long(days_ago(quando)),
                                           " (%s)" % fmt_dt(quando) if quando else ""))
+            lines.append("      %s" % toner_estimate_text(stime.get(colore, {"pct": None})))
         bassa = [(r["colore"], r["quantita"]) for r in self.app.db.scorta_all()
                  if model_key(r["modello"]) == model_key(p["modello"])
                  and scorta_status(r["quantita"], r["soglia"]) != "OK"]
@@ -4753,55 +5505,163 @@ class RoomNewDialog(ModalDialog):
             self.destroy()
 
 
-class DeskDialog(ModalDialog):
-    """Una scrivania: chi ci siede, il numero di serie del suo PC (S/N), IMEI, telefono, dotazione."""
+class DeviceCodeDialog(ModalDialog):
+    """Il codice di un dispositivo della scrivania (S/N del PC, del monitor AOC o del telefono Teams,
+    IMEI del cellulare): si scrive a mano oppure si legge con la fotocamera."""
 
-    NO_CELL = "Non indicato"
-
-    def __init__(self, parent, app, room_id, utente_id, open_room=None, on_change=None):
-        super().__init__(parent, "Postazione", "660x820")
-        self.minsize(560, 700)
-        self.app, self.room_id, self.utente_id, self.open_room_cb = app, room_id, utente_id, open_room
-        self.on_change = on_change
+    def __init__(self, parent, device, person_name, on_save):
+        presa = device["kind"] == "presa"
+        super().__init__(parent, device["name"], "620x430" if presa else "620x360")
+        self.resizable(False, False)
+        self.device, self.on_save = device, on_save
+        imei = device["kind"] == "imei"
         body = ttk.Frame(self, padding=16)
         body.pack(fill="both", expand=True)
-        body.columnconfigure(1, weight=1)
-        self.lbl_title = ttk.Label(body, font=("Segoe UI", 14, "bold"), foreground=NAVY)
-        self.lbl_title.grid(row=0, column=0, columnspan=3, sticky="w")
-        self.lbl_where = ttk.Label(body, style="Hint.TLabel")
-        self.lbl_where.grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 10))
-        self.lbl_person = ttk.Label(body, font=("Segoe UI", 12, "bold"))
-        self.lbl_person.grid(row=2, column=0, columnspan=3, sticky="w")
-        self.lbl_office = ttk.Label(body, style="Hint.TLabel")
-        self.lbl_office.grid(row=3, column=0, columnspan=3, sticky="w", pady=(0, 12))
-        ttk.Label(body, text="Numero di serie del PC (S/N)", font=("Segoe UI", 9, "bold")).grid(
-            row=4, column=0, columnspan=3, sticky="w")
+        body.columnconfigure(0, weight=1)
+        ttk.Label(body, text=device["name"] + ("  ·  " + device["sub"] if device["sub"] else ""),
+                  font=("Segoe UI", 14, "bold"), foreground=NAVY).grid(row=0, column=0,
+                                                                       columnspan=2, sticky="w")
+        ttk.Label(body, text=person_name, style="Hint.TLabel").grid(row=1, column=0, columnspan=2,
+                                                                   sticky="w", pady=(0, 12))
+        ttk.Label(body, text=device["label"], font=("Segoe UI", 9, "bold")).grid(
+            row=2, column=0, columnspan=2, sticky="w")
+        self.v = tk.StringVar(value=device["value"])
+        self.entry = ttk.Entry(body, textvariable=self.v, width=34, font=("Consolas", 15, "bold"))
+        self.entry.grid(row=3, column=0, sticky="ew", pady=(2, 2))
+        self.btn_cam = scan_button(body, self.v, kind="imei" if imei else "any" if presa else "serial",
+                                   entry=self.entry,
+                                   on_code=lambda t: self.lbl_err.configure(text=""),
+                                   title="Leggi l'IMEI" if imei else "Leggi: " + device["label"])
+        self.btn_cam.grid(row=3, column=1, padx=(8, 0))
+        ttk.Label(body, style="Hint.TLabel", wraplength=560, justify="left",
+                  text=("L'IMEI sono 15 cifre: lo trovi sulla scatola o digitando *#06# sul cellulare."
+                        if imei else
+                        "Il codice della presa è scritto sulla placca a muro (per esempio A12-34). "
+                        "Puoi scriverlo oppure leggerlo con la fotocamera se c'è un'etichetta con il "
+                        "codice a barre o il QR." if presa else
+                        "Il S/N è sull'etichetta dell'apparecchio (di solito sotto o dietro), vicino "
+                        "al codice a barre. Puoi scriverlo oppure leggerlo con la fotocamera.")
+                  ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.v_port = tk.StringVar(value=device.get("port", ""))
+        if presa:
+            ttk.Label(body, text="Porta dello switch (facoltativa)", font=("Segoe UI", 9, "bold")).grid(
+                row=5, column=0, columnspan=2, sticky="w", pady=(10, 0))
+            ttk.Entry(body, textvariable=self.v_port, width=34, font=("Consolas", 13)).grid(
+                row=6, column=0, sticky="ew", pady=(2, 0))
+        self.lbl_err = ttk.Label(body, foreground=RED, wraplength=560, justify="left")
+        self.lbl_err.grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        bt = ttk.Frame(body)
+        bt.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(16, 0))
+        ttk.Button(bt, text="Salva", style="Save.TButton", command=self.save).pack(side="left")
+        if device["value"]:
+            ttk.Button(bt, text="Cancella il codice", command=self.clear).pack(side="left",
+                                                                              padx=(8, 0))
+        ttk.Button(bt, text="Annulla", command=self.destroy).pack(side="right")
+        self.bind("<Return>", lambda e: self.save())
+        try:
+            self.entry.focus_set()
+        except Exception:
+            pass
+
+    def save(self):
+        value, err = check_device_code(self.device["kind"], self.v.get())
+        if err:
+            self.lbl_err.configure(text=err)
+            return
+        if not value:
+            self.lbl_err.configure(text="Scrivi il codice oppure leggilo con la fotocamera.")
+            return
+        if self.device["kind"] == "presa":
+            self.on_save(value, " ".join(self.v_port.get().split())[:80])
+        else:
+            self.on_save(value)
+        self.destroy()
+
+    def clear(self):
+        if self.device["kind"] == "presa":
+            self.on_save("", "")
+        else:
+            self.on_save("")
+        self.destroy()
+
+
+class DeskDialog(ModalDialog):
+    """La scrivania a pagina intera: la scena in grande con un bollino su ogni dispositivo (PC, monitor
+    AOC, cellulare, telefono Teams); cliccando un bollino si scrive il codice (S/N o IMEI) a mano o con
+    la fotocamera. A destra i dati della persona, i modelli sulla scrivania e la dotazione."""
+
+    NO_CELL = "Non indicato"
+    SCENE_W, SCENE_H, SCENE_Y = 130 * DESK_BIG + 40, 66 * DESK_BIG + 24, 12
+
+    def __init__(self, parent, app, room_id, utente_id, open_room=None, on_change=None):
+        super().__init__(parent, "Postazione", "1240x780")
+        self.minsize(960, 640)
+        self.app, self.room_id, self.utente_id, self.open_room_cb = app, room_id, utente_id, open_room
+        self.on_change = on_change
+        self.devices = []
+        self.after(60, self._maximize)
+        body = ttk.Frame(self, padding=16)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=3)
+        body.columnconfigure(1, weight=2)
+        body.rowconfigure(1, weight=1)
+        head = ttk.Frame(body)
+        head.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self.lbl_title = ttk.Label(head, font=("Segoe UI", 14, "bold"), foreground=NAVY)
+        self.lbl_title.pack(anchor="w")
+        self.lbl_where = ttk.Label(head, style="Hint.TLabel")
+        self.lbl_where.pack(anchor="w", pady=(0, 8))
+        # a sinistra: la scrivania in grande e i suoi dispositivi
+        left = ttk.Frame(body)
+        left.grid(row=1, column=0, sticky="nsew", padx=(0, 18))
+        self.lbl_person = ttk.Label(left, font=("Segoe UI", 16, "bold"))
+        self.lbl_person.pack(anchor="w")
+        self.lbl_office = ttk.Label(left, style="Hint.TLabel")
+        self.lbl_office.pack(anchor="w", pady=(0, 6))
+        self.scene = tk.Canvas(left, width=self.SCENE_W, height=self.SCENE_H, bg="#f6f2e6",
+                               highlightthickness=1, highlightbackground="#cfc3a3")
+        self.scene.pack(anchor="w")
+        self.scene.bind("<Button-1>", self.on_scene_click)
+        self.scene.bind("<Motion>", self.on_scene_move)
+        ttk.Label(left, style="Hint.TLabel",
+                  text="Clicca un bollino per scrivere il codice o leggerlo con la fotocamera: "
+                       "verde = codice scritto, rosso = da inserire.").pack(anchor="w", pady=(4, 6))
+        self.dev_frame = ttk.Frame(left)
+        self.dev_frame.pack(fill="x")
+        # a destra: dati, modelli, dotazione
+        right = ttk.Frame(body)
+        right.grid(row=1, column=1, sticky="nsew")
+        right.columnconfigure(1, weight=1)
+        ttk.Label(right, text="Numero di serie del PC (S/N)", font=("Segoe UI", 9, "bold")).grid(
+            row=0, column=0, columnspan=3, sticky="w")
         self.v_sn = tk.StringVar()
-        self.e_sn = ttk.Entry(body, textvariable=self.v_sn, state="readonly", width=30,
-                              font=("Consolas", 15, "bold"))
-        self.e_sn.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(2, 2))
-        ttk.Button(body, text="Copia S/N", command=self.copy_sn).grid(row=5, column=2, padx=(8, 0))
-        self.lbl_copy = ttk.Label(body, style="Hint.TLabel")
-        self.lbl_copy.grid(row=6, column=0, columnspan=3, sticky="w", pady=(0, 8))
+        self.e_sn = ttk.Entry(right, textvariable=self.v_sn, state="readonly", width=24,
+                              font=("Consolas", 13, "bold"))
+        self.e_sn.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(2, 2))
+        ttk.Button(right, text="Copia S/N", command=self.copy_sn).grid(row=1, column=2, padx=(8, 0))
+        self.lbl_copy = ttk.Label(right, style="Hint.TLabel")
+        self.lbl_copy.grid(row=2, column=0, columnspan=3, sticky="w", pady=(0, 8))
         self.vals = {}
         for i, (key, text) in enumerate((("imei", "IMEI cellulare"), ("telefono", "Telefono"),
                                          ("matricola", "Matricola"), ("sede", "Sede"))):
-            ttk.Label(body, text=text).grid(row=7 + i, column=0, sticky="w", pady=2, padx=(0, 14))
-            self.vals[key] = ttk.Label(body, font=("Segoe UI", 10, "bold"))
-            self.vals[key].grid(row=7 + i, column=1, columnspan=2, sticky="w", pady=2)
-        pf = ttk.Frame(body)
-        pf.grid(row=11, column=0, columnspan=3, sticky="w", pady=(10, 0))
+            ttk.Label(right, text=text).grid(row=3 + i, column=0, sticky="w", pady=2, padx=(0, 14))
+            self.vals[key] = ttk.Label(right, font=("Segoe UI", 10, "bold"))
+            self.vals[key].grid(row=3 + i, column=1, columnspan=2, sticky="w", pady=2)
+        pf = ttk.Frame(right)
+        pf.grid(row=7, column=0, columnspan=3, sticky="w", pady=(10, 0))
         ttk.Label(pf, text="Cellulare sulla scrivania").pack(side="left")
         self.v_mob = tk.StringVar()
         self.cb_mob = ttk.Combobox(pf, textvariable=self.v_mob, state="readonly", width=16,
                                    values=[self.NO_CELL] + list(CELL_MODELLI))
-        self.cb_mob.pack(side="left", padx=(8, 14))
+        self.cb_mob.pack(side="left", padx=(8, 0))
         self.cb_mob.bind("<<ComboboxSelected>>", lambda e: self.apply_phones())
+        pt = ttk.Frame(right)
+        pt.grid(row=8, column=0, columnspan=3, sticky="w", pady=(6, 0))
         self.v_teams = tk.BooleanVar()
-        ttk.Checkbutton(pf, text="Telefono Teams (AudioCodes)", variable=self.v_teams,
+        ttk.Checkbutton(pt, text="Telefono Teams (AudioCodes)", variable=self.v_teams,
                         command=self.apply_phones).pack(side="left")
-        pl = ttk.Frame(body)
-        pl.grid(row=12, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        pl = ttk.Frame(right)
+        pl.grid(row=9, column=0, columnspan=3, sticky="w", pady=(6, 0))
         ttk.Label(pl, text="Portatile").pack(side="left")
         self.v_lap = tk.StringVar()
         self.cb_lap = ttk.Combobox(pl, textvariable=self.v_lap, state="readonly", width=22,
@@ -4809,28 +5669,28 @@ class DeskDialog(ModalDialog):
         self.cb_lap.pack(side="left", padx=(8, 0))
         self.cb_lap.bind("<<ComboboxSelected>>", lambda e: self.apply_phones())
         # le foto dei tre apparecchi scelti: cambiano quando cambi la scelta
-        fr = ttk.Frame(body)
-        fr.grid(row=13, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        fr = ttk.Frame(right)
+        fr.grid(row=10, column=0, columnspan=3, sticky="ew", pady=(10, 0))
         self.pic, self.pic_cap = {}, {}
         for slot in ("laptop", "mobile", "teams"):
             col = ttk.Frame(fr)
-            col.pack(side="left", padx=(0, 22), anchor="s")
+            col.pack(side="left", padx=(0, 18), anchor="s")
             self.pic[slot] = ttk.Label(col, anchor="center")
             self.pic[slot].pack()
             self.pic_cap[slot] = ttk.Label(col, style="Hint.TLabel", anchor="center")
             self.pic_cap[slot].pack()
-        ttk.Label(body, text="Dotazione", font=("Segoe UI", 9, "bold")).grid(
-            row=14, column=0, columnspan=3, sticky="w", pady=(10, 2))
-        self.tree_d = ttk.Treeview(body, columns=("tipo", "modello", "seriale"), show="headings",
-                                   height=4, selectmode="browse")
-        for col, text, w in (("tipo", "Apparecchio", 130), ("modello", "Modello", 190),
-                             ("seriale", "Seriale / IMEI", 230)):
+        ttk.Label(right, text="Dotazione", font=("Segoe UI", 9, "bold")).grid(
+            row=11, column=0, columnspan=3, sticky="w", pady=(10, 2))
+        self.tree_d = ttk.Treeview(right, columns=("tipo", "modello", "seriale"), show="headings",
+                                   height=5, selectmode="browse")
+        for col, text, w in (("tipo", "Apparecchio", 110), ("modello", "Modello", 150),
+                             ("seriale", "Seriale / IMEI", 170)):
             self.tree_d.heading(col, text=text)
             self.tree_d.column(col, width=w, anchor="w")
-        self.tree_d.grid(row=15, column=0, columnspan=3, sticky="nsew")
-        body.rowconfigure(15, weight=1)
-        bt = ttk.Frame(body)
-        bt.grid(row=16, column=0, columnspan=3, sticky="ew", pady=(14, 0))
+        self.tree_d.grid(row=12, column=0, columnspan=3, sticky="nsew")
+        right.rowconfigure(12, weight=1)
+        bt = ttk.Frame(right)
+        bt.grid(row=13, column=0, columnspan=3, sticky="ew", pady=(14, 0))
         ttk.Button(bt, text="Modifica la persona…", style="Save.TButton", command=self.edit).pack(
             side="left")
         if open_room:
@@ -4838,6 +5698,78 @@ class DeskDialog(ModalDialog):
                                                                              padx=(8, 0))
         ttk.Button(bt, text="Chiudi", command=self.destroy).pack(side="right")
         self.refresh()
+
+    def _maximize(self):
+        """La scrivania si apre a pagina intera (su Windows «zoomed»; altrove se il sistema lo sa)."""
+        try:
+            self.state("zoomed")
+        except Exception:
+            try:
+                self.attributes("-zoomed", True)
+            except Exception:
+                pass
+
+    def scene_cx(self):
+        return self.SCENE_W / 2
+
+    def on_scene_click(self, event):
+        key = desk_bollino_hit(self.devices, self.scene_cx(), self.SCENE_Y, event.x, event.y)
+        if key:
+            self.open_device(key)
+
+    def on_scene_move(self, event):
+        key = desk_bollino_hit(self.devices, self.scene_cx(), self.SCENE_Y, event.x, event.y)
+        try:
+            self.scene.configure(cursor="hand2" if key else "")
+        except Exception:
+            pass
+
+    def open_device(self, key):
+        p = self.person()
+        d = next((x for x in self.devices if x["key"] == key), None)
+        if not p or not d:
+            return None
+        return DeviceCodeDialog(self, d, p["nome"],
+                                lambda value, port=None: self.save_device(key, value, port))
+
+    def save_device(self, key, value, port=None):
+        """Salva il codice di un dispositivo (per la presa di rete anche la porta dello switch) e
+        ridisegna la scrivania."""
+        p = self.person()
+        if not p:
+            return False
+        changed = set_device_code(self.app.db, self.utente_id, key, value, p.get("dotazione"), port)
+        self.app.refresh_users()
+        self.refresh()
+        if self.on_change:
+            self.on_change()
+        return changed
+
+    def draw_devices(self, p, info):
+        """Ridisegna la scena grande con i bollini e l'elenco dei dispositivi sotto."""
+        self.devices = desk_devices(p)
+        self.scene.delete("all")
+        draw_desk_big(self.scene, info, self.devices, self.scene_cx(), self.SCENE_Y)
+        for w in self.dev_frame.winfo_children():
+            w.destroy()
+        for d in self.devices:
+            ok = bool(d["value"])
+            row = ttk.Frame(self.dev_frame)
+            row.pack(fill="x", pady=2)
+            dot = tk.Canvas(row, width=26, height=26, highlightthickness=0, bg=LIGHT)
+            dot.create_oval(2, 2, 24, 24, fill=GREEN if ok else RED, outline=GREEN if ok else RED)
+            dot.create_text(13, 13, text="\u2713" if ok else "+", fill=WHITE,
+                            font=("Segoe UI", 11, "bold"))
+            dot.pack(side="left")
+            ttk.Label(row, text=d["name"] + ("  ·  " + d["sub"] if d["sub"] else ""),
+                      font=("Segoe UI", 10, "bold"), width=40).pack(side="left", padx=(8, 0))
+            ttk.Label(row, text=d["value"] or ("IMEI mancante" if d["kind"] == "imei"
+                                               else "Codice mancante" if d["kind"] == "presa"
+                                               else "S/N mancante"),
+                      font=("Consolas", 11, "bold") if ok else ("Segoe UI", 10, "italic"),
+                      foreground=TEXT if ok else GREY).pack(side="left", padx=(8, 0))
+            ttk.Button(row, text="Modifica…" if ok else "Inserisci…",
+                       command=lambda k=d["key"]: self.open_device(k)).pack(side="right")
 
     def person(self):
         return next((p for p in self.app.db.persone_of(self.room_id)
@@ -4873,6 +5805,7 @@ class DeskDialog(ModalDialog):
         else:
             self.v_lap.set(LAPTOP_MODELLI.get(info["laptop"], self.NO_CELL))
         self.cb_lap.configure(values=lvals)
+        self.draw_devices(p, info)
         keys = desk_photo_keys(info)
         caps = {"laptop": (LAPTOP_MODELLI.get(info["laptop"]) or info["laptop_label"]
                            or "Portatile non indicato"),
@@ -5201,6 +6134,10 @@ class RoomDialog(ModalDialog):
         self.v_persona.set("")
         self.app.refresh_users()
         self.refresh()
+        if res.get("presa_tolta"):
+            messagebox.showinfo(APP_NAME, "La presa di rete %s era della scrivania di prima: l'ho tolta. "
+                                          "Scrivi quella della nuova scrivania." % res["presa_tolta"],
+                                parent=self)
         if res["sopra"]:
             occ, _ = room_occupancy(self.room())
             messagebox.showwarning(APP_NAME, "Attenzione: ora in %s ci sono più persone delle "
@@ -6649,6 +7586,83 @@ class VerbaleDialog(ModalDialog):
             self.destroy()
 
 
+class Walk3DHost:
+    """Ponte tra le visite 3D (corridoio3d.py) e i dati dell'app: stanze, persone, stampanti di un piano."""
+
+    def __init__(self, app):
+        self.app = app
+        self.parent = app
+        self._pimg = {}
+        self._pcache = (None, 0.0, [])
+
+    # --- dati
+    def building(self, eid):
+        return next((b for b in self.app.db.edifici() if b["id"] == eid), None)
+
+    def building_name(self, eid):
+        b = self.building(eid)
+        return b["nome"] if b else ""
+
+    def floors(self, eid):
+        """I piani dell'edificio dal piu' basso (anche quelli fuori dall'intervallo ma con stanze o stampanti)."""
+        b = self.building(eid)
+        if not b:
+            return []
+        f = set(range(min(b["piano_min"], b["piano_max"]), max(b["piano_min"], b["piano_max"]) + 1))
+        f.update(r["piano"] for r in self.app.db.stanze_of(eid))
+        f.update(p["piano"] for p in self._printers(eid))
+        return sorted(f)
+
+    def _printers(self, eid):
+        key, when, rows = self._pcache
+        if key != eid or time.time() - when > 3.0:
+            rows = self.app.db.printers_of(eid)
+            self._pcache = (eid, time.time(), rows)
+        return rows
+
+    def floor_data(self, eid, piano):
+        db = self.app.db
+        rooms = []
+        for r in db.stanze_of(eid, piano):
+            ppl = db.persone_of(r["id"])
+            miss = sum(1 for p in ppl for d in desk_devices(p) if not d["value"])
+            rooms.append({"uid": r["uid"], "id": r["id"], "codice": r["codice"],
+                          "scrivanie": r["scrivanie"] or 0, "miss": miss,
+                          "persone": [{"nome": p["nome"], "ufficio": p.get("ufficio") or ""} for p in ppl]})
+        prs = []
+        for p in self._printers(eid):
+            if p["piano"] != piano:
+                continue
+            prs.append({"uid": str(p["id"]), "nome": p["nome"], "modello": p["modello"],
+                        "stanza": p.get("stanza_codice") or "", "red": p.get("man_richieste") or 0,
+                        "low": bool(p.get("scorta_bassa")), "fuori": bool(p.get("fuori_servizio"))})
+        return {"edificio": self.building_name(eid), "piano": piano, "label": floor_label(piano),
+                "rooms": rooms, "printers": prs}
+
+    def printer_image(self, modello):
+        key = "%s_m" % printer_image_key(modello)
+        if key not in self._pimg:
+            try:
+                from PIL import Image
+                self._pimg[key] = Image.open(io.BytesIO(base64.b64decode(PRINTER_IMAGES[key]))).convert("RGBA")
+            except Exception:
+                self._pimg[key] = None
+        return self._pimg[key]
+
+    # --- la foto del personaggio: solo in questa cartella, mai nei backup, nei file per il telefono o su GitHub
+    def avatar_path(self):
+        return os.path.join(data_dir(), C3D.AVATAR_NAME)
+
+    # --- azioni
+    def open_room(self, room_id):
+        if self.app.db.get_stanza(room_id):
+            return RoomDialog(self.app, room_id)
+        return None
+
+    def open_walk(self, eid, piano):
+        self.app.open_walk_3d(eid, piano)
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -6811,10 +7825,13 @@ class App(tk.Tk):
         m.add_command(label="Importa dati dal telefono…", command=self.import_from_phone)
         m.add_command(label="Esporta dati per il telefono…", command=self.export_for_phone)
         m.add_command(label="Importa elenco stanze e persone…", command=self.import_rooms_file)
+        m.add_command(label="Unisci doppioni stampanti…", command=self.merge_printers_dialog)
         m.add_separator()
         m.add_command(label="Correggi il nome di un modello stampante…",
                       command=self.rename_model_dialog)
         m.add_command(label="Mappa della Toscana…", command=self.open_map)
+        m.add_command(label="Passeggiata nel piano in 3D…", command=self.open_walk_3d)
+        m.add_command(label="Edificio intero in 3D…", command=self.open_tower_3d)
         m.add_command(label="Dati per i verbali Word…", command=self.verbali_settings)
         m.add_command(label="Apri la cartella dei modelli Word", command=self.open_templates_folder)
         m.add_separator()
@@ -7468,6 +8485,63 @@ class App(tk.Tk):
         self.var_f_stato.set(FILTRO_STATO[1])
         self.nb.select(self.tab_reg)
 
+    # --- visite 3D (passeggiata nel piano, edificio intero)
+    def _walk_host(self):
+        if C3D is None:
+            messagebox.showinfo(
+                APP_NAME, "Le visite 3D non sono disponibili: nel programma manca il file "
+                          "corridoio3d.py. Caricalo su GitHub insieme a helpdesk.py e aspetta che "
+                          "il programma si ricrei.")
+            return None
+        if self.__dict__.get("_w3d") is None:
+            self._w3d = Walk3DHost(self)
+        return self._w3d
+
+    def _open_3d_window(self, attr, factory):
+        old = self.__dict__.get(attr)
+        if old is not None:
+            try:
+                if old.winfo_exists():
+                    old.close()
+            except Exception:
+                pass
+        win = factory()
+        setattr(self, attr, win)
+        return win
+
+    def open_walk_3d(self, eid=None, piano=None, mode=None):
+        """Passeggiata nel piano (di default il piano scelto in «Piani e stanze»)."""
+        host = self._walk_host()
+        if host is None:
+            return None
+        b = self.current_building()
+        if eid is None:
+            if not b:
+                messagebox.showinfo(APP_NAME, "Crea prima un edificio (scheda Edificio).")
+                return None
+            eid = b["id"]
+        if piano is None:
+            piano = self.rooms_floor()
+            if piano is None:
+                piano = 0
+        if not self.db.stanze_of(eid, piano):
+            messagebox.showinfo(
+                APP_NAME, "Su questo piano non ci sono ancora stanze: creale in «Piani e stanze» "
+                          "(o importa l'elenco con File > Importa elenco stanze e persone).")
+            return None
+        return self._open_3d_window("_walk_win", lambda: C3D.WalkWindow(host, eid, piano, mode))
+
+    def open_tower_3d(self):
+        """L'edificio scelto, intero, con i suoi piani impilati."""
+        host = self._walk_host()
+        if host is None:
+            return None
+        b = self.current_building()
+        if not b:
+            messagebox.showinfo(APP_NAME, "Crea prima un edificio (scheda Edificio).")
+            return None
+        return self._open_3d_window("_tower_win", lambda: C3D.TowerWindow(host, b["id"]))
+
     def open_map(self):
         MapDialog(self)
 
@@ -7974,16 +9048,19 @@ class App(tk.Tk):
         self.nb_print.grid(row=0, column=0, sticky="nsew")
         self.tab_building = ttk.Frame(self.nb_print, padding=12)
         self.tab_toner = ttk.Frame(self.nb_print, padding=12)
+        self.tab_bolle = ttk.Frame(self.nb_print, padding=12)
         self.tab_manut = ttk.Frame(self.nb_print, padding=12)
         self.tab_scorta = ttk.Frame(self.nb_print, padding=12)
         self.tab_rooms = ttk.Frame(self.nb_print, padding=12)
         self.nb_print.add(self.tab_building, text="Edificio e stampanti")
         self.nb_print.add(self.tab_toner, text="Cambi toner")
+        self.nb_print.add(self.tab_bolle, text="Bolle toner")
         self.nb_print.add(self.tab_manut, text="Interventi tecnico")
         self.nb_print.add(self.tab_scorta, text="Scorta toner")
         self.nb_print.add(self.tab_rooms, text="Piani e stanze")
         self._build_building_view()
         self._build_toner_log()
+        self._build_bolle()
         self._build_manut_log()
         self._build_scorta()
         self._build_rooms_view()
@@ -8022,6 +9099,10 @@ class App(tk.Tk):
             side="left", padx=(8, 0))
         ttk.Button(bar, text="Elimina edificio", style="Danger.TButton",
                    command=self.delete_building).pack(side="left", padx=(8, 0))
+        ttk.Button(bar, text="Unisci doppioni stampanti…", command=self.merge_printers_dialog).pack(
+            side="left", padx=(8, 0))
+        ttk.Button(bar, text="Edificio in 3D", command=self.open_tower_3d).pack(
+            side="left", padx=(8, 0))
 
         cf = ttk.Frame(t)
         cf.grid(row=1, column=0, sticky="nsew")
@@ -8051,6 +9132,12 @@ class App(tk.Tk):
         ttk.Label(leg, text="Sotto ogni stampante: da quanti giorni è stato cambiato ogni colore "
                             "(gg = giorni, mai = nessun cambio registrato).",
                   style="Hint.TLabel").pack(side="left")
+        ttk.Label(t, text="Barretta sotto ogni colore: STIMA di quanto toner resta (dai giorni "
+                          "dall'ultimo cambio e da quanto sono durati i cambi precedenti), non il "
+                          "livello vero letto dalla stampante. Tratteggiata = servono più cambi per "
+                          "stimare; contorno rosso = quasi finito.",
+                  style="Hint.TLabel", wraplength=900, justify="left").grid(
+            row=4, column=0, sticky="w", pady=(2, 0))
 
     def current_building(self):
         return self.building_by_label.get(self.var_building.get())
@@ -8155,6 +9242,22 @@ class App(tk.Tk):
         c.create_rectangle(x0 - 34, y, x1 + 34, y + 12, fill=GREEN, outline=GREEN)
         c.configure(scrollregion=(0, 0, width, y + 30))
 
+    @staticmethod
+    def _draw_toner_bar(c, cx, y, pct, hexcol, tag, w=64, h=5):
+        """Barretta della STIMA del toner: piena = tanto, contorno rosso = quasi finito,
+        tratteggiata = non ci sono abbastanza cambi per stimare. Restituisce la y del fondo."""
+        x0 = cx - w / 2
+        basso = pct is not None and pct <= TONER_BASSO
+        c.create_rectangle(x0, y, x0 + w, y + h, fill="#e1e6ec", outline=RED if basso else "#e1e6ec",
+                           tags=(tag,))
+        if pct is None:
+            c.create_line(x0 + 2, y + h / 2, x0 + w - 2, y + h / 2, fill="#9aa5b1", dash=(3, 3),
+                          tags=(tag,))
+        elif pct > 0:
+            c.create_rectangle(x0, y, x0 + w * pct / 100.0, y + h, fill=hexcol, outline="",
+                               tags=(tag,))
+        return y + h
+
     def _draw_printer(self, c, p, px, py):
         """Disegna una stampante con bollini e scritte sotto; restituisce (larghezza occupata, y del fondo)."""
         tag = "pr%d" % p["id"]
@@ -8196,6 +9299,8 @@ class App(tk.Tk):
         lines = [(p["nome"] or p["modello"] or "Stampante", ("Segoe UI", 9, "bold"), NAVY)]
         if p["nome"] and p["modello"]:
             lines.append((p["modello"], ("Segoe UI", 8), GREY))
+        if (p.get("seriale") or "").strip():
+            lines.append(("S/N %s" % p["seriale"].strip(), ("Segoe UI", 8), GREY))
         if fuori:
             lines.append(("FUORI SERVIZIO", ("Segoe UI", 9, "bold"), RED))
         if red:
@@ -8203,17 +9308,21 @@ class App(tk.Tk):
         if low:
             lines.append(("scorta bassa: %s" % ", ".join("%s (%d)" % (col, q) for col, q in low),
                           ("Segoe UI", 8, "bold"), BADGE_GIALLO_TESTO))
-        lines.append(("Cambiato:", ("Segoe UI", 8, "bold"), GREY))
+        lines.append(("Cambiato:", ("Segoe UI", 8, "bold"), GREY, None))
         ultimi = p.get("ultimi") or {}
-        for colore in TONER_NOMI:
+        stima = p.get("stima") or {}
+        for colore, hexcol, _t in COLORI_TONER:
             lines.append(("%s: %s" % (colore, ago_short(days_ago(ultimi.get(colore)))),
-                          ("Segoe UI", 8), TONER_TESTO.get(colore, TEXT)))
+                          ("Segoe UI", 8), TONER_TESTO.get(colore, TEXT),
+                          (stima.get(colore, {}).get("pct"), hexcol)))
         y = py + ih + 4
-        for text, font, color in lines:
+        for text, font, color, *extra in [l if len(l) == 4 else (*l, None) for l in lines]:
             item = c.create_text(cx, y, text=text, anchor="n", width=slot, font=font, fill=color,
                                  justify="center", tags=(tag,))
             box = c.bbox(item)
             y = box[3] + 2 if isinstance(box, tuple) and len(box) == 4 else y + 16
+            if extra and extra[0] is not None:
+                y = self._draw_toner_bar(c, cx, y, extra[0][0], extra[0][1], tag) + 2
         c.tag_bind(tag, "<Button-1>", lambda e, pid=p["id"]: self.open_printer(pid))
         c.tag_bind(tag, "<Enter>", lambda e: c.configure(cursor="hand2"))
         c.tag_bind(tag, "<Leave>", lambda e: c.configure(cursor=""))
@@ -8245,6 +9354,10 @@ class App(tk.Tk):
         ttk.Button(bar, text="+ Nuova stanza…", style="Save.TButton",
                    command=self.new_room).pack(side="left")
         ttk.Button(bar, text="Incolla più stanze…", command=self.bulk_rooms).pack(
+            side="left", padx=(8, 0))
+        ttk.Button(bar, text="Passeggiata nel piano 3D", command=self.open_walk_3d).pack(
+            side="left", padx=(8, 0))
+        ttk.Button(bar, text="Edificio in 3D", command=self.open_tower_3d).pack(
             side="left", padx=(8, 0))
         self.lbl_rfloor = ttk.Label(bar, style="Hint.TLabel")
         self.lbl_rfloor.pack(side="left", padx=(16, 0))
@@ -9330,6 +10443,111 @@ class App(tk.Tk):
         ttk.Button(bf, text="Non contare più questo toner", command=self.scorta_untrack).pack(
             side="left", padx=(8, 0))
 
+    # ---------------- scheda: bolle dei toner ----------------
+    BOLLE_FILTRI = (("Da montare", "da_montare"), ("Montati", "montato"), ("Tutte", None))
+
+    def _build_bolle(self):
+        t = self.tab_bolle
+        t.columnconfigure(0, weight=1)
+        t.rowconfigure(4, weight=1)
+        self.lbl_bolle = ttk.Label(t, text="", font=("Segoe UI", 12, "bold"), foreground=GREEN,
+                                   wraplength=1050, justify="left")
+        self.lbl_bolle.grid(row=0, column=0, sticky="w")
+        ttk.Label(t, style="Hint.TLabel", wraplength=1050, justify="left",
+                  text="Le bolle dei toner le registri con il telefono: quando il toner arriva (entra "
+                       "nell'inventario del piano e nella scorta) e quando lo monti (inquadrando il seriale "
+                       "della stampante). Qui le vedi dopo File › Importa dati dal telefono, con la foto della "
+                       "bolla.").grid(row=1, column=0, sticky="w", pady=(2, 8))
+        ff = ttk.LabelFrame(t, text="Toner nei piani (arrivati, ancora da montare)", padding=8)
+        ff.grid(row=2, column=0, sticky="ew")
+        ff.columnconfigure(0, weight=1)
+        cols = ("edificio", "piano") + tuple(TONER_NOMI) + ("totale",)
+        self.bolle_floor_tree = ttk.Treeview(ff, columns=cols, show="headings", height=5,
+                                             selectmode="browse")
+        for c in cols:
+            self.bolle_floor_tree.heading(c, text=("Edificio" if c == "edificio" else "Piano" if c == "piano"
+                                                   else "Totale" if c == "totale" else c))
+            self.bolle_floor_tree.column(c, width=200 if c == "edificio" else 120 if c == "piano" else 90,
+                                         anchor="w" if c in ("edificio", "piano") else "center",
+                                         stretch=c == "edificio")
+        self.bolle_floor_tree.grid(row=0, column=0, sticky="ew")
+        bar = ttk.Frame(t)
+        bar.grid(row=3, column=0, sticky="ew", pady=(10, 4))
+        ttk.Label(bar, text="Mostra:").pack(side="left")
+        self.var_bolle_stato = tk.StringVar(value="Da montare")
+        cb = ttk.Combobox(bar, textvariable=self.var_bolle_stato, state="readonly", width=14,
+                          values=[n for n, _ in self.BOLLE_FILTRI])
+        cb.pack(side="left", padx=(6, 0))
+        cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_bolle())
+        ttk.Button(bar, text="Vedi la foto della bolla", command=self.bolla_photo).pack(
+            side="left", padx=(16, 0))
+        tf = ttk.Frame(t)
+        tf.grid(row=4, column=0, sticky="nsew")
+        tf.columnconfigure(0, weight=1)
+        tf.rowconfigure(0, weight=1)
+        cols = ("stato", "colore", "edificio", "piano", "bolla", "arrivo", "montaggio", "stampante")
+        self.bolle_tree = ttk.Treeview(tf, columns=cols, show="headings", selectmode="browse")
+        for c, title, width, stretch in (
+                ("stato", "Stato", 100, False), ("colore", "Toner", 100, False),
+                ("edificio", "Edificio", 170, True), ("piano", "Piano", 100, False),
+                ("bolla", "Bolla", 190, True), ("arrivo", "Arrivato il", 130, False),
+                ("montaggio", "Montato il", 130, False), ("stampante", "Montato su", 200, True)):
+            self.bolle_tree.heading(c, text=title)
+            self.bolle_tree.column(c, width=width, anchor="w", stretch=stretch)
+        self.bolle_tree.tag_configure("da_montare", foreground="#b36b00")
+        self.bolle_tree.tag_configure("montato", foreground=GREEN_DARK)
+        sb = ttk.Scrollbar(tf, orient="vertical", command=self.bolle_tree.yview)
+        self.bolle_tree.configure(yscrollcommand=sb.set)
+        self.bolle_tree.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+        self.bolle_tree.bind("<Double-1>", lambda e: self.bolla_photo())
+        self.bolle_by_iid = {}
+
+    def refresh_bolle(self):
+        inv = self.db.bolle_inventario()
+        self.bolle_floor_tree.delete(*self.bolle_floor_tree.get_children())
+        for n, r in enumerate(inv):
+            self.bolle_floor_tree.insert("", "end", iid="f%d" % n, values=(
+                r["edificio"], floor_label(r["piano"])) + tuple(r["colori"][c] or "" for c in TONER_NOMI)
+                + (r["totale"],))
+        tot = sum(r["totale"] for r in inv)
+        self.lbl_bolle.configure(
+            foreground="#b36b00" if tot else GREEN,
+            text=("Toner da montare nei piani: %d" % tot) if tot else "Nessun toner da montare nei piani.")
+        self.nb_print.tab(self.tab_bolle, text="Bolle toner" + (" (%d)" % tot if tot else ""))
+        stato = dict(self.BOLLE_FILTRI).get(self.var_bolle_stato.get())
+        keep = self.bolle_tree.selection()
+        keep_id = self.bolle_by_iid.get(keep[0]) if keep else None
+        self.bolle_tree.delete(*self.bolle_tree.get_children())
+        self.bolle_by_iid = {}
+        for n, b in enumerate(self.db.bolle_all(stato)):
+            iid = "b%d" % n
+            self.bolle_by_iid[iid] = b["id"]
+            bolla = b["numero"] or b["codice"] or "(senza numero)"
+            if b["numero"] and b["codice"]:
+                bolla += " · " + b["codice"]
+            self.bolle_tree.insert("", "end", iid=iid, tags=(b["stato"],), values=(
+                "Montato" if b["stato"] == "montato" else "Da montare", b["colore"], b["edificio"],
+                floor_label(b["piano"]), bolla, fmt_dt(b["data_arrivo"]),
+                fmt_dt(b["data_montaggio"]) if b["data_montaggio"] else "",
+                b["montata_nome"] or ("" if b["stato"] != "montato" else "(stampante non più presente)")))
+            if keep_id == b["id"]:
+                self.bolle_tree.selection_set(iid)
+
+    def bolla_photo(self):
+        sel = self.bolle_tree.selection()
+        if not sel:
+            messagebox.showinfo(APP_NAME, "Seleziona prima una bolla dall'elenco.")
+            return
+        row = self.db.conn.execute("SELECT foto FROM bolle WHERE id = ?",
+                                   (self.bolle_by_iid.get(sel[0]),)).fetchone()
+        path = os.path.join(bolle_foto_root(), row["foto"]) if row and row["foto"] else ""
+        if not path or not os.path.isfile(path):
+            messagebox.showinfo(APP_NAME, "Per questa bolla non c'è la foto: la scatti sul telefono "
+                                          "quando registri l'arrivo.")
+            return
+        self.open_file(path)
+
     def scorta_models(self):
         models = list(self.models_list())
         for r in self.db.scorta_all():
@@ -9372,6 +10590,8 @@ class App(tk.Tk):
                 else "Scorta toner: non hai ancora impostato nulla.")
         self.nb_print.tab(self.tab_scorta, text="Scorta toner" + (" ⚠" if low else ""))
         self.nb.tab(self.tab_print, text="Stampanti" + (" ⚠" if low else ""))
+        if hasattr(self, "bolle_tree"):
+            self.refresh_bolle()
 
     def _scorta_selected(self):
         sel = self.scorta_tree.selection()
@@ -9969,6 +11189,14 @@ class App(tk.Tk):
                          % (res["toner_nuovi"], res["toner_gia_presenti"]))
         if res["toner_saltati"]:
             lines.append("Cambi toner ignorati (stampante non trovata): %d" % res["toner_saltati"])
+        if res["bolle_nuove"] or res["bolle_aggiornate"] or res["bolle_gia_presenti"] \
+                or res["bolle_saltate"]:
+            lines.append("Bolle dei toner: nuove %d, aggiornate %d, già presenti %d (foto: %d)"
+                         % (res["bolle_nuove"], res["bolle_aggiornate"], res["bolle_gia_presenti"],
+                            res["bolle_foto"]))
+        if res["bolle_saltate"]:
+            lines.append("Bolle ignorate (edificio non trovato o dati non validi): %d"
+                         % res["bolle_saltate"])
         if res["manut_nuove"] or res["manut_aggiornate"] or res["manut_gia_presenti"] \
                 or res["manut_saltate"]:
             lines.append("Interventi del tecnico: nuovi %d, aggiornati %d, già presenti %d"
@@ -10005,7 +11233,32 @@ class App(tk.Tk):
             self.after_manut_change()
         if res["toner_nuovi"]:
             self.after_toner_change()
+        if res["bolle_nuove"] or res["bolle_aggiornate"]:
+            self.refresh_scorta()
         messagebox.showinfo(APP_NAME, "Importazione completata.\n\n" + "\n".join(lines))
+
+    def merge_printers_dialog(self):
+        b = self.current_building()
+        if not b:
+            messagebox.showinfo(APP_NAME, "Crea prima un edificio (scheda Stampanti).")
+            return
+        props = self.db.printer_merge_proposals(b["id"])
+        if not props:
+            messagebox.showinfo(APP_NAME, "Non ci sono stampanti doppie da unire in «%s».\n\n"
+                                          "Cerco le stampanti senza numero di serie che hanno, allo stesso "
+                                          "piano e con lo stesso modello, una stampante col numero di serie."
+                                % b["nome"])
+            return
+        MergePrintersDialog(self, b, props, self.do_merge_printers)
+
+    def do_merge_printers(self, pairs):
+        n_t = n_m = 0
+        for old_id, keep_id in pairs:
+            r = self.db.merge_printers(old_id, keep_id)
+            n_t += r["toner"]
+            n_m += r["manutenzioni"]
+        self.after_printers_change()
+        return n_t, n_m
 
     def import_rooms_file(self):
         b = self.current_building()
@@ -10045,9 +11298,18 @@ class App(tk.Tk):
                  % (res["persone_nuove"], res["persone_esistenti"], res["persone_assegnate"],
                     res["persone_gia_in_stanza"]),
                  "Uffici scritti: %d" % res["uffici_scritti"],
-                 "Stampanti: nuove %d, aggiornate %d, già presenti %d"
+                 "Matricole scritte: %d; dotazioni (per esempio il monitor) scritte: %d"
+                 % (res["matricole_scritte"], res["dotazioni_scritte"]),
+                 "Persone senza stanza aggiunte: %d" % res["persone_senza_stanza"],
+                 "Stampanti: nuove %d, aggiornate %d, già presenti %d, vecchie senza seriale "
+                 "completate (non duplicate) %d"
                  % (res["stampanti_nuove"], res["stampanti_aggiornate"],
-                    res["stampanti_gia_presenti"])]
+                    res["stampanti_gia_presenti"], res["stampanti_adottate"])]
+        if res["stampanti_da_unire"]:
+            lines.append("\nATTENZIONE: %d stampanti nuove hanno una vecchia simile (stesso piano e "
+                         "modello) e non ho indovinato quale sia. Usa File › «Unisci doppioni "
+                         "stampanti…»: sposta lo storico sulla nuova e toglie la vecchia."
+                         % res["stampanti_da_unire"])
         if res["persone_altrove"]:
             lines.append("\nPersone lasciate dove sono (siedono già in un'altra stanza):")
             lines += ["   " + t for t in res["persone_altrove"][:12]]

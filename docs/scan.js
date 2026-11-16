@@ -1,11 +1,11 @@
-/* scan.js - lettura di codici a barre e seriali con la fotocamera del telefono.
-   Usa il lettore del browser (BarcodeDetector) quando c'e', altrimenti il lettore dentro l'app (barcode.js):
-   su iPhone il lettore del browser e' spento, quindi li' lavora sempre barcode.js.
+/* scan.js - lettura di codici a barre, QR e seriali con la fotocamera del telefono.
+   Usa il lettore del browser (BarcodeDetector) quando c'e', altrimenti il lettore dentro l'app (barcode.js per i
+   codici a barre, qr.js per i QR): su iPhone il lettore del browser e' spento, quindi li' lavorano sempre loro.
    Funziona con i campi che hanno l'attributo data-scan ("serial", "imei" o "any"): accanto compare il pulsante 📷.
    Se la fotocamera non parte (permesso negato, niente rete https...) restano "Scatta una foto" e "Scrivi a mano". */
 (function () {
   "use strict";
-  const BC = window.BARCODE;
+  const BC = window.BARCODE, QRD = window.QR;
   const $ = id => document.getElementById(id);
 
   /* ---- controllo dei codici ---- */
@@ -19,9 +19,32 @@
     return sum % 10 === 0;
   }
   const imeiOk = s => /^\d{15}$/.test(s) && luhn(s);
+  /* dal testo di un QR d'etichetta ricava il seriale: indirizzo web (parametro o ultimo pezzo), «S/N: ...» o il testo stesso */
+  const SERIAL_KEYS = ["servicetag", "service_tag", "service-tag", "st", "sn", "serial", "serialnumber", "serial_number", "serialno", "s/n", "seriale", "snr", "sno", "productserial"];
+  function serialFromQr(text) {
+    const t = String(text == null ? "" : text).trim();
+    if (!t) return "";
+    if (/^https?:\/\//i.test(t)) {
+      try {
+        const u = new URL(t), q = {};
+        u.searchParams.forEach((v, k) => { q[k.toLowerCase()] = v; });
+        for (const k of SERIAL_KEYS) if (q[k] && q[k].trim()) return q[k].trim();
+        const seg = decodeURIComponent(u.pathname.replace(/\/+$/, "").split("/").pop() || "");
+        if (/^[A-Za-z0-9\-]{6,24}$/.test(seg) && /\d/.test(seg) && /[A-Za-z]/.test(seg)) return seg;
+      } catch (e) { /* indirizzo strano: niente */ }
+      return "";
+    }
+    const m = /(?:s\/?n|serial(?:\s*number)?|seriale|service\s*tag)\s*[:=#]?\s*([A-Za-z0-9\-]{4,})/i.exec(t);
+    if (m) return m[1];
+    return t.length <= 80 && !/\n/.test(t) ? t : "";
+  }
   /* cosa vale come risposta per quel campo; "" = da scartare */
-  function norm(text, kind) {
+  function norm(text, kind, fmt) {
     let t = String(text == null ? "" : text).replace(/[\x00-\x1f\x7f]/g, "").trim();
+    if (fmt === "qr" && (kind === "serial" || kind === "imei")) {
+      const q = serialFromQr(t);
+      t = q || (kind === "imei" ? t : "");
+    }
     if (!t) return "";
     if (kind === "imei") { t = t.replace(/^imei[\s:\-]*/i, "").replace(/\s+/g, ""); return imeiOk(t) ? t : ""; }
     if (kind === "serial") { t = t.replace(/\s+/g, ""); return t.length >= 4 && t.length <= 40 ? t : ""; }
@@ -31,9 +54,9 @@
   function pick(list, kind, single) {
     const ok = [];
     for (const r of list) {
-      const t = norm(r.text, kind);
+      const t = norm(r.text, kind, r.format);
       if (!t) continue;
-      const strong = r.votes >= 2 || (r.format === "code128" && r.n >= 4);
+      const strong = r.votes >= 2 || r.format === "qr" || (r.format === "code128" && r.n >= 4);
       if (strong || (single && r.n >= 4)) ok.push({ text: t, format: r.format, votes: r.votes });
     }
     return ok.length ? ok[0] : null;
@@ -59,9 +82,15 @@
       const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
       const cx = cv.getContext("2d", { willReadFrequently: true });
       cx.drawImage(src, 0, 0, w, h);
-      const list = BC.decodeGray(BC.toGray(cx.getImageData(0, 0, w, h).data, w, h), w, h, { lines: 22 });
+      const gray = BC.toGray(cx.getImageData(0, 0, w, h).data, w, h);
+      const list = BC.decodeGray(gray, w, h, { lines: 22 });
       const got = pick(list, kind, true);
       if (got) return got;
+      if (QRD) {
+        await pause();
+        const q = pick(QRD.decodeGray(gray, w, h), kind, true);
+        if (q) return q;
+      }
       await pause();
     }
     return null;
@@ -97,6 +126,8 @@ input[type=search]~.scbtn{right:30px}
 #scanOv video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 #scanOv .sframe{position:absolute;left:7%;right:7%;top:50%;height:30%;transform:translateY(-50%);border:3px solid rgba(255,255,255,.9);border-radius:14px;box-shadow:0 0 0 100vmax rgba(0,0,0,.45);pointer-events:none}
 #scanOv .sframe i{position:absolute;left:4%;right:4%;top:50%;height:2px;background:#d12233;opacity:.9}
+#scanOv .sframe.hit{border-color:#2c954b;box-shadow:0 0 0 100vmax rgba(44,149,75,.6);transition:none}
+#scanOv .sbar b{flex:1}#scanOv .sbar button#scanSound{padding:9px 11px;font-size:17px;line-height:1}
 #scanOv .smsg{padding:10px 14px;font-size:14px;line-height:1.35;background:#001f40;min-height:42px}
 #scanOv .smsg.err{background:#d12233}#scanOv .smsg.ok{background:#2c954b}
 #scanOv .slist{padding:0 14px 6px;background:#001f40;font-size:13px;max-height:84px;overflow:auto}
@@ -110,7 +141,7 @@ input[type=search]~.scbtn{right:30px}
     css();
     const d = document.createElement("div");
     d.id = "scanOv"; d.className = "hidden"; d.setAttribute("role", "dialog"); d.setAttribute("aria-label", "Lettura codice con la fotocamera");
-    d.innerHTML = `<div class="sbar"><b id="scanTitle">Leggi il codice</b><button type="button" id="scanClose">Chiudi</button></div>
+    d.innerHTML = `<div class="sbar"><b id="scanTitle">Leggi il codice</b><button type="button" id="scanSound" aria-label="Suono di lettura"></button><button type="button" id="scanClose">Chiudi</button></div>
       <div class="sview"><video id="scanVid" playsinline muted autoplay></video><div class="sframe"><i></i></div></div>
       <div class="smsg" id="scanMsg"></div><div class="slist hidden" id="scanList"></div>
       <div class="sbtns"><button type="button" id="scanPhoto">📷 Scatta una foto</button><button type="button" id="scanTorch" class="hidden">🔦 Torcia</button><button type="button" id="scanManual">⌨ Scrivi a mano</button></div>
@@ -118,6 +149,8 @@ input[type=search]~.scbtn{right:30px}
     document.body.appendChild(d);
     dom = { root: d, vid: $("scanVid"), msg: $("scanMsg"), title: $("scanTitle"), list: $("scanList"), file: $("scanFile"), torch: $("scanTorch"), close: $("scanClose") };
     $("scanClose").onclick = () => close();
+    $("scanSound").onclick = () => { setSound(!soundOn()); if (soundOn()) beep(); };
+    paintSound();
     $("scanManual").onclick = () => { const f = S.opts && S.opts.onManual; close(); if (f) f(); };
     $("scanPhoto").onclick = () => { dom.file.value = ""; dom.file.click(); };
     dom.torch.onclick = async () => {
@@ -149,6 +182,19 @@ input[type=search]~.scbtn{right:30px}
     if (dom) dom.root.classList.add("hidden");
     document.documentElement.style.overflow = "";
   }
+  /* il suono di lettura si puo' spegnere (uffici silenziosi): la scelta resta in questo telefono */
+  function soundOn() { try { return localStorage.getItem("scanSound") !== "0"; } catch (e) { return true; } }
+  function setSound(on) { try { localStorage.setItem("scanSound", on ? "1" : "0"); } catch (e) { /* niente */ } paintSound(); }
+  function paintSound() {
+    const b = $("scanSound"); if (!b) return;
+    b.textContent = soundOn() ? "🔊" : "🔇"; b.setAttribute("aria-pressed", soundOn() ? "false" : "true");
+    b.title = soundOn() ? "Suono acceso: tocca per spegnerlo" : "Suono spento: tocca per accenderlo";
+  }
+  /* lampo verde sul riquadro quando il codice e' letto */
+  function flashHit() {
+    const fr = dom && dom.root.querySelector(".sframe"); if (!fr) return;
+    fr.classList.add("hit"); setTimeout(() => fr.classList.remove("hit"), 320);
+  }
   function unlockAudio() {
     try {
       const AC = window.AudioContext || window.webkitAudioContext;
@@ -159,6 +205,7 @@ input[type=search]~.scbtn{right:30px}
   }
   function beep() {
     try {
+      if (!soundOn()) throw new Error("suono spento");
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return;
       const ac = beep.ac || (beep.ac = new AC()), o = ac.createOscillator(), g = ac.createGain();
@@ -171,6 +218,7 @@ input[type=search]~.scbtn{right:30px}
     if (!o) return;
     beep();
     if (o.multi && !fromPhoto) {
+      flashHit();
       S.last = text; S.lastSeen = Date.now(); S.count++; S.list.unshift(text);
       dom.list.classList.remove("hidden");
       dom.list.textContent = `Letti: ${S.count} · ultimo ${S.list[0]}${S.list.length > 1 ? " · prima " + S.list.slice(1, 4).join(", ") : ""}`;
@@ -179,8 +227,10 @@ input[type=search]~.scbtn{right:30px}
       try { o.onCode(text); } catch (e) { /* il campo non c'e' piu' */ }
       return;
     }
-    const f = o.onCode; close();
-    try { f(text); } catch (e) { /* il campo non c'e' piu' */ }
+    /* un solo codice: lampo verde per un attimo, poi si chiude e il codice va nel campo */
+    const f = o.onCode;
+    S.opts = null; clearTimeout(S.timer); S.timer = 0; flashHit();
+    setTimeout(() => { close(); try { f(text); } catch (e) { /* il campo non c'e' piu' */ } }, 300);
   }
 
   /* un fotogramma della fotocamera */
@@ -196,12 +246,13 @@ input[type=search]~.scbtn{right:30px}
         ctx.drawImage(v, 0, 0, w, h);
         let list = [];
         if (S.det) {
-          try { list = (await S.det.detect(cv)).map(x => ({ text: x.rawValue, format: x.format === "code_128" ? "code128" : x.format, n: 9, votes: 2 })); } catch (e) { S.det = null; }
+          try { list = (await S.det.detect(cv)).map(x => ({ text: x.rawValue, format: x.format === "code_128" ? "code128" : x.format === "qr_code" ? "qr" : x.format, n: 9, votes: 2 })); } catch (e) { S.det = null; }
         }
         if (!list.length && BC) {
           const ex = EXTRA[S.tickN++ % EXTRA.length];
           grayBuf = BC.toGray(ctx.getImageData(0, 0, w, h).data, w, h, grayBuf);
           list = BC.decodeGray(grayBuf, w, h, { angles: [0, 90, ...ex], lines: 18 });
+          if (!list.length && QRD && S.tickN % 2 === 0) list = QRD.decodeGray(grayBuf, w, h);
         }
         consider(list);
       } catch (e) { /* fotogramma saltato */ }
@@ -212,7 +263,7 @@ input[type=search]~.scbtn{right:30px}
     const now = Date.now();
     for (const [k, v] of S.seen) if (now - v.t > 2000) S.seen.delete(k);
     for (const r of list) {
-      const t = norm(r.text, S.kind);
+      const t = norm(r.text, S.kind, r.format);
       if (!t) { if (r.n >= 5 && r.votes >= 2) S.rej = String(r.text).slice(0, 30); continue; }
       const p = S.seen.get(t) || { n: 0, t: 0 };
       p.n++; p.t = now; S.seen.set(t, p);
@@ -248,14 +299,14 @@ input[type=search]~.scbtn{right:30px}
     S.det = null;
     if ("BarcodeDetector" in window) {
       try {
-        const want = S.kind === "any" ? ["code_128", "code_39", "qr_code", "ean_13", "ean_8", "itf", "codabar", "upc_a"] : ["code_128", "code_39"];
+        const want = S.kind === "any" ? ["code_128", "code_39", "qr_code", "ean_13", "ean_8", "itf", "codabar", "upc_a"] : ["code_128", "code_39", "qr_code"];
         const have = BarcodeDetector.getSupportedFormats ? await BarcodeDetector.getSupportedFormats() : want;
         const use = want.filter(f => have.includes(f));
         if (use.length) S.det = new BarcodeDetector({ formats: use });
       } catch (e) { S.det = null; }
     }
     S.t0 = Date.now();
-    say(S.kind === "imei" ? "Inquadra il codice a barre dell'IMEI (15 cifre)." : "Inquadra il codice a barre e tienilo fermo dentro il riquadro.");
+    say(S.kind === "imei" ? "Inquadra il codice a barre dell'IMEI (15 cifre)." : "Inquadra il codice a barre o il QR e tienilo fermo dentro il riquadro.");
     S.timer = setTimeout(tick, 150);
   }
 
@@ -328,5 +379,5 @@ input[type=search]~.scbtn{right:30px}
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init); else init();
 
-  window.SCAN = { open, close, attach, luhn, imeiOk, norm, pick, decodeFile, decodeSource, scanDom, _state: S };
+  window.SCAN = { open, close, attach, luhn, imeiOk, norm, serialFromQr, pick, decodeFile, decodeSource, scanDom, _state: S };
 })();
