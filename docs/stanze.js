@@ -304,6 +304,134 @@ window.ROOMS = (function () {
   const phoneBits = u => [u && u.ufficio ? esc(u.ufficio) : "", u && u.telefono ? "Tel " + esc(u.telefono) : "", u && u.seriale_pc ? "PC " + esc(u.seriale_pc) : "", u && u.imei ? "IMEI " + esc(u.imei) : "", dotBits(u)].filter(Boolean).join(" · ");
   const note = (t, err) => { flash = { t, err: !!err }; };
 
+  /* ---------- scrivanie disegnate: una per postazione, col PC e il suo S/N ---------- */
+  /* il telefono sulla scrivania viene dalla dotazione: «Cellulare»/«Smartphone» Samsung Galaxy S24, S24 Plus o S25,
+     e/o «Telefono Teams» (AudioCodes) da scrivania. Con un IMEI e nessun modello: il cellulare classico (S24). */
+  const LAPTOP_MODELLI = { "13": "Dell 13 pollici", "15": "Dell 15 pollici" };
+  const CELL_MODELLI = ["S24", "S24 Plus", "S25"], TEAMS_TIPO = "Telefono Teams", TEAMS_MODELLO = "AudioCodes C435HD";
+  /* nome normalizzato -> [disegno, nome mostrato]; S4, S4 Plus e S5 sono i nomi scritti per errore all'inizio */
+  const CELL_KEYS = { s24: ["s24", "S24"], s24plus: ["s24plus", "S24 Plus"], s25: ["s25", "S25"], s4: ["s24", "S24"], s4plus: ["s24plus", "S24 Plus"], s5: ["s25", "S25"] };
+  const normModel = t => String(t || "").toLowerCase().replace(/\+/g, " plus ").replace(/samsung|galaxy/g, " ").replace(/[^a-z0-9]/g, "");
+  const rowKind = r => {
+    const tipo = String((r && r.tipo) || "").toLowerCase(), both = tipo + " " + String((r && r.modello) || "").toLowerCase();
+    if (both.includes("teams") || both.includes("audiocodes")) return "teams";
+    if (tipo.includes("cellulare") || tipo.includes("smartphone")) return "mobile";
+    if (tipo.includes("notebook") || tipo.includes("portatile") || tipo.includes("laptop")) return "laptop";
+    return "";
+  };
+  const laptopSize = m => { const x = /(?<!\d)(13|15)(?!\d)/.exec(String(m || "")); return x ? x[1] : ""; };
+  function phoneInfo(dot, imei) {
+    let mobile = null, label = "", teams = false, laptop = null, llabel = "";
+    for (const r of dot) {
+      const k = rowKind(r);
+      if (k === "teams") teams = true;
+      else if (k === "laptop" && laptop === null && r.modello) { laptop = laptopSize(r.modello) || "altro"; llabel = r.modello; }
+      else if (k === "mobile" && mobile === null) {
+        const n = normModel(r.modello);
+        [mobile, label] = CELL_KEYS[n] || ["altro", r.modello || ""];
+      }
+    }
+    if (mobile === null && String(imei || "").trim()) mobile = "s24";
+    return { mobile, label, teams, laptop, laptop_label: llabel };
+  }
+  function withPhones(dot, mobile, teams, laptop) {   // mobile / laptop: "" = non indicato, null = lascia com'è
+    const oldM = dot.find(r => rowKind(r) === "mobile"), oldT = dot.find(r => rowKind(r) === "teams");
+    const laps = dot.filter(r => rowKind(r) === "laptop"), oldL = laps[0];
+    const out = dot.filter(r => !rowKind(r)).concat(laps.slice(1));
+    if (laptop === null || laptop === undefined) laps.slice(0, 1).forEach(r => out.push(r));
+    else if (LAPTOP_MODELLI[laptop]) out.push({ tipo: oldL ? oldL.tipo : "Notebook", modello: LAPTOP_MODELLI[laptop], seriale: oldL ? oldL.seriale : "" });
+    else if (oldL && oldL.seriale) out.push({ ...oldL, modello: "" });   // «non indicato»: il seriale scritto non si perde
+    if (mobile === null) dot.filter(r => rowKind(r) === "mobile").forEach(r => out.push(r));
+    else if (mobile) out.push({ tipo: oldM ? oldM.tipo : "Cellulare", modello: mobile, seriale: oldM ? oldM.seriale : "" });
+    if (teams) out.push(oldT || { tipo: TEAMS_TIPO, modello: TEAMS_MODELLO, seriale: "" });
+    return out;
+  }
+  /* misure (larghezza, altezza) delle foto nella scena 130 x 66: le stesse del programma sul PC */
+  const IMG_SIZE = { lap13: [26, 18], lap15: [32, 22], s24: [10, 20], s24plus: [10, 22], s25: [10, 20], teams: [32, 24] };
+  const imgUrl = k => "disp-" + k + ".png";
+  const photoKeys = ph => ({ laptop: { "13": "lap13", "15": "lap15" }[ph && ph.laptop] || null, mobile: ["s24", "s24plus", "s25"].includes(ph && ph.mobile) ? ph.mobile : null, teams: ph && ph.teams ? "teams" : null });
+  /* la scrivania vista da davanti, come nelle foto: pannello azzurro, monitor con webcam, tastiera, mouse e,
+     con le FOTO dei dispositivi scelti, il portatile Dell (13 o 15 pollici, visto dall'alto), il cellulare
+     Galaxy (S24, S24 Plus, S25) a destra e il telefono Teams AudioCodes a sinistra */
+  function deskSvg(w, ph, faded) {
+    ph = ph || {};
+    const R = (x, y, ww, hh, f) => `<rect x="${x}" y="${y}" width="${ww}" height="${hh}" fill="${f}"/>`, O = (x, y, ww, hh, f) => `<ellipse cx="${x + ww / 2}" cy="${y + hh / 2}" rx="${ww / 2}" ry="${hh / 2}" fill="${f}"/>`;
+    const I = (k, x, y) => `<image data-k="${k}" href="${imgUrl(k)}" x="${x}" y="${y}" width="${IMG_SIZE[k][0]}" height="${IMG_SIZE[k][1]}" preserveAspectRatio="none"/>`;
+    let g = R(0, 40, 130, 26, "#ecd3a8") + R(2, 28, 126, 14, "#9db8e6") + R(54, 41, 22, 3, "#15181d") + R(62, 35, 6, 6, "#15181d") + R(42, 6, 46, 30, "#15181d") + R(44.5, 8.5, 41, 22, "#2b313b") + R(60, 3, 10, 3.5, "#0b0d10") + R(44, 48, 40, 8, "#1d2026");
+    for (let k = 0; k < 3; k++) g += R(47, 50 + k * 2.2, 34, 0.9, "#3a3f49");
+    g += O(88.5, 47, 7, 9, "#1d2026");
+    const pk = photoKeys(ph);
+    if (pk.laptop) g += I(pk.laptop, 27 - IMG_SIZE[pk.laptop][0] / 2, 63 - IMG_SIZE[pk.laptop][1]);
+    else if (ph.laptop === "altro") g += R(13, 44, 28, 19, "#a9b2bd");
+    if (pk.teams) g += I("teams", 0, 66 - IMG_SIZE.teams[1]);
+    if (pk.mobile) g += I(pk.mobile, 113 - IMG_SIZE[pk.mobile][0] / 2, 62 - IMG_SIZE[pk.mobile][1]);
+    else if (ph.mobile === "altro") g += R(108.5, 45, 9, 17, "#14171c") + R(109.5, 46.5, 7, 14, "#2b313b");
+    return `<svg viewBox="0 0 130 66" width="${w}" height="${Math.round(w * 66 / 130)}" aria-hidden="true" focusable="false"${faded ? ' style="opacity:.38"' : ""}>${g}</svg>`;
+  }
+  /* le foto dei tre apparecchi scelti, con la didascalia: cambiano quando cambia la scelta */
+  const PIC_W = { lap13: 82, lap15: 100, s24: 40, s24plus: 43, s25: 40, teams: 100 };
+  function picsHtml(ph) {
+    const pk = photoKeys(ph), fig = (id, k, cap) => `<figure id="${id}">${k ? `<img src="${imgUrl(k)}" alt="" style="width:${PIC_W[k]}px">` : ""}<figcaption>${esc(cap)}</figcaption></figure>`;
+    return fig("dkPicL", pk.laptop, LAPTOP_MODELLI[ph.laptop] || ph.laptop_label || "Portatile non indicato")
+      + fig("dkPicM", pk.mobile, pk.mobile ? "Samsung Galaxy " + ph.label : (ph.label || "Cellulare non indicato"))
+      + fig("dkPicT", pk.teams, ph.teams ? TEAMS_MODELLO : "Telefono Teams: no");
+  }
+  const phoneTxt = ph => [ph.laptop_label || "", [ph.label ? "Cell. " + ph.label : "", ph.teams ? "Telefono Teams" : ""].filter(Boolean).join(" · ")].filter(Boolean).join(" · ");
+  const dotList = u => (typeof cleanDot === "function" ? cleanDot(u && u.dotazione) : []);
+  const snOf = u => String((u && u.seriale_pc) || "").trim();
+  function deskCards(r) {
+    const ppl = peopleIn(r.uid), tot = num(r.scrivanie), out = [];
+    for (const p of ppl) {
+      const u = userOf(p.k), sn = snOf(u), dl = dotList(u), ex = dl.filter(r => !rowKind(r)).length, ph = phoneInfo(dl, u && u.imei);
+      out.push(`<button type="button" class="dkc" data-r="${esc(r.uid)}" data-k="${esc(p.k)}" aria-label="Postazione ${p.numero}: ${esc(p.utente)}"><span class="dn">Postazione ${p.numero}</span>${deskSvg(94, ph)}<b>${esc(p.utente)}</b>${sn ? `<span class="sn">S/N ${esc(sn)}</span>` : `<span class="sn no">S/N non inserito</span>`}${phoneTxt(ph) ? `<span class="ex">${esc(phoneTxt(ph))}</span>` : ""}${ex ? `<span class="ex">+ ${ex} ${ex === 1 ? "apparecchio" : "apparecchi"}</span>` : ""}</button>`);
+    }
+    for (let i = ppl.length; i < tot; i++) out.push(`<button type="button" class="dkc free" data-r="${esc(r.uid)}" data-free="1" aria-label="Postazione ${i + 1} libera"><span class="dn">Postazione ${i + 1}</span>${deskSvg(94, {}, true)}<b>Libera</b></button>`);
+    return out;
+  }
+  /* il dettaglio di una scrivania: S/N del PC, IMEI, telefono, dotazione */
+  function openDesk(ruid, k, from) {
+    const r = room(ruid), p = peopleIn(ruid).find(x => x.k === k), u = userOf(k);
+    if (!r || !p) return;
+    const sn = snOf(u), dot = dotList(u), ph = phoneInfo(dot, u && u.imei), m = $("modal");
+    const line = (lab, v) => v ? `<div class="meta">${lab}: <b>${esc(v)}</b></div>` : "";
+    m.innerHTML = `<div class="card full"><h3>${esc(r.codice)} · Postazione ${p.numero}</h3>
+      <div class="meta">${esc(bName(r.edificio_uid))} · ${floorLabel(r.piano)}</div>
+      <div style="text-align:center;margin-top:8px" id="dkScene">${deskSvg(220, phoneInfo(dot, u && u.imei))}</div>
+      <h3 style="text-align:center;margin:4px 0 0">${esc(p.utente)}</h3>
+      <div class="meta" style="text-align:center">${u && u.ufficio ? esc(u.ufficio) : "Ufficio non indicato"}</div>
+      <label>Numero di serie del PC (S/N)</label>
+      ${sn ? `<div class="snBig" id="dkSn">${esc(sn)}</div><button class="btn" id="dkCopy" type="button">Copia il S/N</button><div id="dkMsg"></div>` : `<div class="hint" id="dkNoSn">Non ancora inserito: con «Modifica la scheda» lo scrivi o lo leggi con la fotocamera.</div>`}
+      ${u && u.imei ? `<label>IMEI cellulare</label><div class="snBig sm" id="dkImei">${esc(u.imei)}</div>` : ""}
+      ${line("Telefono", u && u.telefono)}${line("Matricola", u && u.matricola)}${line("Sede", u && u.sede)}
+      <div class="dkPics" id="dkPics">${picsHtml(ph)}</div>
+      <label for="dkMob">Cellulare sulla scrivania</label>
+      <select id="dkMob">${[["", "Non indicato"]].concat(CELL_MODELLI.map(x => [x, x])).concat(ph.mobile === "altro" ? [["__alt", "Altro: " + ph.label]] : []).map(([v, t]) => `<option value="${esc(v)}"${(ph.mobile === "altro" ? v === "__alt" : v === (CELL_MODELLI.includes(ph.label) ? ph.label : "")) ? " selected" : ""}>${esc(t)}</option>`).join("")}</select>
+      <label for="dkLap">Portatile sulla scrivania</label>
+      <select id="dkLap">${[["", "Non indicato"], ["13", LAPTOP_MODELLI["13"]], ["15", LAPTOP_MODELLI["15"]]].concat(ph.laptop === "altro" ? [["__alt", "Altro: " + ph.laptop_label]] : []).map(([v, t]) => `<option value="${esc(v)}"${(ph.laptop === "altro" ? v === "__alt" : v === (ph.laptop || "")) ? " selected" : ""}>${esc(t)}</option>`).join("")}</select>
+      <label class="chk" style="display:flex;gap:8px;align-items:center;margin:8px 0"><input type="checkbox" id="dkTeams"${ph.teams ? " checked" : ""} style="width:auto"> Telefono Teams (AudioCodes) sulla scrivania</label>
+      <label>Dotazione</label>
+      <div id="dkDot">${dot.length ? dot.map(d => `<div class="card"><b>${esc(d.tipo || "Apparecchio")}</b>${d.modello ? " · " + esc(d.modello) : ""}${d.seriale ? `<div class="meta">S/N o IMEI: <b>${esc(d.seriale)}</b></div>` : ""}</div>`).join("") : `<div class="hint">Nessun apparecchio in dotazione.</div>`}</div>
+      <button class="btn navy" id="dkEdit" type="button">Modifica la scheda</button>
+      <button class="btn" id="dkRoom" type="button">${from === "room" ? "Torna alla stanza" : "Apri la stanza"}</button>
+      <button class="btn" id="dkClose" type="button">Chiudi</button></div>`;
+    m.classList.remove("hidden");
+    if ($("dkCopy")) $("dkCopy").onclick = async () => { const ok = await copyText(sn); $("dkMsg").innerHTML = ok ? `<div class="msg">Copiato: ${esc(sn)}</div>` : `<div class="msg err">Non riesco a copiare: tieni premuto sul numero e scegli Copia.</div>`; };
+    const applyPhones = async () => {
+      const v = $("dkMob").value, cur = (await getKey("utenti", k)) || u;
+      const lv = $("dkLap").value, nd = withPhones(dotList(cur), v === "__alt" ? null : v, $("dkTeams").checked, lv === "__alt" ? null : lv);
+      await put("utenti", { ...cur, dotazione: nd, modificato: nowIso() });
+      await loadUsers(); openDesk(ruid, k, from);
+    };
+    $("dkMob").onchange = applyPhones; $("dkLap").onchange = applyPhones; $("dkTeams").onchange = applyPhones;
+    $("dkEdit").onclick = () => editUser(k);
+    $("dkRoom").onclick = () => openRoom(ruid);
+    $("dkClose").onclick = () => { m.classList.add("hidden"); render(); };
+  }
+  const wireDesks = (box, ruidOf, from) => box.querySelectorAll(".dkc").forEach(b => b.onclick = () => {
+    if (b.dataset.free) { if (from === "room") { $("roPick").classList.remove("hidden"); $("roQ").focus(); $("roQ").dispatchEvent(new Event("input")); try { $("roAdd").scrollIntoView({ block: "center" }); } catch (e) { /* vecchi browser */ } } else openRoom(b.dataset.r); }
+    else openDesk(b.dataset.r, b.dataset.k, from);
+  });
+
   async function render() {
     const box = $("roomsPanel"); if (!box) return;
     await load();
@@ -343,6 +471,9 @@ window.ROOMS = (function () {
       h += `<button class="btn red" id="plDel" type="button">Togli la foto della pianta</button><div class="hint">La foto si toglie solo da questo telefono.</div>`;
     }
     h += `</div>`;
+    /* scrivanie del piano: una riga per stanza, con le scrivanie disegnate */
+    h += `<h2 style="margin-top:14px">Scrivanie del piano</h2>`;
+    h += rs.length ? `<div class="bld" style="margin-top:0" id="rsDesks">${rs.map(r => { const o = occ(r), cs = deskCards(r); return `<div class="dkRow${o.over ? " over" : ""}"><button type="button" class="dl" data-r="${esc(r.uid)}" aria-label="Apri la stanza ${esc(r.codice)}">${esc(r.codice)}${o.txt ? `<small>${o.txt}</small>` : ""}</button><div class="dkGrid">${cs.length ? cs.join("") : `<span class="meta" style="align-self:center">Nessuna postazione</span>`}</div></div>`; }).join("")}</div><div class="hint">Tocca una scrivania per vedere il S/N del PC. Tocca il codice della stanza per aprirla.</div>` : `<div class="hint">Nessuna stanza in questo piano.</div>`;
     /* stanze del piano */
     h += `<h2 style="margin-top:14px">Stanze</h2><div id="rsRooms">${rs.map(r => { const o = occ(r), nm = peopleIn(r.uid).map(p => p.utente.split(" ")[0]); return `<div class="card rc" data-r="${esc(r.uid)}"><h3>${esc(lab(r))}${o.txt ? ` <span class="tag${o.over ? " st-Aperto" : ""}">${o.txt}</span>` : ""}</h3>${r.come ? `<div class="meta">${esc(r.come.length > 90 ? r.come.slice(0, 90) + "…" : r.come)}</div>` : ""}${nm.length ? `<div class="meta">${esc(nm.join(", "))}</div>` : `<div class="meta">nessuno assegnato</div>`}${r.px != null ? "" : (hasPl ? `<div class="meta">non ancora segnata sulla pianta</div>` : "")}</div>`; }).join("") || `<div class="hint">Nessuna stanza.</div>`}</div>`;
     /* persone del piano */
@@ -361,6 +492,7 @@ window.ROOMS = (function () {
     $("rsNew").onclick = () => newRoomDialog(b.uid, curF);
     $("rsBulk").onclick = () => bulkDialog(b.uid, curF);
     $("rsView").querySelectorAll("button").forEach(x => x.onclick = () => { if (x.disabled) return; view = x.dataset.v; again(); });
+    if ($("rsDesks")) { wireDesks($("rsDesks"), null, "floor"); $("rsDesks").querySelectorAll(".dl").forEach(c => c.onclick = () => openRoom(c.dataset.r)); }
     $("rsRooms").querySelectorAll(".rc").forEach(c => c.onclick = () => openRoom(c.dataset.r));
     $("rsPpl").querySelectorAll(".rp").forEach(c => c.onclick = () => openRoom(c.dataset.r));
     $("rsPrn").querySelectorAll(".pr").forEach(c => c.onclick = () => openPrinter(c.dataset.u));
@@ -446,6 +578,9 @@ window.ROOMS = (function () {
       <label for="roCome">Come arrivarci</label><textarea id="roCome" placeholder="Es. Ingresso principale, scale B, secondo corridoio a destra">${esc(r.come || "")}</textarea>
       <label for="roNote">Note</label><textarea id="roNote" style="min-height:56px">${esc(r.note || "")}</textarea>
       <button class="btn green" id="roSave" type="button">Salva la stanza</button>
+      <label>Scrivanie${o.txt ? ` · <span class="${o.over ? "tag st-Aperto" : "tag"}">${o.txt}</span>` : ""}</label>
+      <div class="dkBox" id="roDesks">${deskCards(r).length ? `<div class="dkGrid">${deskCards(r).join("")}</div>` : `<div class="hint" style="padding:8px">Nessuna postazione: aggiungi una persona o scrivi le scrivanie totali.</div>`}</div>
+      <div class="hint">Tocca una scrivania per vedere il numero di serie del PC (S/N), l'IMEI e la dotazione. Una scrivania tratteggiata è libera: toccala per aggiungere una persona.</div>
       <label>Chi siede qui${o.txt ? ` · <span class="${o.over ? "tag st-Aperto" : "tag"}" id="roOcc">${o.txt}</span>` : ""}</label>
       <div id="roPpl">${ppl.map(p => `<div class="card"><b>Postazione ${p.numero}</b> · <span class="rpn" data-k="${esc(p.k)}" style="text-decoration:underline">${esc(p.utente)}</span>${phoneBits(userOf(p.k)) ? `<div class="meta">${phoneBits(userOf(p.k))}</div>` : ""}<button class="btn red sm" data-k="${esc(p.k)}" type="button" style="margin-top:6px">Togli da questa stanza</button></div>`).join("") || `<div class="hint">Nessuno è assegnato a questa stanza.</div>`}</div>
       <button class="btn navy" id="roAdd" type="button">＋ Aggiungi persona</button>
@@ -472,6 +607,7 @@ window.ROOMS = (function () {
       const oc = occ(res.r);
       back("Stanza salvata." + (oc.over ? `\nAttenzione: ci sono ${oc.n} persone ma le scrivanie sono ${oc.tot}.` : ""), oc.over);
     };
+    wireDesks($("roDesks"), null, "room");
     $("roPpl").querySelectorAll("button[data-k]").forEach(b => b.onclick = async () => { await unassign(b.dataset.k); back("Persona tolta dalla stanza: le postazioni sono state rinumerate."); });
     $("roPpl").querySelectorAll(".rpn").forEach(s => s.onclick = () => editUser(s.dataset.k));
     $("roAdd").onclick = () => { $("roPick").classList.toggle("hidden"); if (!$("roPick").classList.contains("hidden")) { $("roQ").focus(); pick(); } };
@@ -563,7 +699,7 @@ window.ROOMS = (function () {
     }
   }
 
-  return { load, render, openRoom, openFloor, floorMenu, dove, parseCodes, parseRooms, cleanCode,
+  return { load, render, openRoom, openDesk, openFloor, floorMenu, dove, parseCodes, parseRooms, cleanCode,
            addRoom, addRooms, saveRoom, setPos, deleteRoom, assign, unassign, dropUser, renameUser,
            addFoto, delFoto, setPianta, delPianta, pianta, fotosOf, exportItems, countNew, importData,
            peopleIn, seatOf, roomsOf, occ, lab, roomCode: uid => { const r = uid && room(uid); return r ? r.codice : ""; },

@@ -33,6 +33,11 @@ except ImportError:
     PRINTER_IMAGES = {}
 
 try:
+    from desk_images import IMAGES as DESK_IMAGES        # foto dei dispositivi sulle scrivanie
+except ImportError:
+    DESK_IMAGES = {}
+
+try:
     import verbali as VB          # verbali Word (trasferimento, consegna, assegnazione, censimento)
 except ImportError:
     VB = None
@@ -141,9 +146,9 @@ def clean_serial(text):
 
 
 # apparecchi che una persona può avere in dotazione (l'elenco è libero: si può scrivere altro)
-TIPI_DOTAZIONE_PERSONA = ["Notebook", "PC fisso", "Monitor", "Smartphone", "Tablet",
-                          "Scheda SIM", "Cuffie", "Telefono fisso", "Token / smart card",
-                          "Stampante personale", "Altro"]
+TIPI_DOTAZIONE_PERSONA = ["Notebook", "PC fisso", "Monitor", "Cellulare", "Smartphone",
+                          "Telefono Teams", "Tablet", "Scheda SIM", "Cuffie", "Telefono fisso",
+                          "Token / smart card", "Stampante personale", "Altro"]
 
 
 def clean_dotazione(value):
@@ -2733,8 +2738,9 @@ def import_rooms_list(db, data, edificio_id):
     sovrascrivere quello che hai già scritto a mano:
     - una stanza che c'è già (stesso piano e codice) resta com'è; le scrivanie si scrivono solo se
       erano vuote;
-    - una persona che c'è già (anche «Rossi Mario» per «Mario Rossi») resta com'è; l'ufficio si
-      scrive solo se era vuoto; chi siede già in un'altra stanza non viene spostato;
+    - una persona che c'è già (anche «Rossi Mario» per «Mario Rossi») resta com'è; l'ufficio e la
+      dotazione (facoltativa nel file: [{"tipo", "modello", "seriale"}]) si scrivono solo se erano
+      vuoti; chi siede già in un'altra stanza non viene spostato;
     - una stampante con lo stesso numero di serie non si duplica: le si collega la stanza (se non
       ne aveva) e, se serve, il modello e lo stato «fuori servizio»."""
     if not isinstance(data, dict) or data.get("tipo") != ELENCO_TIPO:
@@ -2792,6 +2798,9 @@ def import_rooms_list(db, data, edificio_id):
                 res["persone_nuove"] += 1
             if uff and not (user or {}).get("ufficio") and db.set_user_extra(uid, uff):
                 res["uffici_scritti"] += 1
+            dot = clean_dotazione(p.get("dotazione"))
+            if dot and not clean_dotazione((user or {}).get("dotazione")):
+                db.set_user_extra(uid, dotazione=dot)       # solo se la persona non ha già una dotazione
             posto = db.posto_of_user(uid)
             if posto and posto["stanza_id"] == rid:
                 res["persone_gia_in_stanza"] += 1
@@ -3012,6 +3021,300 @@ def tile_hit(tiles, x, y):
         if t["x0"] <= x <= t["x1"] and t["y0"] <= y <= t["y1"]:
             return t["id"]
     return None
+
+
+# ---- vista a scrivanie: una scrivania disegnata per ogni postazione, col PC e il suo S/N ----
+DESK_W, DESK_H, DESK_GAP, DESK_PAD, DESK_LABEL_W = 150, 170, 10, 10, 104
+
+
+# Il telefono che si vede sulla scrivania viene dalla dotazione della persona: un «Cellulare» (o
+# «Smartphone») Samsung Galaxy S24, S24 Plus o S25 e/o un «Telefono Teams» (AudioCodes) da scrivania.
+CELL_MODELLI = ("S24", "S24 Plus", "S25")
+# nome normalizzato -> (tipo di disegno, nome mostrato); S4, S4 Plus e S5 sono i nomi scritti per
+# errore all'inizio: valgono come S24, S24 Plus e S25
+CELL_KEYS = {"s24": ("s24", "S24"), "s24plus": ("s24plus", "S24 Plus"), "s25": ("s25", "S25"),
+             "s4": ("s24", "S24"), "s4plus": ("s24plus", "S24 Plus"), "s5": ("s25", "S25")}
+TEAMS_TIPO, TEAMS_MODELLO = "Telefono Teams", "AudioCodes C435HD"
+LAPTOP_MODELLI = {"13": "Dell 13 pollici", "15": "Dell 15 pollici"}
+
+
+def _norm_model(txt):
+    t = str(txt or "").lower().replace("+", " plus ")
+    for w in ("samsung", "galaxy"):
+        t = t.replace(w, " ")
+    return "".join(ch for ch in t if ch.isalnum())
+
+
+def _row_kind(r):
+    """'teams' (telefono Teams da scrivania), 'mobile' (cellulare / smartphone), 'laptop'
+    (notebook / portatile) oppure ''."""
+    tipo = str(r.get("tipo") or "").lower()
+    both = tipo + " " + str(r.get("modello") or "").lower()
+    if "teams" in both or "audiocodes" in both:
+        return "teams"
+    if "cellulare" in tipo or "smartphone" in tipo:
+        return "mobile"
+    if "notebook" in tipo or "portatile" in tipo or "laptop" in tipo:
+        return "laptop"
+    return ""
+
+
+def _laptop_size(modello):
+    m = re.search(r"(?<!\d)(13|15)(?!\d)", str(modello or ""))
+    return m.group(1) if m else ""
+
+
+def desk_phone_info(dotazione, imei=""):
+    """Cosa disegnare sulla scrivania: {"mobile": None|"s24"|"s24plus"|"s25"|"altro", "label": nome del
+    modello, "teams": bool, "laptop": None|"13"|"15"|"altro", "laptop_label": modello del portatile}.
+    Chi ha un IMEI ma nessun modello indicato ha il cellulare classico (S24)."""
+    mobile, label, teams, laptop, llabel = None, "", False, None, ""
+    for r in clean_dotazione(dotazione):
+        k = _row_kind(r)
+        if k == "teams":
+            teams = True
+        elif k == "laptop" and laptop is None and r["modello"]:
+            laptop, llabel = _laptop_size(r["modello"]) or "altro", r["modello"]
+        elif k == "mobile" and mobile is None:
+            n = _norm_model(r["modello"])
+            mobile, label = CELL_KEYS.get(n, ("altro", r["modello"]))
+    if mobile is None and str(imei or "").strip():
+        mobile = "s24"
+    return {"mobile": mobile, "label": label, "teams": teams, "laptop": laptop,
+            "laptop_label": llabel}
+
+
+def with_desk_phones(dotazione, mobile="", teams=False, laptop=None):
+    """La dotazione con il cellulare scelto (S24, S24 Plus, S25: '' = non indicato, None = lascia
+    com'è), il telefono Teams da scrivania e il portatile Dell ('13' o '15' pollici, '' = non
+    indicato, None = lascia com'è); il resto della dotazione e i seriali già scritti restano."""
+    rows = clean_dotazione(dotazione)
+    old_mob = next((r for r in rows if _row_kind(r) == "mobile"), None)
+    old_teams = next((r for r in rows if _row_kind(r) == "teams"), None)
+    laps = [r for r in rows if _row_kind(r) == "laptop"]
+    old_lap = laps[0] if laps else None
+    out = [r for r in rows if _row_kind(r) == ""] + laps[1:]
+    if laptop is None:
+        out += laps[:1]
+    elif laptop in LAPTOP_MODELLI:
+        out.append({"tipo": old_lap["tipo"] if old_lap else "Notebook",
+                    "modello": LAPTOP_MODELLI[laptop], "seriale": old_lap["seriale"] if old_lap else ""})
+    elif old_lap and old_lap["seriale"]:       # «non indicato»: il seriale scritto non si perde
+        out.append(dict(old_lap, modello=""))
+    if mobile is None:
+        out += [r for r in rows if _row_kind(r) == "mobile"]
+    elif mobile:
+        out.append({"tipo": old_mob["tipo"] if old_mob else "Cellulare", "modello": mobile,
+                    "seriale": old_mob["seriale"] if old_mob else ""})
+    if teams:
+        out.append(old_teams or {"tipo": TEAMS_TIPO, "modello": TEAMS_MODELLO, "seriale": ""})
+    return clean_dotazione(out)
+
+
+def desk_cards(room, people):
+    """Le scrivanie di una stanza: prima chi ci siede (in ordine di postazione), poi quelle libere
+    (solo se le «scrivanie totali» sono indicate). Ogni scrivania è un dizionario."""
+    cards = []
+    for p in people:
+        cards.append({"kind": "occ", "numero": p["numero"], "utente_id": p["utente_id"],
+                      "nome": p["nome"], "sn": (p.get("seriale_pc") or "").strip(),
+                      "extra": len([r for r in clean_dotazione(p.get("dotazione"))
+                                    if not _row_kind(r)]),
+                      "phones": desk_phone_info(p.get("dotazione"), p.get("imei"))})
+    libere = max(0, (room.get("scrivanie") or 0) - len(cards))
+    for _ in range(libere):
+        cards.append({"kind": "free", "numero": len(cards) + 1, "utente_id": None, "nome": "",
+                      "sn": "", "extra": 0,
+                      "phones": {"mobile": None, "label": "", "teams": False, "laptop": None,
+                                 "laptop_label": ""}})
+    return cards
+
+
+def desk_layout(rooms, people_by_room, width, y0=0, show_label=True):
+    """Dispone le scrivanie: una riga per stanza (come i piani nella vista Edificio), con la
+    scritta della stanza a sinistra e le scrivanie che vanno a capo. Restituisce
+    {"rows": [...], "height": ...}; ogni riga ha "desks" con le coordinate x0, y0, x1, y1."""
+    label_w = DESK_LABEL_W if show_label else 0
+    x_start = DESK_PAD + label_w + (DESK_PAD if show_label else 0)
+    per_line = max(1, int((width - x_start - DESK_PAD + DESK_GAP) // (DESK_W + DESK_GAP)))
+    rows, y = [], y0
+    for r in rooms:
+        cards = desk_cards(r, people_by_room.get(r["id"], []))
+        lines = max(1, (len(cards) + per_line - 1) // per_line)
+        h = (DESK_PAD * 2 + lines * DESK_H + (lines - 1) * DESK_GAP) if cards else 64
+        for i, c in enumerate(cards):
+            c["x0"] = x_start + (i % per_line) * (DESK_W + DESK_GAP)
+            c["y0"] = y + DESK_PAD + (i // per_line) * (DESK_H + DESK_GAP)
+            c["x1"], c["y1"] = c["x0"] + DESK_W, c["y0"] + DESK_H
+        occ, over = room_occupancy(r)
+        rows.append({"room_id": r["id"], "codice": r["codice"], "occ": occ, "over": over,
+                     "n": len(cards), "x0": 0, "y0": y, "x1": width, "y1": y + h,
+                     "label_x1": DESK_PAD + label_w, "desks": cards})
+        y += h
+    return {"rows": rows, "height": y - y0, "per_line": per_line}
+
+
+def desk_hit(layout, x, y):
+    """Cosa c'è sotto il clic: ("occ", id stanza, id utente), ("free", id stanza, None),
+    ("room", id stanza, None) per la scritta o lo spazio vuoto della riga, oppure None."""
+    for row in layout["rows"]:
+        if not (row["y0"] <= y < row["y1"]):
+            continue
+        for d in row["desks"]:
+            if d["x0"] <= x <= d["x1"] and d["y0"] <= y <= d["y1"]:
+                return d["kind"], row["room_id"], d.get("utente_id")
+        return "room", row["room_id"], None
+    return None
+
+
+def _mix(color, bg, a):
+    """Schiarisce un colore #rrggbb verso lo sfondo (per le scrivanie libere)."""
+    c1 = [int(color[k:k + 2], 16) for k in (1, 3, 5)]
+    c2 = [int(bg[k:k + 2], 16) for k in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(round(x * (1 - a) + y * a) for x, y in zip(c1, c2))
+
+
+# misure (larghezza, altezza) delle foto nella scena 130 x 66; le stesse sono in desk_images.py
+DESK_IMG_SIZE = {"lap13": (26, 18), "lap15": (32, 22), "s24": (10, 20), "s24plus": (10, 22),
+                 "s25": (10, 20), "teams": (32, 24)}
+_DESK_PHOTOS = {}
+
+
+def desk_photo(key):
+    """La foto (PhotoImage) «key» di desk_images, per esempio «s24_s» (scena) o «s24_m»
+    (anteprima); None se manca."""
+    if key not in _DESK_PHOTOS:
+        data = DESK_IMAGES.get(key)
+        try:
+            _DESK_PHOTOS[key] = tk.PhotoImage(data=data) if data else None
+        except Exception:
+            _DESK_PHOTOS[key] = None
+    return _DESK_PHOTOS[key]
+
+
+def desk_photo_keys(phones):
+    """Le foto che servono per una scrivania: {"laptop": chiave|None, "mobile": ..., "teams": ...}."""
+    ph = phones or {}
+    return {"laptop": {"13": "lap13", "15": "lap15"}.get(ph.get("laptop")),
+            "mobile": ph["mobile"] if ph.get("mobile") in ("s24", "s24plus", "s25") else None,
+            "teams": "teams" if ph.get("teams") else None}
+
+
+def draw_desk_scene(c, cx, y, tags, phones=None, faded=False, bg="#f6f2e6"):
+    """La scrivania vista da davanti, come nelle foto: pannello azzurro, monitor con la webcam,
+    tastiera, mouse e, con le FOTO dei dispositivi scelti, il portatile Dell (13 o 15 pollici),
+    il cellulare Galaxy (S24, S24 Plus, S25) a destra e il telefono Teams AudioCodes a sinistra.
+    Occupa 130 x 66 px attorno a cx. Senza le foto (file mancante) disegna dei rettangoli."""
+    ph = phones or {}
+    ox = cx - 65
+
+    def col(h):
+        return _mix(h, bg, 0.62) if faded else h
+
+    def rect(x, yy, w, h, fill):
+        c.create_rectangle(ox + x, y + yy, ox + x + w, y + yy + h, fill=col(fill),
+                           outline=col(fill), tags=tags)
+
+    def oval(x, yy, w, h, fill):
+        c.create_oval(ox + x, y + yy, ox + x + w, y + yy + h, fill=col(fill), outline=col(fill),
+                      tags=tags)
+
+    def photo(key, x, yy, fallback):
+        """La foto «key» con l'angolo in alto a sinistra in (x, yy); se manca un rettangolo."""
+        w, h = DESK_IMG_SIZE[key]
+        img = desk_photo(key + "_s")
+        if img is None:
+            rect(x, yy, w, h, fallback)
+            return
+        c.create_image(ox + x, y + yy, image=img, anchor="nw", tags=tuple(tags) + ("dkimg:" + key,))
+    rect(0, 40, 130, 26, "#ecd3a8")          # piano della scrivania
+    rect(2, 28, 126, 14, "#9db8e6")          # pannello azzurro dietro il monitor
+    rect(54, 41, 22, 3, "#15181d")           # base del monitor
+    rect(62, 35, 6, 6, "#15181d")            # piedistallo
+    rect(42, 6, 46, 30, "#15181d")           # monitor
+    rect(44.5, 8.5, 41, 22, "#2b313b")       # schermo spento
+    rect(60, 3, 10, 3.5, "#0b0d10")          # webcam
+    rect(44, 48, 40, 8, "#1d2026")           # tastiera
+    for k in range(3):
+        rect(47, 50 + k * 2.2, 34, 0.9, "#3a3f49")
+    oval(88.5, 47, 7, 9, "#1d2026")          # mouse
+    keys = desk_photo_keys(ph)
+    if keys["laptop"]:                       # portatile Dell chiuso, visto dall'alto (centro a x 27)
+        w, h = DESK_IMG_SIZE[keys["laptop"]]
+        photo(keys["laptop"], 27 - w / 2, 63 - h, "#a9b2bd")
+    elif ph.get("laptop") == "altro":        # un altro modello: coperchio generico
+        rect(13, 44, 28, 19, "#a9b2bd")
+    if keys["teams"]:                        # telefono Teams (AudioCodes), davanti, a sinistra
+        photo("teams", 0, 66 - DESK_IMG_SIZE["teams"][1], "#15181d")
+    if keys["mobile"]:                       # cellulare Samsung Galaxy (centro a x 113)
+        w, h = DESK_IMG_SIZE[keys["mobile"]]
+        photo(keys["mobile"], 113 - w / 2, 62 - h, "#14171c")
+    elif ph.get("mobile") == "altro":        # un altro modello: cellulare generico
+        rect(108.5, 45, 9, 17, "#14171c")
+        rect(109.5, 46.5, 7, 14, "#2b313b")
+
+
+def draw_desk_rows(c, layout, tag_prefix="dk", cursor=True):
+    """Disegna nel Canvas le righe di desk_layout: scritta della stanza e scrivanie."""
+    for idx, row in enumerate(layout["rows"]):
+        top, bottom = row["y0"], row["y1"]
+        c.create_rectangle(0, top, row["x1"], bottom, fill="#efe7cf" if idx % 2 == 0 else "#e7ddc0",
+                           outline="#cfc3a3")
+        if row["label_x1"] > DESK_PAD:
+            c.create_rectangle(0, top, row["label_x1"], bottom, fill=RED if row["over"] else NAVY,
+                               outline=RED if row["over"] else NAVY)
+            c.create_text(row["label_x1"] / 2, (top + bottom) / 2 - (8 if row["occ"] else 0),
+                          text=row["codice"], fill=WHITE, font=("Segoe UI", 12, "bold"),
+                          width=row["label_x1"] - 10)
+            if row["occ"]:
+                c.create_text(row["label_x1"] / 2, (top + bottom) / 2 + 14, text=row["occ"],
+                              fill=WHITE, font=("Segoe UI", 8))
+        if not row["desks"]:
+            c.create_text(row["label_x1"] + 14, (top + bottom) / 2, anchor="w", fill=GREY,
+                          font=("Segoe UI", 9),
+                          text="Nessuna postazione: aggiungi una persona o indica le scrivanie totali.")
+        for d in row["desks"]:
+            free = d["kind"] == "free"
+            tag = "%s%d_%d" % (tag_prefix, row["room_id"], d["numero"])
+            c.create_rectangle(d["x0"], d["y0"], d["x1"], d["y1"], fill="#f6f2e6" if free else WHITE,
+                               outline="#cfc3a3" if free else "#b9ae8c", width=1,
+                               dash=(4, 3) if free else (), tags=(tag,))
+            cx = (d["x0"] + d["x1"]) / 2
+            c.create_text(cx, d["y0"] + 6, anchor="n", text="Postazione %d" % d["numero"],
+                          fill=GREY, font=("Segoe UI", 8), tags=(tag,))
+            draw_desk_scene(c, cx, d["y0"] + 22, (tag,), phones=d.get("phones"), faded=free)
+            if free:
+                c.create_text(cx, d["y0"] + 96, anchor="n", text="Libera", fill=GREY,
+                              font=("Segoe UI", 9, "italic"), tags=(tag,))
+            else:
+                c.create_text(cx, d["y0"] + 92, anchor="n", text=d["nome"], fill=NAVY,
+                              width=DESK_W - 10, justify="center", font=("Segoe UI", 9, "bold"),
+                              tags=(tag,))
+                if d["sn"]:
+                    c.create_text(cx, d["y0"] + 114, anchor="n", text="S/N " + d["sn"], fill=TEXT,
+                                  width=DESK_W - 8, justify="center", font=("Segoe UI", 8, "bold"),
+                                  tags=(tag,))
+                else:
+                    c.create_text(cx, d["y0"] + 114, anchor="n", text="S/N non inserito", fill=GREY,
+                                  font=("Segoe UI", 8, "italic"), tags=(tag,))
+                ph = d.get("phones") or {}
+                righe = []
+                if ph.get("laptop_label"):
+                    righe.append(ph["laptop_label"])
+                tel = " · ".join(x for x in ((("Cell. " + ph["label"]) if ph.get("label") else ""),
+                                             "Telefono Teams" if ph.get("teams") else "") if x)
+                if tel:
+                    righe.append(tel)
+                if d["extra"]:
+                    righe.append("+ %d %s" % (d["extra"], "apparecchio" if d["extra"] == 1
+                                              else "apparecchi"))
+                if righe:
+                    c.create_text(cx, d["y0"] + 128, anchor="n", text="\n".join(righe), fill=GREY,
+                                  width=DESK_W - 8, justify="center", font=("Segoe UI", 8),
+                                  tags=(tag,))
+            if cursor:
+                c.tag_bind(tag, "<Enter>", lambda e, c=c: c.configure(cursor="hand2"))
+                c.tag_bind(tag, "<Leave>", lambda e, c=c: c.configure(cursor=""))
 
 
 def stanze_for_phone(db, with_photos):
@@ -4450,11 +4753,183 @@ class RoomNewDialog(ModalDialog):
             self.destroy()
 
 
+class DeskDialog(ModalDialog):
+    """Una scrivania: chi ci siede, il numero di serie del suo PC (S/N), IMEI, telefono, dotazione."""
+
+    NO_CELL = "Non indicato"
+
+    def __init__(self, parent, app, room_id, utente_id, open_room=None, on_change=None):
+        super().__init__(parent, "Postazione", "660x820")
+        self.minsize(560, 700)
+        self.app, self.room_id, self.utente_id, self.open_room_cb = app, room_id, utente_id, open_room
+        self.on_change = on_change
+        body = ttk.Frame(self, padding=16)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(1, weight=1)
+        self.lbl_title = ttk.Label(body, font=("Segoe UI", 14, "bold"), foreground=NAVY)
+        self.lbl_title.grid(row=0, column=0, columnspan=3, sticky="w")
+        self.lbl_where = ttk.Label(body, style="Hint.TLabel")
+        self.lbl_where.grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 10))
+        self.lbl_person = ttk.Label(body, font=("Segoe UI", 12, "bold"))
+        self.lbl_person.grid(row=2, column=0, columnspan=3, sticky="w")
+        self.lbl_office = ttk.Label(body, style="Hint.TLabel")
+        self.lbl_office.grid(row=3, column=0, columnspan=3, sticky="w", pady=(0, 12))
+        ttk.Label(body, text="Numero di serie del PC (S/N)", font=("Segoe UI", 9, "bold")).grid(
+            row=4, column=0, columnspan=3, sticky="w")
+        self.v_sn = tk.StringVar()
+        self.e_sn = ttk.Entry(body, textvariable=self.v_sn, state="readonly", width=30,
+                              font=("Consolas", 15, "bold"))
+        self.e_sn.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(2, 2))
+        ttk.Button(body, text="Copia S/N", command=self.copy_sn).grid(row=5, column=2, padx=(8, 0))
+        self.lbl_copy = ttk.Label(body, style="Hint.TLabel")
+        self.lbl_copy.grid(row=6, column=0, columnspan=3, sticky="w", pady=(0, 8))
+        self.vals = {}
+        for i, (key, text) in enumerate((("imei", "IMEI cellulare"), ("telefono", "Telefono"),
+                                         ("matricola", "Matricola"), ("sede", "Sede"))):
+            ttk.Label(body, text=text).grid(row=7 + i, column=0, sticky="w", pady=2, padx=(0, 14))
+            self.vals[key] = ttk.Label(body, font=("Segoe UI", 10, "bold"))
+            self.vals[key].grid(row=7 + i, column=1, columnspan=2, sticky="w", pady=2)
+        pf = ttk.Frame(body)
+        pf.grid(row=11, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        ttk.Label(pf, text="Cellulare sulla scrivania").pack(side="left")
+        self.v_mob = tk.StringVar()
+        self.cb_mob = ttk.Combobox(pf, textvariable=self.v_mob, state="readonly", width=16,
+                                   values=[self.NO_CELL] + list(CELL_MODELLI))
+        self.cb_mob.pack(side="left", padx=(8, 14))
+        self.cb_mob.bind("<<ComboboxSelected>>", lambda e: self.apply_phones())
+        self.v_teams = tk.BooleanVar()
+        ttk.Checkbutton(pf, text="Telefono Teams (AudioCodes)", variable=self.v_teams,
+                        command=self.apply_phones).pack(side="left")
+        pl = ttk.Frame(body)
+        pl.grid(row=12, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(pl, text="Portatile").pack(side="left")
+        self.v_lap = tk.StringVar()
+        self.cb_lap = ttk.Combobox(pl, textvariable=self.v_lap, state="readonly", width=22,
+                                   values=[self.NO_CELL] + list(LAPTOP_MODELLI.values()))
+        self.cb_lap.pack(side="left", padx=(8, 0))
+        self.cb_lap.bind("<<ComboboxSelected>>", lambda e: self.apply_phones())
+        # le foto dei tre apparecchi scelti: cambiano quando cambi la scelta
+        fr = ttk.Frame(body)
+        fr.grid(row=13, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        self.pic, self.pic_cap = {}, {}
+        for slot in ("laptop", "mobile", "teams"):
+            col = ttk.Frame(fr)
+            col.pack(side="left", padx=(0, 22), anchor="s")
+            self.pic[slot] = ttk.Label(col, anchor="center")
+            self.pic[slot].pack()
+            self.pic_cap[slot] = ttk.Label(col, style="Hint.TLabel", anchor="center")
+            self.pic_cap[slot].pack()
+        ttk.Label(body, text="Dotazione", font=("Segoe UI", 9, "bold")).grid(
+            row=14, column=0, columnspan=3, sticky="w", pady=(10, 2))
+        self.tree_d = ttk.Treeview(body, columns=("tipo", "modello", "seriale"), show="headings",
+                                   height=4, selectmode="browse")
+        for col, text, w in (("tipo", "Apparecchio", 130), ("modello", "Modello", 190),
+                             ("seriale", "Seriale / IMEI", 230)):
+            self.tree_d.heading(col, text=text)
+            self.tree_d.column(col, width=w, anchor="w")
+        self.tree_d.grid(row=15, column=0, columnspan=3, sticky="nsew")
+        body.rowconfigure(15, weight=1)
+        bt = ttk.Frame(body)
+        bt.grid(row=16, column=0, columnspan=3, sticky="ew", pady=(14, 0))
+        ttk.Button(bt, text="Modifica la persona…", style="Save.TButton", command=self.edit).pack(
+            side="left")
+        if open_room:
+            ttk.Button(bt, text="Apri la stanza…", command=self.go_room).pack(side="left",
+                                                                             padx=(8, 0))
+        ttk.Button(bt, text="Chiudi", command=self.destroy).pack(side="right")
+        self.refresh()
+
+    def person(self):
+        return next((p for p in self.app.db.persone_of(self.room_id)
+                     if p["utente_id"] == self.utente_id), None)
+
+    def refresh(self):
+        room, p = self.app.db.get_stanza(self.room_id), self.person()
+        if not room or not p:
+            self.destroy()
+            return
+        self.lbl_title.configure(text="%s · Postazione %d" % (room["codice"], p["numero"]))
+        self.lbl_where.configure(text="%s · %s" % (room["edificio"], floor_label(room["piano"])))
+        self.lbl_person.configure(text=p["nome"])
+        self.lbl_office.configure(text=p["ufficio"] or "Ufficio non indicato")
+        self.v_sn.set(p["seriale_pc"] or "(non ancora inserito)")
+        self.sn = p["seriale_pc"] or ""
+        self.lbl_copy.configure(text="")
+        for key, lab in self.vals.items():
+            lab.configure(text=p.get(key) or "—")
+        info = desk_phone_info(p.get("dotazione"), p.get("imei"))
+        values = [self.NO_CELL] + list(CELL_MODELLI)
+        if info["mobile"] == "altro":
+            self.v_mob.set("Altro: %s" % info["label"])
+            values.append(self.v_mob.get())
+        else:
+            self.v_mob.set(info["label"] if info["label"] in CELL_MODELLI else self.NO_CELL)
+        self.cb_mob.configure(values=values)
+        self.v_teams.set(info["teams"])
+        lvals = [self.NO_CELL] + list(LAPTOP_MODELLI.values())
+        if info["laptop"] == "altro":
+            self.v_lap.set("Altro: %s" % info["laptop_label"])
+            lvals.append(self.v_lap.get())
+        else:
+            self.v_lap.set(LAPTOP_MODELLI.get(info["laptop"], self.NO_CELL))
+        self.cb_lap.configure(values=lvals)
+        keys = desk_photo_keys(info)
+        caps = {"laptop": (LAPTOP_MODELLI.get(info["laptop"]) or info["laptop_label"]
+                           or "Portatile non indicato"),
+                "mobile": (("Samsung Galaxy " + info["label"]) if keys["mobile"] else
+                           (info["label"] or "Cellulare non indicato")),
+                "teams": (TEAMS_MODELLO if info["teams"] else "Telefono Teams: no")}
+        for slot in ("laptop", "mobile", "teams"):
+            img = desk_photo(keys[slot] + "_m") if keys[slot] else None
+            self.pic[slot].configure(image=img or "")
+            self.pic[slot].image = img                  # il programma deve tenerla
+            self.pic_cap[slot].configure(text=caps[slot])
+        self.tree_d.delete(*self.tree_d.get_children())
+        for i, r in enumerate(p.get("dotazione") or []):
+            self.tree_d.insert("", "end", iid=str(i),
+                               values=(r["tipo"], r["modello"], r["seriale"]))
+
+    def apply_phones(self):
+        """Cambia cellulare, portatile e/o telefono Teams: la scrivania cambia foto."""
+        p = self.person()
+        if not p:
+            return
+        choice = self.v_mob.get()
+        mob = None if choice.startswith("Altro:") else ("" if choice == self.NO_CELL else choice)
+        lchoice = self.v_lap.get()
+        lap = (None if lchoice.startswith("Altro:") else
+               next((k for k, v in LAPTOP_MODELLI.items() if v == lchoice), ""))
+        new = with_desk_phones(p.get("dotazione"), mob, bool(self.v_teams.get()), lap)
+        self.app.db.set_user_extra(self.utente_id, dotazione=new)
+        self.app.refresh_users()
+        self.refresh()
+        if self.on_change:
+            self.on_change()
+
+    def copy_sn(self):
+        if not self.sn:
+            messagebox.showinfo(APP_NAME, "Il numero di serie di questo PC non è ancora stato "
+                                          "inserito: scrivilo da «Modifica la persona…».",
+                                parent=self)
+            return
+        self.clipboard_clear()
+        self.clipboard_append(self.sn)
+        self.lbl_copy.configure(text="Copiato negli appunti: %s" % self.sn)
+
+    def edit(self):
+        self.app.edit_person_by_id(self.utente_id, parent=self, after=self.refresh)
+
+    def go_room(self):
+        if self.open_room_cb:
+            self.destroy()
+            self.open_room_cb()
+
+
 class RoomDialog(ModalDialog):
     """Scheda di una stanza: codice, scrivanie, come arrivarci, chi siede dove, foto e panorami."""
 
     def __init__(self, app, room_id):
-        super().__init__(app, "Stanza", "1020x840")
+        super().__init__(app, "Stanza", "1020x880")
         self.minsize(900, 700)
         self.app = app
         self.room_id = room_id
@@ -4476,11 +4951,11 @@ class RoomDialog(ModalDialog):
         ttk.Label(fr, text="  (facoltativo: se lo indichi vedi «occupate 2/3» e ti avviso quando "
                            "sono troppe)", style="Hint.TLabel").pack(side="left")
         ttk.Label(body, text="Come arrivarci").grid(row=3, column=0, sticky="nw", pady=4, padx=(0, 12))
-        self.txt_come = make_text(body, 3)
+        self.txt_come = make_text(body, 2)
         self.txt_come.grid(row=3, column=1, sticky="ew", pady=4)
         self.txt_come.insert("1.0", room["come"])
         ttk.Label(body, text="Note").grid(row=4, column=0, sticky="nw", pady=4, padx=(0, 12))
-        self.txt_note = make_text(body, 3)
+        self.txt_note = make_text(body, 2)
         self.txt_note.grid(row=4, column=1, sticky="ew", pady=4)
         self.txt_note.insert("1.0", room["note"])
         ttk.Button(body, text="Salva la stanza", style="Save.TButton", command=self.save).grid(
@@ -4490,8 +4965,23 @@ class RoomDialog(ModalDialog):
             row=6, column=0, sticky="w", pady=(6, 2))
         self.lbl_occ = ttk.Label(body, style="Hint.TLabel")
         self.lbl_occ.grid(row=6, column=1, sticky="w", pady=(6, 2))
-        self.tree_p = ttk.Treeview(body, columns=("posto", "nome", "ufficio", "tel", "pc", "imei",
-                                                  "dot"),
+        self.nb_p = ttk.Notebook(body)
+        self.nb_p.grid(row=7, column=0, columnspan=2, sticky="ew")
+        tab_d, tab_e = ttk.Frame(self.nb_p), ttk.Frame(self.nb_p)
+        self.nb_p.add(tab_d, text="Scrivanie")
+        self.nb_p.add(tab_e, text="Elenco")
+        self.dcanvas = tk.Canvas(tab_d, bg="#efe7cf", height=176, highlightthickness=0)
+        dsb = ttk.Scrollbar(tab_d, orient="vertical", command=self.dcanvas.yview)
+        self.dcanvas.configure(yscrollcommand=dsb.set)
+        self.dcanvas.pack(side="left", fill="both", expand=True)
+        dsb.pack(side="right", fill="y")
+        self.dcanvas.bind("<Button-1>", self.on_desk_click)
+        self.dcanvas.bind("<Configure>", lambda e: self.draw_desks())
+        self.dcanvas.bind("<MouseWheel>",
+                          lambda e: self.dcanvas.yview_scroll(int(-e.delta / 120), "units"))
+        self.desk_lay = {"rows": [], "height": 0}
+        self.tree_p = ttk.Treeview(tab_e, columns=("posto", "nome", "ufficio", "tel", "pc", "imei",
+                                                   "dot"),
                                    show="headings", height=5, selectmode="browse")
         for col, text, w in (("posto", "Postazione", 90), ("nome", "Persona", 150),
                              ("ufficio", "Ufficio", 150), ("tel", "Telefono", 90),
@@ -4499,7 +4989,7 @@ class RoomDialog(ModalDialog):
                              ("dot", "Dotazione", 170)):
             self.tree_p.heading(col, text=text)
             self.tree_p.column(col, width=w, anchor="w")
-        self.tree_p.grid(row=7, column=0, columnspan=2, sticky="ew")
+        self.tree_p.pack(fill="x")
         self.tree_p.bind("<Double-1>", lambda e: self.edit_person())
         pr = ttk.Frame(body)
         pr.grid(row=8, column=0, columnspan=2, sticky="w", pady=(6, 8))
@@ -4523,7 +5013,7 @@ class RoomDialog(ModalDialog):
 
         ttk.Label(body, text="Foto e panorami", font=("Segoe UI", 10, "bold")).grid(
             row=9, column=0, columnspan=2, sticky="w", pady=(6, 2))
-        self.tree_f = ttk.Treeview(body, columns=("nome", "tipo"), show="headings", height=4,
+        self.tree_f = ttk.Treeview(body, columns=("nome", "tipo"), show="headings", height=3,
                                    selectmode="browse")
         self.tree_f.heading("nome", text="File")
         self.tree_f.heading("tipo", text="Tipo")
@@ -4589,12 +5079,38 @@ class RoomDialog(ModalDialog):
                                values=("Postazione %d" % p["numero"], p["nome"], p["ufficio"],
                                        p["telefono"], p["seriale_pc"], p["imei"],
                                        dotazione_text(p["dotazione"])))
+        self.draw_desks()
         self.tree_f.delete(*self.tree_f.get_children())
         for f in db.foto_stanza(self.room_id):
             self.tree_f.insert("", "end", iid=str(f["id"]),
                                values=(f["nome"], "Panorama" if f["tipo"] == "panorama" else "Foto"))
         self.lbl_pos.configure(text="Segnata sulla pianta." if room["px"] is not None
                                else "Non ancora segnata sulla pianta.")
+
+    def draw_desks(self):
+        """Le scrivanie della stanza, disegnate: PC, nome e S/N. Un clic apre i dettagli."""
+        room = self.room()
+        c = self.dcanvas
+        c.delete("all")
+        if not room:
+            return
+        width = max(c.winfo_width(), 700)
+        people = {room["id"]: self.app.db.persone_of(self.room_id)}
+        self.desk_lay = desk_layout([room], people, width, y0=0, show_label=False)
+        draw_desk_rows(c, self.desk_lay)
+        c.configure(scrollregion=(0, 0, width, max(self.desk_lay["height"], 60)))
+
+    def on_desk_click(self, event):
+        c = self.dcanvas
+        hit = desk_hit(self.desk_lay, c.canvasx(event.x), c.canvasy(event.y))
+        if not hit:
+            return
+        kind, _, uid = hit
+        if kind == "occ" and uid is not None:
+            self.tree_p.selection_set(str(uid))
+            DeskDialog(self, self.app, self.room_id, uid, on_change=self.refresh)
+        elif kind == "free":
+            self.cb_persona.focus_set()
 
     def save(self):
         txt = self.v_scriv.get().strip()
@@ -7783,6 +8299,8 @@ class App(tk.Tk):
         ttk.Radiobutton(ctl, text="Foto della pianta", variable=self.plan_view, value="foto",
                         command=self.schedule_plan).pack(side="left")
         ttk.Radiobutton(ctl, text="Schema", variable=self.plan_view, value="schema",
+                        command=self.schedule_plan).pack(side="left", padx=(8, 0))
+        ttk.Radiobutton(ctl, text="Scrivanie", variable=self.plan_view, value="scrivanie",
                         command=self.schedule_plan).pack(side="left", padx=(8, 14))
         ttk.Button(ctl, text="Carica la foto della pianta…", command=self.load_plan_photo).pack(
             side="left")
@@ -7925,6 +8443,31 @@ class App(tk.Tk):
         if self.db.get_stanza(room_id):
             RoomDialog(self, room_id)
 
+    def on_desk_click(self, kind, room_id, utente_id):
+        """Clic su una scrivania della vista «Scrivanie»: chi c'è seduto, il suo PC e il S/N.
+        Su una scrivania libera (o sulla scritta della stanza) si apre la stanza."""
+        if kind == "occ" and utente_id is not None:
+            DeskDialog(self, self, room_id, utente_id, open_room=lambda: self.open_room(room_id))
+        else:
+            self.open_room(room_id)
+
+    def edit_person_by_id(self, utente_id, parent=None, after=None):
+        """La scheda completa di una persona (come in Utenti), aperta da una scrivania."""
+        user = next((u for u in self.users_data if u["id"] == utente_id), None)
+        if not user:
+            return
+        posto = self.db.posto_of_user(utente_id)
+        seat = ("%s · Postazione %d" % (posto["codice"], posto["numero"])) if posto else None
+
+        def on_save(data):
+            if not self.save_user_card(user, data):
+                return False
+            if after:
+                after()
+            return True
+        UserDialog(parent or self, user, self.sedi_cache, on_save, seat=seat,
+                   uffici=self.db.uffici())
+
     def open_selected_room(self):
         rid = self.need_room()
         if rid is not None:
@@ -8010,7 +8553,24 @@ class App(tk.Tk):
             path = self.plan_photo_path(b, fl)
             info = plan_image_b64(path, width - 24) if path else None
         y = 10
-        if info:
+        if self.plan_view.get() == "scrivanie":
+            people = {r["id"]: self.db.persone_of(r["id"]) for r in rooms}
+            lay = desk_layout(rooms, people, width - 4, y0=4)
+            self.plan_items = {"mode": "scrivanie", "layout": lay, "tiles": [], "markers": []}
+            if lay["rows"]:
+                draw_desk_rows(c, lay)
+            else:
+                c.create_text(12, 14, anchor="nw", fill=GREY, font=("Segoe UI", 10),
+                              text="In questo piano non ci sono ancora stanze: "
+                                   "premi «+ Nuova stanza…» o «Incolla più stanze…».")
+            y = 4 + lay["height"] + 16
+            if lay["rows"]:
+                c.create_text(12, y, anchor="nw", fill=GREY, font=("Segoe UI", 9), width=width - 30,
+                              text="Clicca una scrivania per vedere il numero di serie del PC (S/N), "
+                                   "l'IMEI e la dotazione. Una scrivania tratteggiata è libera: "
+                                   "cliccala per aprire la stanza e aggiungere una persona.")
+                y += 36
+        elif info:
             b64, w, h = info
             try:
                 self._plan_img = tk.PhotoImage(data=b64)
@@ -8070,6 +8630,11 @@ class App(tk.Tk):
         c = self.pcanvas
         x, y = c.canvasx(event.x), c.canvasy(event.y)
         it = self.plan_items
+        if it["mode"] == "scrivanie":
+            hit = desk_hit(it["layout"], x, y)
+            if hit:
+                self.on_desk_click(*hit)
+            return
         if it["mode"] == "foto":
             fx, fy = x - it["ox"], y - it["oy"]
             hit = plan_hit(it["markers"], fx, fy)

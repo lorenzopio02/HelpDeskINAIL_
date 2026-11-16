@@ -2,6 +2,13 @@ HELP DESK INAIL - PC + app per iPhone
 =====================================
 
 NOVITA' DI QUESTA VERSIONE
+ - SCRIVANIE DISEGNATE (PC e telefono): ogni postazione di una stanza e' disegnata come una vera
+   scrivania (pannello azzurro, monitor con webcam, tastiera, mouse). Tocchi (o clicchi) la
+   scrivania e vedi il NUMERO DI SERIE DEL PC (con "Copia S/N"), l'IMEI del cellulare e la
+   dotazione. Per ogni scrivania scegli tu il CELLULARE (Samsung Galaxy S24, S24 Plus, S25), il
+   PORTATILE DELL (13 pollici o 15 pollici) e se c'e' il TELEFONO TEAMS da scrivania (AudioCodes
+   C435HD): sulla scrivania compaiono le FOTO di quei dispositivi e cambiano con la scelta. Le
+   scrivanie libere sono sbiadite. Vedi "SCRIVANIE DISEGNATE".
  - PERSONE, UFFICIO E DOTAZIONE (PC e telefono): ogni persona ora ha anche l'UFFICIO e la sua
    DOTAZIONE (elenco libero: tipo, modello, seriale o IMEI - per esempio "Smartphone, Samsung A54,
    IMEI ..." oppure "Monitor"). Si scrivono nella scheda della persona, e per chi e' gia' in elenco si
@@ -382,6 +389,11 @@ PERSONE, UFFICIO E DOTAZIONE
    riga la scegli nell'elenco, correggi e premi il pulsante (ora dice "Salva la riga"); "Togli la
    riga scelta" la cancella. Se scrivi una riga e salvi la scheda senza premere il pulsante, la
    riga viene aggiunta lo stesso. Sul telefono: "+ Aggiungi un apparecchio" e "Togli" su ogni riga.
+ - Il file elenco puo' avere, per ogni persona, anche la "dotazione" (tipo, modello, seriale): viene
+   scritta solo a chi non ne ha gia' una. Nel file che ti ho preparato la stanza 104 (Sportello
+   Telefonico) ha UNA scrivania con il Telefono Teams AudioCodes: e' intestata a una persona
+   segnaposto "Sportello Telefonico". Quando sai chi ci siede, cambia il nome nella scheda persona
+   (o scrivi il S/N del PC) e la scrivania resta com'e'.
  - Si vedono nell'elenco utenti (colonne Ufficio e Dotazione), nella ricerca (trovi una persona
    anche dall'ufficio o da un apparecchio) e nelle esportazioni Excel/PDF degli utenti.
  - Nuova persona dalla stanza: PC = scheda della stanza > "Nuova persona..." (scheda completa; per
@@ -393,6 +405,51 @@ PERSONE, UFFICIO E DOTAZIONE
    postazione resta com'e'.
  - Scambio col telefono: ufficio e dotazione viaggiano nei file di scambio nei due sensi. Vince la
    modifica piu' recente. Un file vecchio (senza ufficio e dotazione) non cancella quello che c'e'.
+
+SCRIVANIE DISEGNATE (PC e telefono)
+ - Una scrivania per ogni postazione della stanza: prima quelle occupate (con il nome della
+   persona), poi le libere (sbiadite) fino al numero di "Scrivanie totali" della stanza. Se in una
+   stanza non hai scritto le scrivanie totali, vedi solo quelle occupate.
+ - Sulla scrivania: sotto al disegno ci sono il nome, "S/N" del PC (oppure "S/N non inserito"),
+   il portatile, il cellulare e il telefono Teams scelti, e "+ N apparecchi" per il resto della
+   dotazione.
+ - PC: Stampanti > Piani e stanze > scegli "Scrivanie" (accanto a Edificio e Piano): vedi le
+   scrivanie di tutte le stanze del piano. Clic su una scrivania occupata = finestra "Postazione"
+   con il S/N grande e il pulsante "Copia S/N", IMEI, telefono, matricola, sede, la dotazione e i
+   pulsanti "Modifica la persona..." e "Apri la stanza...". Clic su una scrivania libera = apre
+   la stanza. Anche dentro la scheda della stanza c'e' la scheda "Scrivanie" (accanto a
+   "Elenco").
+ - Telefono: Stampanti > Piani e stanze: sotto la pianta c'e' "Scrivanie del piano" (una riga per
+   stanza); dentro la scheda della stanza c'e' la sezione "Scrivanie". Tocchi la scrivania e si
+   apre il dettaglio con il S/N, "Copia il S/N" e la dotazione.
+ - Scegliere cellulare, portatile e telefono Teams: nella finestra "Postazione" (PC) o nel
+   dettaglio (telefono) ci sono le tre scelte:
+     * Cellulare sulla scrivania: Non indicato / S24 / S24 Plus / S25 (Samsung Galaxy). Cambia la
+       foto del telefono.
+     * Portatile: Non indicato / Dell 13 pollici / Dell 15 pollici. Cambia la foto del Dell, piu'
+       piccolo il 13 e piu' grande il 15.
+     * Telefono Teams (AudioCodes C435HD): spunta o togli.
+   Nella finestra ci sono anche le tre foto in grande, con il nome sotto.
+   Se la persona ha un modello diverso (per esempio un Samsung A54 o un Latitude) compare la voce
+   "Altro: ..." e finche' non scegli altro NON cambio niente.
+ - Dove si scrive: la scelta va nella DOTAZIONE della persona (righe "Cellulare" con modello S24,
+   S24 Plus o S25; "Notebook" con modello Dell 13 pollici o Dell 15 pollici; "Telefono Teams" con
+   modello AudioCodes C435HD). Quindi viaggia nel file di scambio come il resto della dotazione e
+   si puo' cambiare anche dalla scheda della persona. Il seriale scritto in una riga non si perde
+   quando cambi il modello. Il telefono si cambia solo toccando la scelta, non serve salvare.
+ - Chi ha un IMEI ma nessun cellulare in dotazione: disegno il cellulare classico (S24), senza
+   scritta, finche' non scegli il modello. Se nella dotazione c'e' scritto S4, S4 Plus o S5 (i nomi
+   sbagliati dell'inizio) valgono come S24, S24 Plus e S25.
+ - Le foto (portatile Dell, cellulari Galaxy, telefono Teams) sono quelle che mi hai mandato,
+   ritagliate senza sfondo: il Dell 13 e il Dell 15 usano due foto diverse (ho preso la prima come 13
+   e la seconda come 15: se sono al contrario dimmelo). Sul telefono sono i file disp-*.png nella
+   cartella docs, sul PC sono dentro il programma (desk_images.py). Sono foto di prodotti uguali a
+   quelli in uso, non dei tuoi apparecchi: se non ti piacciono si cambiano.
+ - Un modello diverso dai tre cellulari o dai due Dell (voce "Altro: ...") ha un disegno semplice,
+   senza foto. Senza nessuna scelta la scrivania mostra solo monitor, tastiera e mouse.
+ - Telefono: dopo aver caricato i file nuovi su GitHub riapri l'app (versione "helpdesk-v19"),
+   poi rifai l'esportazione dal PC e "Ricevi dal PC", cosi' scrivanie, cellulari e portatili
+   arrivano uguali.
 
 IMPORTARE L'ELENCO DI STANZE E PERSONE (solo PC)
  - Serve un file .json "elenco stanze e persone" (te lo preparo io dalle targhette delle porte).
