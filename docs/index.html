@@ -66,6 +66,7 @@ label.chk{display:flex;align-items:center;gap:10px;font-weight:600;margin:8px 0;
 .stats div.link{cursor:pointer}.stats b.red{color:var(--red)}
 .pr span.alert{display:block;color:var(--red);font-weight:700}
 .pr{position:relative}
+.pr.off{border-color:var(--red);background:rgba(209,34,51,.07)}.pr.off img{opacity:.45;filter:grayscale(1)}
 .dots{position:absolute;top:-6px;right:-6px;display:flex;gap:3px;z-index:1}
 .dot{display:inline-block;min-width:20px;height:20px;line-height:16px;border-radius:10px;font-style:normal;font-weight:800;font-size:11px;text-align:center;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.35);padding:0 3px;box-sizing:border-box}
 .dot.red{background:var(--red);color:#fff}.dot.yel{background:#f2c500;color:#4a3b00}
@@ -349,6 +350,13 @@ const setMeta = (k, v) => put("meta", { k, v });
 /* ================== Utilità ================== */
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+/* dotazione di una persona: elenco libero di apparecchi {tipo, modello, seriale} */
+const TIPI_DOT_PERS = ["Notebook", "PC fisso", "Monitor", "Smartphone", "Tablet", "Scheda SIM", "Cuffie", "Telefono fisso", "Token / smart card", "Stampante personale", "Altro"];
+const oneLine = v => String(v ?? "").split(/\s+/).filter(Boolean).join(" ");
+const cleanDot = list => (Array.isArray(list) ? list : []).filter(r => r && typeof r === "object")
+  .map(r => ({ tipo: oneLine(r.tipo).slice(0, 40), modello: oneLine(r.modello).slice(0, 80), seriale: oneLine(r.seriale).slice(0, 40) }))
+  .filter(r => r.tipo || r.modello || r.seriale);
+const dotText = (list, sep = "; ") => cleanDot(list).map(r => { const t = [r.tipo, r.modello].filter(Boolean).join(" "); return r.seriale ? (t ? `${t} (${r.seriale})` : r.seriale) : t; }).join(sep);
 const nowIso = () => new Date().toISOString();
 const pad = n => String(n).padStart(2, "0");
 const localInput = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
@@ -685,12 +693,14 @@ async function renderUsers() {
   const all = await getAll("interventi"), count = {}, last = {};
   all.forEach(i => { const k = keyOf(i.utente); count[k] = (count[k] || 0) + 1; if (!last[k] || i.data_ora > last[k]) last[k] = i.data_ora; });
   const q = words($("uSearch").value), sede = $("uSede").value;
-  usrFiltered = users.filter(u => { const h = [u.nome, u.matricola, u.sede, u.telefono, u.seriale_pc, u.imei].join(" ").toLowerCase(); return (!sede || u.sede === sede) && q.every(t => h.includes(t)); })
+  usrFiltered = users.filter(u => { const h = [u.nome, u.ufficio, u.matricola, u.sede, u.telefono, u.seriale_pc, u.imei, dotText(u.dotazione)].join(" ").toLowerCase(); return (!sede || u.sede === sede) && q.every(t => h.includes(t)); })
     .map(u => ({ ...u, n: count[u.key] || 0, ultimo: last[u.key] || "" }));
   $("uCount").textContent = `Utenti: ${usrFiltered.length} su ${users.length}`;
   $("uList").innerHTML = usrFiltered.map(u => `<div class="card" data-k="${esc(u.key)}"><h3>${esc(u.nome)}</h3>
     <div class="meta">${u.matricola ? "Matricola " + esc(u.matricola) + " · " : ""}${esc(u.sede || "sede non indicata")} · ${u.n} interventi</div>
-    <div class="meta">${u.telefono ? "Tel " + esc(u.telefono) + " · " : ""}${u.seriale_pc ? "SN " + esc(u.seriale_pc) + " · " : ""}${u.imei ? "IMEI " + esc(u.imei) : ""}</div></div>`).join("") || `<div class="hint">Nessun utente. Si aggiungono da soli quando salvi un intervento.</div>`;
+    ${u.ufficio ? `<div class="meta">${esc(u.ufficio)}</div>` : ""}
+    <div class="meta">${u.telefono ? "Tel " + esc(u.telefono) + " · " : ""}${u.seriale_pc ? "SN " + esc(u.seriale_pc) + " · " : ""}${u.imei ? "IMEI " + esc(u.imei) : ""}</div>
+    ${cleanDot(u.dotazione).length ? `<div class="meta">Dotazione: ${esc(dotText(u.dotazione))}</div>` : ""}</div>`).join("") || `<div class="hint">Nessun utente. Si aggiungono da soli quando salvi un intervento.</div>`;
   $("uList").querySelectorAll(".card").forEach(c => c.onclick = () => editUser(c.dataset.k));
 }
 $("uSearch").addEventListener("input", renderUsers);
@@ -699,22 +709,38 @@ $("uNew").onclick = () => editUser(null);
 $("uExport").onclick = () => openExport("usr");
 function editUser(k) {
   const isNew = !k;
-  const u = isNew ? { key: "", nome: "", matricola: "", sede: "", telefono: "", seriale_pc: "", imei: "" } : users.find(x => x.key === k);
+  const u = isNew ? { key: "", nome: "", ufficio: "", matricola: "", sede: "", telefono: "", seriale_pc: "", imei: "", dotazione: [] } : users.find(x => x.key === k);
   if (!u) return;
+  let dot = cleanDot(u.dotazione);
   const m = $("modal");
   m.innerHTML = `<div class="card"><h3>${isNew ? "Nuovo utente" : "Scheda utente"}</h3>
     <label>Nome e cognome</label><input id="eNome" autocapitalize="words" autocorrect="off" spellcheck="false" value="${esc(u.nome)}">
+    <label>Ufficio</label><input id="eUff" autocomplete="off" autocorrect="off" spellcheck="false" value="${esc(u.ufficio || "")}">
     <label>Matricola aziendale</label><input id="eMat" autocapitalize="characters" value="${esc(u.matricola)}">
     <label>Sede</label><input id="eSede" autocomplete="off" autocorrect="off" spellcheck="false" autocapitalize="words" value="${esc(u.sede)}">
     <label>Telefono</label><input id="eTel" inputmode="tel" value="${esc(u.telefono)}">
     <label>Seriale PC</label><input id="eSn" data-scan="serial" value="${esc(u.seriale_pc)}">
     <label>IMEI cellulare</label><input id="eImei" inputmode="numeric" data-scan="imei" value="${esc(u.imei)}">
+    <label>Dotazione</label><div id="eDot"></div>
+    <button class="btn" id="eDotAdd" type="button">+ Aggiungi un apparecchio</button>
     ${isNew ? "" : `<label>Dove si siede</label><div id="eDove"></div>`}
     <button class="btn green" id="eSave" type="button">Salva</button>
     ${isNew ? "" : `<button class="btn" id="eCopy" type="button">📋 Copia dati utente</button><button class="btn navy" id="eSee" type="button">Vedi i suoi interventi</button><button class="btn" id="eVer" type="button">📝 Nuovo verbale per questo utente</button><button class="btn red" id="eDel" type="button">Elimina utente</button>`}
     <button class="btn" id="eClose" type="button">Chiudi</button><div id="eMsg"></div></div>`;
   m.classList.remove("hidden");
   autoComplete($("eSede"), sedeItems);
+  autoComplete($("eUff"), () => [...new Set(users.map(x => x.ufficio).filter(Boolean))].sort((a, b) => a.localeCompare(b, "it")).map(t => ({ text: t })));
+  const readDot = () => [...$("eDot").querySelectorAll(".dotRow")].map(r => ({ tipo: r.querySelector(".dT").value, modello: r.querySelector(".dM").value, seriale: r.querySelector(".dS").value }));
+  const drawDot = () => {
+    $("eDot").innerHTML = dot.map((r, n) => `<div class="dotRow" data-n="${n}" style="border:1px solid #d0d7e2;border-radius:8px;padding:6px;margin:4px 0">
+      <input class="dT" list="tipiDot" placeholder="Apparecchio (es. Smartphone)" value="${esc(r.tipo)}">
+      <input class="dM" placeholder="Modello" value="${esc(r.modello)}">
+      <input class="dS" placeholder="Seriale o IMEI" value="${esc(r.seriale)}">
+      <button class="btn red dX" type="button">Togli</button></div>`).join("") + `<datalist id="tipiDot">${TIPI_DOT_PERS.map(t => `<option value="${esc(t)}">`).join("")}</datalist>`;
+    $("eDot").querySelectorAll(".dX").forEach(b => b.onclick = () => { dot = readDot(); dot.splice(+b.closest(".dotRow").dataset.n, 1); drawDot(); });
+  };
+  drawDot();
+  $("eDotAdd").onclick = () => { dot = readDot(); dot.push({ tipo: "", modello: "", seriale: "" }); drawDot(); const last = $("eDot").querySelectorAll(".dT"); if (last.length) last[last.length - 1].focus(); };
   $("eClose").onclick = () => m.classList.add("hidden");
   if (!isNew) {
     if (window.ROOMS) ROOMS.dove(u.key, $("eDove"));
@@ -731,7 +757,7 @@ function editUser(k) {
     const nome = normName($("eNome").value); if (!nome) return show($("eMsg"), "Scrivi il nome.", true);
     const nk = keyOf(nome);
     if (nk !== u.key && users.some(x => x.key === nk)) return show($("eMsg"), "Esiste già un utente con questo nome.", true);
-    const nu = { key: nk, nome, matricola: $("eMat").value.trim(), sede: normName($("eSede").value), telefono: $("eTel").value.trim(), seriale_pc: $("eSn").value.trim(), imei: $("eImei").value.trim(), modificato: nowIso() };
+    const nu = { key: nk, nome, ufficio: oneLine($("eUff").value), dotazione: cleanDot(readDot()), matricola: $("eMat").value.trim(), sede: normName($("eSede").value), telefono: $("eTel").value.trim(), seriale_pc: $("eSn").value.trim(), imei: $("eImei").value.trim(), modificato: nowIso() };
     if (!isNew && nk !== u.key) {
       await del("utenti", u.key);
       for (const i of await getAll("interventi")) if (keyOf(i.utente) === u.key) { i.utente = nome; i.modificato = nowIso(); await put("interventi", i); }
@@ -753,12 +779,14 @@ const dayDiff = dt => { const m = /^(\d{4})-(\d\d)-(\d\d)/.exec(dt || ""); if (!
 const agoShort = n => n === null ? "mai" : n === 0 ? "oggi" : n === 1 ? "ieri" : `${n} gg fa`;
 const agoLong = n => n === null ? "mai registrato" : n === 0 ? "cambiato oggi" : n === 1 ? "cambiato ieri" : `cambiato ${n} giorni fa`;
 const modKey = m => (m || "").trim().replace(/\s+/g, " ").toLowerCase();
-const printerImg = s => /3351|3350|3320/i.test(s.modello || "") ? "stampante-c3351i.png" : "stampante-c360i.png";
+const printerImg = s => /3351|3350|3320/i.test(s.modello || "") ? "stampante-c3350i.png" : "stampante-c250i.png";
 async function loadPrn() {
   edifici = (await getAll("edifici")).sort((a, b) => a.nome.localeCompare(b.nome, "it"));
   stampanti = await getAll("stampanti"); tonerAll = await getAll("toner");
   manutAll = await getAll("manut"); scortaAll = await getAll("scorta"); scortaAgg = (await getMeta("scortaAgg")) || "";
+  if (window.ROOMS) await ROOMS.load();   /* serve per scrivere in che stanza sta ogni stampante */
 }
+const prnRoom = s => (window.ROOMS && ROOMS.roomCode && s.stanza_uid) ? ROOMS.roomCode(s.stanza_uid) : "";
 /* scorta toner: i numeri arrivano dal PC; qui tolgo i cambi registrati sul telefono dopo l'ultimo scambio */
 const scKey = (modello, colore) => (modello || "").trim().toLowerCase() + "|" + colore;
 const scStatus = (q, s) => q <= 0 ? "Finito" : q <= s ? "In esaurimento" : "OK";
@@ -804,7 +832,8 @@ function prnFlags(s, sc) {
 }
 function prCard(s, sc) {
   const f = prnFlags(s, sc), last = lastToner(s.uid), lowTxt = f.low.map(r => `${r.colore} (${r.ora})`).join(", ");
-  return `<div class="pr" data-u="${esc(s.uid)}">${f.red || f.low.length ? `<div class="dots">${f.red ? `<i class="dot red" title="${f.red} ${f.red === 1 ? "richiesta" : "richieste"} al tecnico Konica ancora da eseguire">${f.red}</i>` : ""}${f.low.length ? `<i class="dot yel" title="Scorta in esaurimento: ${esc(lowTxt)}">!</i>` : ""}</div>` : ""}<img src="${printerImg(s)}" alt=""><b>${esc(printerName(s))}</b><span>${esc(s.modello || "")}</span>${f.red ? `<span class="alert">tecnico richiesto</span>` : ""}${f.low.length ? `<span class="alert warn">scorta bassa: ${esc(lowTxt)}</span>` : ""}
+  const off = s.fuori_servizio ? 1 : 0;
+  return `<div class="pr${off ? " off" : ""}" data-u="${esc(s.uid)}">${off || f.red || f.low.length ? `<div class="dots">${off ? `<i class="dot red" title="Fuori servizio (rotta)">✕</i>` : ""}${f.red ?`<i class="dot red" title="${f.red} ${f.red === 1 ? "richiesta" : "richieste"} al tecnico Konica ancora da eseguire">${f.red}</i>` : ""}${f.low.length ? `<i class="dot yel" title="Scorta in esaurimento: ${esc(lowTxt)}">!</i>` : ""}</div>` : ""}<img src="${printerImg(s)}" alt=""><b>${esc(printerName(s))}</b><span>${esc(s.modello || "")}</span>${prnRoom(s) ? `<span>Stanza ${esc(prnRoom(s))}</span>` : ""}${off ? `<span class="alert">FUORI SERVIZIO</span>` : ""}${f.red ? `<span class="alert">tecnico richiesto</span>` : ""}${f.low.length ? `<span class="alert warn">scorta bassa: ${esc(lowTxt)}</span>` : ""}
     <div class="tcs"><div class="th">Cambiato:</div>${COLORI.map(c => { const a = dayDiff(last[c[0]]); return `<div class="tc" data-c="${c[0]}" title="${c[0]}: ${agoLong(a)}"><i class="nm" style="color:${c[2]}">${c[0] === "Vaschetta" ? "Vasch." : c[0]}</i><em>${agoShort(a)}</em></div>`; }).join("")}</div></div>`;
 }
 function lastToner(suid) { const m = {}; tonerAll.filter(t => t.stampante_uid === suid).forEach(t => { if (!m[t.colore] || t.data_ora > m[t.colore]) m[t.colore] = t.data_ora; }); return m; }
@@ -813,8 +842,8 @@ function openPrinter(uid, msg, err) {
   const e = edifici.find(x => x.uid === s.edificio_uid) || {}, m = $("modal"), picked = new Set(), last = lastToner(uid);
   const hist = tonerAll.filter(t => t.stampante_uid === uid).sort((a, b) => (b.data_ora + b.modificato).localeCompare(a.data_ora + a.modificato));
   m.innerHTML = `<div class="card full"><h3>${esc(printerName(s))}</h3>
-    <div class="meta">${esc(e.nome || "")} · ${floorLabel(s.piano)}${s.modello ? " · " + esc(s.modello) : ""}</div>
-    ${s.ip ? `<div class="meta">IP: ${esc(s.ip)}</div>` : ""}${s.note ? `<div class="meta">Note: ${esc(s.note)}</div>` : ""}
+    <div class="meta">${esc(e.nome || "")} · ${floorLabel(s.piano)}${prnRoom(s) ? " · stanza " + esc(prnRoom(s)) : ""}${s.modello ? " · " + esc(s.modello) : ""}</div>
+    ${s.fuori_servizio ? `<div class="meta" style="color:var(--red);font-weight:800">FUORI SERVIZIO (stampante rotta)</div>` : ""}${s.seriale ? `<div class="meta">N. di serie: <b>${esc(s.seriale)}</b></div>` : ""}${s.ip ? `<div class="meta">IP: ${esc(s.ip)}</div>` : ""}${s.note ? `<div class="meta">Note: ${esc(s.note)}</div>` : ""}
     <label>Ultimo cambio</label>
     <div>${COLORI.map(c => `<div class="meta"><span class="sw" style="background:${c[1]}"></span>${c[0]}: ${agoLong(dayDiff(last[c[0]]))}${last[c[0]] ? " (" + fmtDt(last[c[0]]) + ")" : ""}</div>`).join("")}</div>
     <label>Registra cambio toner o vaschetta</label>
@@ -954,7 +983,7 @@ function renderScorta() {
 }
 
 /* ================== Esporta PDF / Excel ================== */
-const USER_COLS = [["nome", "Utente", 55, 26, true], ["matricola", "Matricola", 28, 14, true], ["sede", "Sede", 30, 16, true], ["telefono", "Telefono", 35, 18, true], ["seriale_pc", "Seriale PC", 45, 22, true], ["imei", "IMEI cellulare", 45, 20, true], ["n", "N. interventi", 22, 14, false], ["ultimo", "Ultimo intervento", 32, 18, false]];
+const USER_COLS = [["nome", "Utente", 55, 26, true], ["matricola", "Matricola", 28, 14, true], ["ufficio", "Ufficio", 45, 26, false], ["sede", "Sede", 30, 16, true], ["telefono", "Telefono", 35, 18, true], ["seriale_pc", "Seriale PC", 45, 22, true], ["imei", "IMEI cellulare", 45, 20, true], ["dotazione", "Dotazione", 70, 40, false], ["n", "N. interventi", 22, 14, false], ["ultimo", "Ultimo intervento", 32, 18, false]];
 const tally = arr => { const m = new Map(); arr.forEach(x => m.set(x, (m.get(x) || 0) + 1)); return [...m].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(b[0], "it")); };
 function dsInt() {
   const f = regFilter(), items = regFiltered;
@@ -1005,7 +1034,7 @@ function dsMan() {
 }
 function dsUsr(keys) {
   const cols = USER_COLS.filter(c => keys.includes(c[0])), items = usrFiltered;
-  const cell = (u, k) => k === "ultimo" ? (u.ultimo ? fmtDt(u.ultimo) : "") : k === "n" ? u.n : (u[k] || "");
+  const cell = (u, k) => k === "ultimo" ? (u.ultimo ? fmtDt(u.ultimo) : "") : k === "n" ? u.n : k === "dotazione" ? dotText(u.dotazione) : (u[k] || "");
   const ps = []; if ($("uSearch").value.trim()) ps.push("Cerca: " + $("uSearch").value.trim()); if ($("uSede").value) ps.push("Sede: " + $("uSede").value);
   return { file: "utenti", title: "Dati utenti", sheet: "Utenti", filtri: ps.join("; ") || "nessuno", headers: cols.map(c => c[1]), rows: items.map(u => cols.map(c => cell(u, c[0]))),
     widths: cols.map(c => c[2]), xw: cols.map(c => c[3]), totalLabel: "Utenti esportati", total: items.length, summary: [] };
@@ -1074,7 +1103,7 @@ async function buildExport(mode) {
   const usersOut = [...us, ...users.filter(u => needed.has(u.key) && !us.includes(u))];
   return {
     tipo: "helpdesk-telefono", versione: 6, creato: nowIso(),
-    utenti: usersOut.map(u => ({ nome: u.nome, matricola: u.matricola || "", sede: u.sede || "", telefono: u.telefono || "", seriale_pc: u.seriale_pc || "", imei: u.imei || "", modificato: u.modificato || nowIso() })),
+    utenti: usersOut.map(u => ({ nome: u.nome, ufficio: u.ufficio || "", matricola: u.matricola || "", sede: u.sede || "", telefono: u.telefono || "", seriale_pc: u.seriale_pc || "", imei: u.imei || "", dotazione: cleanDot(u.dotazione), modificato: u.modificato || nowIso() })),
     interventi: items.map(i => ({ uid: i.uid, data_ora: i.data_ora, utente: i.utente, sede: i.sede || "", richiesta: i.richiesta, soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", stato: stOf(i), modificato: i.modificato, foto: (i.foto || []).map(f => ({ nome: f.nome, data: f.data })) })),
     toner: tons.map(t => ({ uid: t.uid, stampante_uid: t.stampante_uid, colore: t.colore, data_ora: t.data_ora, note: t.note || "", modificato: t.modificato })),
     manutenzioni: mans.map(m => ({ uid: m.uid, stampante_uid: m.stampante_uid, data_ora: m.data_ora, data_tecnico: m.data_tecnico || "", ticket: m.ticket || "", tecnico: m.tecnico || "", problema: m.problema || "", intervento: m.intervento || "", stato: m.stato, modificato: m.modificato })),
@@ -1107,7 +1136,7 @@ async function mergeFile(file, restore) {
   for (const u of data.utenti || []) {
     const nome = normName(u.nome || ""); if (!nome) continue;
     const k = keyOf(nome), cur = users.find(x => x.key === k), mod = u.modificato || "";
-    const rec = { key: k, nome: cur ? cur.nome : nome, matricola: "matricola" in u ? String(u.matricola || "").trim() : (cur ? cur.matricola || "" : ""), sede: normName(u.sede || ""), telefono: String(u.telefono || "").trim(), seriale_pc: String(u.seriale_pc || "").trim(), imei: String(u.imei || "").trim(), modificato: mod || nowIso() };
+    const rec = { key: k, nome: cur ? cur.nome : nome, ufficio: "ufficio" in u ? oneLine(u.ufficio) : (cur ? cur.ufficio || "" : ""), dotazione: "dotazione" in u ? cleanDot(u.dotazione) : (cur ? cleanDot(cur.dotazione) : []), matricola: "matricola" in u ? String(u.matricola || "").trim() : (cur ? cur.matricola || "" : ""), sede: normName(u.sede || ""), telefono: String(u.telefono || "").trim(), seriale_pc: String(u.seriale_pc || "").trim(), imei: String(u.imei || "").trim(), modificato: mod || nowIso() };
     if (!cur) { await put("utenti", rec); nu++; }
     else if (mod && mod > (cur.modificato || "")) { await put("utenti", rec); au++; }
     users = (await getAll("utenti"));
@@ -1131,7 +1160,7 @@ async function mergeFile(file, restore) {
   for (const s of data.stampanti || []) {
     if (!s.uid || !s.edificio_uid) continue;
     const cur = await getKey("stampanti", s.uid); if (cur && !fromPc) continue;
-    await put("stampanti", { uid: String(s.uid), edificio_uid: String(s.edificio_uid), piano: toInt(s.piano), nome: String(s.nome || ""), modello: String(s.modello || ""), ip: String(s.ip || ""), note: String(s.note || "") });
+    await put("stampanti", { uid: String(s.uid), edificio_uid: String(s.edificio_uid), piano: toInt(s.piano), nome: String(s.nome || ""), modello: String(s.modello || ""), ip: String(s.ip || ""), note: String(s.note || ""), seriale: "seriale" in s ? String(s.seriale || "") : (cur ? cur.seriale || "" : ""), fuori_servizio: "fuori_servizio" in s ? (s.fuori_servizio ? 1 : 0) : (cur ? cur.fuori_servizio || 0 : 0), stanza_uid: "stanza_uid" in s ? String(s.stanza_uid || "") : (cur ? cur.stanza_uid || "" : "") });
     if (!cur) ns++;
   }
   for (const t of data.toner || []) {

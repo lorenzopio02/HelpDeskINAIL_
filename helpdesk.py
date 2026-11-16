@@ -74,7 +74,11 @@ BADGE_GIALLO = "#f2c500"          # bollino giallo (scorta in esaurimento)
 BADGE_GIALLO_TESTO = "#8a5200"    # testo leggibile per la scorta bassa
 TONER_TESTO = {c[0]: c[2] for c in COLORI_TONER}
 
-MODELLI_STAMPANTI = ["bizhub C360i", "bizhub C3351i"]
+# i due modelli di Via delle Porte Nuove (nome come scritto sul fronte della stampante)
+MODELLI_STAMPANTI = ["bizhub C250i", "bizhub C3350i"]
+
+# nomi usati in passato per sbaglio -> nome giusto (il programma propone di correggerli una volta sola)
+MODELLI_DA_CORREGGERE = [("bizhub C3351i", "bizhub C3350i"), ("bizhub C360i", "bizhub C250i")]
 
 # stato di un intervento dell'utente e di una richiesta al tecnico Konica
 STATI_INTERVENTO = ["Aperto", "In attesa", "Risolto"]
@@ -91,9 +95,10 @@ THUMB_PX = 72
 # (chiave, titolo, acceso all'inizio, larghezza PDF in mm, larghezza Excel)
 USER_COLUMNS = [
     ("nome", "Utente", True, 55, 26), ("matricola", "Matricola", True, 28, 14),
-    ("sede", "Sede", True, 30, 16),
+    ("ufficio", "Ufficio", False, 45, 26), ("sede", "Sede", True, 30, 16),
     ("telefono", "Telefono", True, 35, 18), ("seriale_pc", "Seriale PC", True, 45, 22),
-    ("imei", "IMEI cellulare", True, 45, 20), ("n", "N. interventi", False, 22, 14),
+    ("imei", "IMEI cellulare", True, 45, 20), ("dotazione", "Dotazione", False, 70, 40),
+    ("n", "N. interventi", False, 22, 14),
     ("ultimo", "Ultimo intervento", False, 32, 18),
 ]
 
@@ -130,6 +135,48 @@ def clean_room_code(text):
     return " ".join((text or "").split())[:ROOM_CODE_MAX]
 
 
+def clean_serial(text):
+    """Numero di serie: senza spazi in testa/coda o doppi, al massimo 40 caratteri."""
+    return " ".join(str(text or "").split())[:40]
+
+
+# apparecchi che una persona può avere in dotazione (l'elenco è libero: si può scrivere altro)
+TIPI_DOTAZIONE_PERSONA = ["Notebook", "PC fisso", "Monitor", "Smartphone", "Tablet",
+                          "Scheda SIM", "Cuffie", "Telefono fisso", "Token / smart card",
+                          "Stampante personale", "Altro"]
+
+
+def clean_dotazione(value):
+    """Elenco apparecchi di una persona: [{"tipo", "modello", "seriale"}]. Accetta anche il testo
+    JSON salvato nel database; scarta le righe vuote e quelle non valide."""
+    if isinstance(value, (str, bytes)):
+        try:
+            value = json.loads(value or "[]")
+        except ValueError:
+            value = []
+    out = []
+    for r in value if isinstance(value, (list, tuple)) else []:
+        if not isinstance(r, dict):
+            continue
+        row = {"tipo": " ".join(str(r.get("tipo") or "").split())[:40],
+               "modello": " ".join(str(r.get("modello") or "").split())[:80],
+               "seriale": clean_serial(r.get("seriale"))}
+        if any(row.values()):
+            out.append(row)
+    return out
+
+
+def dotazione_text(items, sep="; "):
+    """Riassunto in una riga: «Smartphone Samsung A54 (IMEI 3567…); Monitor Dell»."""
+    parts = []
+    for r in clean_dotazione(items):
+        txt = " ".join(x for x in (r["tipo"], r["modello"]) if x)
+        if r["seriale"]:
+            txt = "%s (%s)" % (txt, r["seriale"]) if txt else r["seriale"]
+        parts.append(txt)
+    return sep.join(parts)
+
+
 def parse_room_codes(text):
     """Un codice per riga (vanno bene anche virgole e punti e virgola). Restituisce
     (codici validi senza doppioni, codici scartati perché troppo lunghi)."""
@@ -144,6 +191,53 @@ def parse_room_codes(text):
             seen.add(code.casefold())
             good.append(code)
     return good, bad
+
+
+_DESK_WORDS = r"(?:postazion[ei]|posti|scrivani[ae]|desks?)"
+_ROOM_PAIR = (
+    # T12; 3   T12<tab>3   T12: 3   T12 = 3   T12 - 3   (anche "3 postazioni")
+    re.compile(r"^(?P<c>[^;\t]+?)\s*(?:[;\t:=]|\s[-\u2013\u2014]\s)\s*(?P<n>\d{1,3})\s*(?:" + _DESK_WORDS
+               + r")?\s*$", re.I),
+    # T12 (3)   T12 (3 postazioni)
+    re.compile(r"^(?P<c>[^;\t()]+?)\s*\(\s*(?P<n>\d{1,3})\s*(?:" + _DESK_WORDS + r")?\s*\)\s*$", re.I),
+)
+
+
+def parse_room_lines(text):
+    """Una stanza per riga, con le postazioni se scritte ("T12; 3", "T12 - 3", "T12 (3)" o due
+    colonne copiate da Excel). Senza numero: solo il codice (più codici sulla stessa riga si
+    separano con virgola o punto e virgola). Restituisce ([(codice, postazioni o None)], scartati)."""
+    order, desks, bad = [], {}, []
+
+    def add(code, n):
+        code = " ".join(code.split())
+        if not code:
+            return
+        if len(code) > ROOM_CODE_MAX:
+            bad.append(code)
+            return
+        k = code.casefold()
+        if k not in desks:
+            order.append(code)
+            desks[k] = n
+        elif n is not None:
+            desks[k] = n
+
+    for line in re.split(r"[\r\n]+", text or ""):
+        line = line.strip()
+        if not line:
+            continue
+        m = None
+        for rx in _ROOM_PAIR:
+            m = rx.match(line)
+            if m:
+                break
+        if m:
+            add(m.group("c"), int(m.group("n")))
+        else:
+            for part in re.split(r"[;,\t]+", line):
+                add(part, None)
+    return [(c, desks[c.casefold()]) for c in order], bad
 
 
 def room_label(r):
@@ -198,8 +292,8 @@ def printer_image_key(model):
     """Sceglie quale foto usare in base al modello scritto."""
     m = (model or "").casefold()
     if any(x in m for x in ("3351", "3350", "3320")):
-        return "c3351i"
-    return "c360i"
+        return "c3350i"        # la piccola (A4)
+    return "c250i"             # la grande (A3)
 
 # --------------------------------------------------------------------------
 # Utilità
@@ -290,7 +384,8 @@ def staging_dir():
 # Verbali Word: impostazioni e cartelle
 # ---------------------------------------------------------------------------
 SETTINGS_DEFAULT = {"tecnico": "", "sede_citta": "Firenze", "indirizzo": "Via Delle Porte Nuove, 61",
-                    "cap": "50144", "cartella_verbali": "", "mappa_pos": ""}
+                    "cap": "50144", "cartella_verbali": "", "mappa_pos": "",
+                    "modelli_rinomina_chiesto": ""}
 
 
 def settings_path():
@@ -875,6 +970,11 @@ def open_path(path):
 # --------------------------------------------------------------------------
 # Database
 # --------------------------------------------------------------------------
+# la stanza (codice) in cui sta una stampante, se la stanza c'è ancora
+ROOM_OF_PRINTER = ("(SELECT r.codice FROM stanze r WHERE r.uid = s.stanza_uid "
+                   "AND s.stanza_uid <> '' AND r.eliminata = 0 "
+                   "AND r.edificio_id = s.edificio_id LIMIT 1) AS stanza_codice, ")
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS utenti (
     id   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -906,7 +1006,9 @@ CREATE TABLE IF NOT EXISTS stampanti (
     nome        TEXT NOT NULL DEFAULT '',
     modello     TEXT NOT NULL DEFAULT '',
     ip          TEXT NOT NULL DEFAULT '',
-    note        TEXT NOT NULL DEFAULT ''
+    note        TEXT NOT NULL DEFAULT '',
+    seriale     TEXT NOT NULL DEFAULT '',
+    fuori_servizio INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS toner (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1064,6 +1166,10 @@ class Database:
             self.conn.execute("ALTER TABLE interventi ADD COLUMN sede TEXT NOT NULL DEFAULT ''")
         if "modificato" not in self._columns("utenti"):
             self.conn.execute("ALTER TABLE utenti ADD COLUMN modificato TEXT NOT NULL DEFAULT ''")
+        for col in ("ufficio", "dotazione"):
+            if col not in self._columns("utenti"):
+                self.conn.execute(
+                    "ALTER TABLE utenti ADD COLUMN %s TEXT NOT NULL DEFAULT ''" % col)
         for col in ("uid", "modificato"):
             if col not in self._columns("interventi"):
                 self.conn.execute(
@@ -1072,6 +1178,13 @@ class Database:
         for table in ("edifici", "stampanti", "toner"):
             if "uid" not in self._columns(table):
                 self.conn.execute("ALTER TABLE %s ADD COLUMN uid TEXT NOT NULL DEFAULT ''" % table)
+        if "seriale" not in self._columns("stampanti"):
+            self.conn.execute("ALTER TABLE stampanti ADD COLUMN seriale TEXT NOT NULL DEFAULT ''")
+        if "fuori_servizio" not in self._columns("stampanti"):
+            self.conn.execute(
+                "ALTER TABLE stampanti ADD COLUMN fuori_servizio INTEGER NOT NULL DEFAULT 0")
+        if "stanza_uid" not in self._columns("stampanti"):
+            self.conn.execute("ALTER TABLE stampanti ADD COLUMN stanza_uid TEXT NOT NULL DEFAULT ''")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_stampanti_uid ON stampanti(uid)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_toner_uid ON toner(uid)")
         if "stato" not in self._columns("interventi"):
@@ -1104,31 +1217,84 @@ class Database:
     def users_with_counts(self):
         rows = self.conn.execute(
             "SELECT u.id, u.nome, u.matricola, u.sede, u.telefono, u.seriale_pc, u.imei, "
-            "u.modificato, "
+            "u.modificato, u.ufficio, u.dotazione, "
             "COUNT(i.id) AS n, "
             "MAX(i.data_ora) AS ultimo "
             "FROM utenti u LEFT JOIN interventi i ON i.utente_id = u.id "
             "GROUP BY u.id ORDER BY u.nome COLLATE NOCASE"
         )
-        return [dict(r) for r in rows]
+        return [self._user_dict(r) for r in rows]
+
+    @staticmethod
+    def _user_dict(row):
+        """Riga utente come dizionario, con la dotazione già letta come elenco."""
+        d = dict(row)
+        if "dotazione" in d:
+            d["dotazione"] = clean_dotazione(d["dotazione"])
+        return d
+
+    def set_user_extra(self, user_id, ufficio=None, dotazione=None, modificato=None):
+        """Imposta ufficio e/o dotazione di una persona (None = lascia com'è). Con valori uguali
+        a quelli già salvati non cambia nulla, nemmeno la data di modifica."""
+        row = self.conn.execute("SELECT ufficio, dotazione FROM utenti WHERE id = ?",
+                                (user_id,)).fetchone()
+        if not row:
+            return False
+        new_uff = row["ufficio"] if ufficio is None else " ".join(str(ufficio).split())[:120]
+        old_dot = clean_dotazione(row["dotazione"])
+        new_dot = old_dot if dotazione is None else clean_dotazione(dotazione)
+        if new_uff == row["ufficio"] and new_dot == old_dot:
+            return False
+        with self.conn:
+            self.conn.execute("UPDATE utenti SET ufficio = ?, dotazione = ?, modificato = ? "
+                              "WHERE id = ?", (new_uff, json.dumps(new_dot, ensure_ascii=False)
+                                               if new_dot else "", modificato or now_utc_iso(),
+                                               user_id))
+        return True
+
+    def uffici(self):
+        """Gli uffici già scritti (senza doppioni), per il completamento automatico."""
+        found = {}
+        for r in self.conn.execute("SELECT DISTINCT ufficio FROM utenti WHERE ufficio <> ''"):
+            found.setdefault(r[0].casefold(), r[0])
+        return sorted(found.values(), key=str.casefold)
 
     def find_user(self, name):
         row = self.conn.execute(
-            "SELECT id, nome, matricola, sede, telefono, seriale_pc, imei, modificato "
-            "FROM utenti WHERE nome = ?",
+            "SELECT id, nome, matricola, sede, telefono, seriale_pc, imei, modificato, "
+            "ufficio, dotazione FROM utenti WHERE nome = ?",
             (normalize_name(name),)
         ).fetchone()
-        return dict(row) if row else None
+        return self._user_dict(row) if row else None
+
+    def find_user_like(self, name):
+        """La persona con questo nome; riconosce anche «Rossi Mario» per «Mario Rossi» (stesse
+        parole in ordine diverso), purché ce ne sia una sola."""
+        exact = self.find_user(name)
+        if exact:
+            return exact
+        words = sorted(key_name(name).split())
+        if len(words) < 2:
+            return None
+        hits = [r["id"] for r in self.conn.execute("SELECT id, nome FROM utenti")
+                if sorted(key_name(r["nome"]).split()) == words]
+        if len(hits) != 1:
+            return None
+        row = self.conn.execute(
+            "SELECT id, nome, matricola, sede, telefono, seriale_pc, imei, modificato, "
+            "ufficio, dotazione FROM utenti WHERE id = ?", (hits[0],)).fetchone()
+        return self._user_dict(row)
 
     def find_user_by_matricola(self, matricola):
         m = (matricola or "").strip()
         if not m:
             return None
         row = self.conn.execute(
-            "SELECT id, nome, matricola, sede, telefono, seriale_pc, imei, modificato "
-            "FROM utenti WHERE matricola = ? COLLATE NOCASE ORDER BY nome LIMIT 1", (m,)
+            "SELECT id, nome, matricola, sede, telefono, seriale_pc, imei, modificato, "
+            "ufficio, dotazione FROM utenti WHERE matricola = ? COLLATE NOCASE "
+            "ORDER BY nome LIMIT 1", (m,)
         ).fetchone()
-        return dict(row) if row else None
+        return self._user_dict(row) if row else None
 
     def sedi(self):
         found = list(SEDI_TOSCANA)
@@ -1401,7 +1567,9 @@ class Database:
     # --- stampanti ---
     def printers_of(self, edificio_id):
         rows = self.conn.execute(
-            "SELECT s.id, s.edificio_id, s.piano, s.nome, s.modello, s.ip, s.note, "
+            "SELECT s.id, s.edificio_id, s.piano, s.nome, s.modello, s.ip, s.note, s.seriale, "
+            "s.fuori_servizio, s.stanza_uid, "
+            + ROOM_OF_PRINTER +
             "(SELECT t.colore || '|' || t.data_ora FROM toner t WHERE t.stampante_id = s.id "
             " ORDER BY t.data_ora DESC, t.id DESC LIMIT 1) AS ultimo, "
             "(SELECT COUNT(*) FROM manutenzioni m WHERE m.stampante_id = s.id "
@@ -1433,7 +1601,9 @@ class Database:
 
     def get_stampante(self, sid):
         row = self.conn.execute(
-            "SELECT s.id, s.edificio_id, s.piano, s.nome, s.modello, s.ip, s.note, "
+            "SELECT s.id, s.edificio_id, s.piano, s.nome, s.modello, s.ip, s.note, s.seriale, "
+            "s.fuori_servizio, s.stanza_uid, "
+            + ROOM_OF_PRINTER +
             "e.nome AS edificio, e.sede FROM stampanti s JOIN edifici e ON e.id = s.edificio_id "
             "WHERE s.id = ?", (sid,)).fetchone()
         return dict(row) if row else None
@@ -1443,18 +1613,99 @@ class Database:
             "SELECT DISTINCT modello FROM stampanti WHERE modello <> '' ORDER BY modello")
         return [r[0] for r in rows]
 
-    def add_stampante(self, edificio_id, piano, nome, modello, ip, note):
+    def count_model(self, modello):
+        """Quante stampanti e quante voci di scorta toner portano questo modello."""
+        key = model_key(modello)
+        n_p = sum(1 for r in self.conn.execute("SELECT modello FROM stampanti")
+                  if model_key(r["modello"]) == key)
+        n_s = sum(1 for r in self.conn.execute("SELECT modello FROM scorta")
+                  if model_key(r["modello"]) == key)
+        return n_p, n_s
+
+    def rename_model(self, old, new):
+        """Cambia il nome del modello su tutte le stampanti e nella scorta toner.
+        Se il nome nuovo c'è già nella scorta, le quantità si sommano.
+        Restituisce (stampanti cambiate, voci di scorta cambiate)."""
+        new = " ".join((new or "").split())
+        key = model_key(old)
+        if not new or not key:
+            return 0, 0
+        n_p = n_s = 0
+        with self.conn:
+            for r in self.conn.execute("SELECT id, modello FROM stampanti").fetchall():
+                if model_key(r["modello"]) == key:
+                    self.conn.execute("UPDATE stampanti SET modello = ? WHERE id = ?",
+                                      (new, r["id"]))
+                    n_p += 1
+            rows = [r for r in self.conn.execute(
+                "SELECT modello, colore, quantita, soglia FROM scorta").fetchall()
+                if model_key(r["modello"]) == key]
+            for r in rows:
+                self.conn.execute("DELETE FROM scorta WHERE modello = ? AND colore = ?",
+                                  (r["modello"], r["colore"]))
+                t = self.conn.execute(
+                    "SELECT quantita, soglia FROM scorta WHERE modello = ? AND colore = ?",
+                    (new, r["colore"])).fetchone()
+                if t:
+                    self.conn.execute(
+                        "UPDATE scorta SET quantita = ?, soglia = ?, modificato = ? "
+                        "WHERE modello = ? AND colore = ?",
+                        (t["quantita"] + r["quantita"], max(t["soglia"], r["soglia"]),
+                         now_utc_iso(), new, r["colore"]))
+                else:
+                    self.conn.execute(
+                        "INSERT INTO scorta(modello, colore, quantita, soglia, modificato) "
+                        "VALUES (?,?,?,?,?)",
+                        (new, r["colore"], r["quantita"], r["soglia"], now_utc_iso()))
+                n_s += 1
+        return n_p, n_s
+
+    def add_stampante(self, edificio_id, piano, nome, modello, ip, note, seriale="",
+                      fuori_servizio=False, stanza_uid=""):
         with self.conn:
             cur = self.conn.execute(
-                "INSERT INTO stampanti(edificio_id, piano, nome, modello, ip, note) "
-                "VALUES (?,?,?,?,?,?)", (edificio_id, piano, nome, modello, ip, note))
+                "INSERT INTO stampanti(edificio_id, piano, nome, modello, ip, note, seriale, "
+                "fuori_servizio, stanza_uid) VALUES (?,?,?,?,?,?,?,?,?)",
+                (edificio_id, piano, nome, modello, ip, note, clean_serial(seriale),
+                 1 if fuori_servizio else 0, stanza_uid or ""))
         return cur.lastrowid
 
-    def update_stampante(self, sid, piano, nome, modello, ip, note):
+    def update_stampante(self, sid, piano, nome, modello, ip, note, seriale=None,
+                         fuori_servizio=None, stanza_uid=None):
+        """Numero di serie, stato "fuori servizio" e stanza, se non li passi, restano quelli che c'erano."""
         with self.conn:
             self.conn.execute(
                 "UPDATE stampanti SET piano=?, nome=?, modello=?, ip=?, note=? WHERE id=?",
                 (piano, nome, modello, ip, note, sid))
+            if seriale is not None:
+                self.conn.execute("UPDATE stampanti SET seriale=? WHERE id=?",
+                                  (clean_serial(seriale), sid))
+            if fuori_servizio is not None:
+                self.conn.execute("UPDATE stampanti SET fuori_servizio=? WHERE id=?",
+                                  (1 if fuori_servizio else 0, sid))
+            if stanza_uid is not None:
+                self.conn.execute("UPDATE stampanti SET stanza_uid=? WHERE id=?",
+                                  (stanza_uid or "", sid))
+
+    def printers_in_room(self, stanza_uid):
+        """Le stampanti collegate a una stanza (per la scheda della stanza)."""
+        if not stanza_uid:
+            return []
+        rows = self.conn.execute(
+            "SELECT s.id, s.nome, s.modello, s.seriale, s.fuori_servizio FROM stampanti s "
+            "WHERE s.stanza_uid = ? ORDER BY s.id", (stanza_uid,))
+        return [dict(r) for r in rows]
+
+    def printer_with_serial(self, seriale, escludi_id=None):
+        """Un'altra stampante con lo stesso numero di serie (per avvisare di un doppione)."""
+        s = clean_serial(seriale)
+        if not s:
+            return None
+        row = self.conn.execute(
+            "SELECT s.id, s.nome, s.modello, s.piano, e.nome AS edificio FROM stampanti s "
+            "JOIN edifici e ON e.id = s.edificio_id WHERE s.seriale = ? COLLATE NOCASE "
+            "AND (? IS NULL OR s.id <> ?) ORDER BY s.id LIMIT 1", (s, escludi_id, escludi_id)).fetchone()
+        return dict(row) if row else None
 
     def delete_stampante(self, sid):
         with self.conn:
@@ -1603,15 +1854,24 @@ class Database:
         return cur.lastrowid
 
     def add_stanze_bulk(self, edificio_id, piano, testo):
-        """Incolla più codici (uno per riga). Restituisce {"nuove", "esistenti", "scartate"}."""
-        good, bad = parse_room_codes(testo)
-        res = {"nuove": [], "esistenti": [], "scartate": bad}
-        for code in good:
-            if self.find_stanza_by_code(edificio_id, piano, code):
-                res["esistenti"].append(code)
+        """Incolla più stanze (una per riga, anche con le postazioni: "T12; 3"). Una stanza già
+        presente non si duplica; se la riga porta un numero di postazioni diverso lo aggiorna.
+        Restituisce {"nuove", "esistenti", "aggiornate", "scartate", "scrivanie"}."""
+        rooms, bad = parse_room_lines(testo)
+        res = {"nuove": [], "esistenti": [], "aggiornate": [], "scartate": bad, "scrivanie": {}}
+        for code, n in rooms:
+            cur = self.find_stanza_by_code(edificio_id, piano, code)
+            if cur:
+                if n is not None and n != (cur["scrivanie"] or 0):
+                    self.update_stanza(cur["id"], cur["codice"], n, cur["note"], cur["come"])
+                    res["aggiornate"].append(code)
+                else:
+                    res["esistenti"].append(code)
             else:
-                self.add_stanza(edificio_id, piano, code)
+                self.add_stanza(edificio_id, piano, code, n or 0)
                 res["nuove"].append(code)
+            if n is not None:
+                res["scrivanie"][code] = n
         return res
 
     def update_stanza(self, sid, codice, scrivanie, note, come, modificato=None):
@@ -1662,10 +1922,11 @@ class Database:
     def persone_of(self, stanza_id):
         rows = self.conn.execute(
             "SELECT p.numero, p.modificato AS posto_modificato, u.id AS utente_id, u.nome, "
-            "u.matricola, u.telefono, u.seriale_pc, u.imei FROM postazioni p "
+            "u.matricola, u.telefono, u.seriale_pc, u.imei, u.sede, u.ufficio, u.dotazione "
+            "FROM postazioni p "
             "JOIN utenti u ON u.id = p.utente_id WHERE p.stanza_id = ? "
             "ORDER BY p.numero, u.nome COLLATE NOCASE", (stanza_id,))
-        return [dict(r) for r in rows]
+        return [self._user_dict(r) for r in rows]
 
     def posto_of_user(self, utente_id):
         row = self.conn.execute(
@@ -2233,6 +2494,9 @@ def import_phone_data(db, data):
     """Unisce nel database i dati ricevuti dal telefono (o da un backup del telefono).
     Utenti: vince la modifica più recente. Interventi: quelli già presenti non si duplicano
     (si aggiornano solo se sul telefono sono stati modificati dopo)."""
+    if isinstance(data, dict) and data.get("tipo") == ELENCO_TIPO:
+        raise ValueError("Questo è un elenco di stanze e persone: usa File › Importa elenco "
+                         "stanze e persone.")
     if not isinstance(data, dict) or data.get("tipo") not in ("helpdesk-telefono", "helpdesk-pc"):
         raise ValueError("Questo non è un file dati dell'app Help Desk.")
     res = {"utenti_nuovi": 0, "utenti_aggiornati": 0, "interventi_nuovi": 0,
@@ -2256,14 +2520,24 @@ def import_phone_data(db, data):
         fields = (normalize_name(_clean(u.get("sede"))), _clean(u.get("telefono")),
                   _clean(u.get("seriale_pc")), _clean(u.get("imei")), matricola)
         mod = _clean(u.get("modificato"))
+        # ufficio e dotazione: un file di una versione vecchia non li ha, e in quel caso si
+        # tengono quelli già salvati
+        uff = " ".join(_clean(u.get("ufficio")).split()) if "ufficio" in u else None
+        dot = clean_dotazione(u.get("dotazione")) if "dotazione" in u else None
         if not cur:
-            db.add_user(nome, *fields, modificato=mod or now_utc_iso())
+            uid, _ = db.add_user(nome, *fields, modificato=mod or now_utc_iso())
+            db.set_user_extra(uid, uff, dot, modificato=mod or now_utc_iso())
             res["utenti_nuovi"] += 1
-        elif mod and mod > (cur.get("modificato") or "") and \
-                fields != (cur["sede"], cur["telefono"], cur["seriale_pc"], cur["imei"],
-                           cur["matricola"]):
-            db.update_user(cur["id"], cur["nome"], *fields, modificato=mod)
-            res["utenti_aggiornati"] += 1
+        elif mod and mod > (cur.get("modificato") or ""):
+            same_extra = (uff is None or uff == cur["ufficio"]) and \
+                         (dot is None or dot == cur["dotazione"])
+            same_fields = fields == (cur["sede"], cur["telefono"], cur["seriale_pc"],
+                                     cur["imei"], cur["matricola"])
+            if not (same_fields and same_extra):
+                if not same_fields:
+                    db.update_user(cur["id"], cur["nome"], *fields, modificato=mod)
+                db.set_user_extra(cur["id"], uff, dot, modificato=mod)
+                res["utenti_aggiornati"] += 1
 
     if data.get("tipo") != "helpdesk-telefono":
         return res
@@ -2450,6 +2724,129 @@ def photo_data_url(path, px=None):
         return None
 
 
+ELENCO_TIPO = "helpdesk-elenco-stanze"
+
+
+def import_rooms_list(db, data, edificio_id):
+    """Carica nell'edificio un elenco di stanze con le persone (nome e ufficio) e le stampanti
+    (modello, seriale, stanza). Si può rifare quante volte si vuole senza creare doppioni e senza
+    sovrascrivere quello che hai già scritto a mano:
+    - una stanza che c'è già (stesso piano e codice) resta com'è; le scrivanie si scrivono solo se
+      erano vuote;
+    - una persona che c'è già (anche «Rossi Mario» per «Mario Rossi») resta com'è; l'ufficio si
+      scrive solo se era vuoto; chi siede già in un'altra stanza non viene spostato;
+    - una stampante con lo stesso numero di serie non si duplica: le si collega la stanza (se non
+      ne aveva) e, se serve, il modello e lo stato «fuori servizio»."""
+    if not isinstance(data, dict) or data.get("tipo") != ELENCO_TIPO:
+        raise ValueError("Questo non è un elenco di stanze e persone dell'app Help Desk.")
+    edificio = db.conn.execute("SELECT id, sede FROM edifici WHERE id = ?", (edificio_id,)).fetchone()
+    if not edificio:
+        raise ValueError("Scegli prima un edificio.")
+    res = {"stanze_nuove": 0, "stanze_esistenti": 0, "stanze_aggiornate": 0,
+           "persone_nuove": 0, "persone_esistenti": 0, "persone_assegnate": 0,
+           "persone_gia_in_stanza": 0, "persone_altrove": [], "uffici_scritti": 0,
+           "stampanti_nuove": 0, "stampanti_aggiornate": 0, "stampanti_gia_presenti": 0,
+           "scartati": []}
+
+    def to_int(v, default=0):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return default
+
+    for r in data.get("stanze") or []:
+        if not isinstance(r, dict):
+            continue
+        piano, codice = to_int(r.get("piano")), clean_room_code(_clean(r.get("codice")))
+        if not codice:
+            res["scartati"].append("stanza senza codice (piano %d)" % piano)
+            continue
+        if len(" ".join(_clean(r.get("codice")).split())) > ROOM_CODE_MAX:
+            res["scartati"].append("stanza %s...: codice più lungo di %d caratteri"
+                                   % (codice[:12], ROOM_CODE_MAX))
+            continue
+        scriv = max(0, to_int(r.get("scrivanie")))
+        room = db.find_stanza_by_code(edificio_id, piano, codice)
+        if not room:
+            rid = db.add_stanza(edificio_id, piano, codice, scriv, _clean(r.get("note")),
+                                _clean(r.get("come")))
+            res["stanze_nuove"] += 1
+        else:
+            rid = room["id"]
+            res["stanze_esistenti"] += 1
+            if scriv and not room["scrivanie"]:
+                db.update_stanza(rid, room["codice"], scriv, room["note"], room["come"])
+                res["stanze_aggiornate"] += 1
+        for p in r.get("persone") or []:
+            p = p if isinstance(p, dict) else {"nome": p}
+            nome = normalize_name(_clean(p.get("nome")))
+            if not nome:
+                continue
+            uff = " ".join((_clean(p.get("ufficio")) or _clean(r.get("ufficio"))).split())
+            user = db.find_user_like(nome)
+            if user:
+                uid = user["id"]
+                res["persone_esistenti"] += 1
+            else:
+                uid, _ = db.add_user(nome, normalize_name(edificio["sede"]))
+                res["persone_nuove"] += 1
+            if uff and not (user or {}).get("ufficio") and db.set_user_extra(uid, uff):
+                res["uffici_scritti"] += 1
+            posto = db.posto_of_user(uid)
+            if posto and posto["stanza_id"] == rid:
+                res["persone_gia_in_stanza"] += 1
+            elif posto:
+                res["persone_altrove"].append("%s: già in %s (%s), non spostato"
+                                              % (nome, posto["codice"], floor_label(posto["piano"])))
+            else:
+                db.assegna_persona(uid, rid)
+                res["persone_assegnate"] += 1
+
+    for pr in data.get("stampanti") or []:
+        if not isinstance(pr, dict):
+            continue
+        piano = to_int(pr.get("piano"))
+        nome, modello = " ".join(_clean(pr.get("nome")).split()), " ".join(_clean(pr.get("modello")).split())
+        seriale = clean_serial(pr.get("seriale"))
+        if not (nome or modello or seriale):
+            continue
+        stanza_uid = ""
+        if _clean(pr.get("stanza")):
+            sr = db.find_stanza_by_code(edificio_id, piano, _clean(pr.get("stanza")))
+            if sr:
+                stanza_uid = sr["uid"]
+            else:
+                res["scartati"].append("stampante %s: la stanza %s non esiste al piano %d"
+                                       % (seriale or nome or modello, _clean(pr.get("stanza")), piano))
+        fuori = bool(pr.get("fuori_servizio"))
+        cur = None
+        if seriale:
+            other = db.printer_with_serial(seriale)
+            cur = db.get_stampante(other["id"]) if other else None
+        else:
+            for x in db.printers_of(edificio_id):
+                if x["piano"] == piano and x["nome"].casefold() == nome.casefold() \
+                        and model_key(x["modello"]) == model_key(modello):
+                    cur = db.get_stampante(x["id"])
+                    break
+        if cur is None:
+            db.add_stampante(edificio_id, piano, nome, modello, _clean(pr.get("ip")),
+                             _clean(pr.get("note")), seriale=seriale, fuori_servizio=fuori,
+                             stanza_uid=stanza_uid)
+            res["stampanti_nuove"] += 1
+            continue
+        new_stanza = stanza_uid if (stanza_uid and not cur.get("stanza_uid")) else None
+        new_modello = modello if (modello and not cur["modello"]) else cur["modello"]
+        new_fuori = True if (fuori and not cur["fuori_servizio"]) else None
+        if new_stanza is None and new_fuori is None and new_modello == cur["modello"]:
+            res["stampanti_gia_presenti"] += 1
+            continue
+        db.update_stampante(cur["id"], cur["piano"], cur["nome"], new_modello, cur["ip"],
+                            cur["note"], fuori_servizio=new_fuori, stanza_uid=new_stanza)
+        res["stampanti_aggiornate"] += 1
+    return res
+
+
 def build_phone_export(db, with_photos=False, settings=None):
     """Dati del PC per il telefono: utenti e interventi (con le foto, se richiesto).
     Gli interventi nati sul PC ricevono un identificativo (uid), così quando il telefono li
@@ -2457,7 +2854,7 @@ def build_phone_export(db, with_photos=False, settings=None):
     now = now_utc_iso()
     db.ensure_sync_ids()
     users = [{k: u[k] for k in ("nome", "matricola", "sede", "telefono", "seriale_pc", "imei",
-                                "modificato")}
+                                "ufficio", "dotazione", "modificato")}
              for u in db.users_with_counts()]
     rows = db.conn.execute(
         "SELECT i.id, i.uid, i.data_ora, u.nome AS utente, i.sede, i.richiesta, i.soluzione, "
@@ -2478,11 +2875,12 @@ def build_phone_export(db, with_photos=False, settings=None):
         items.append(item)
     edifici = [{k: r[k] for k in ("uid", "nome", "sede", "piano_min", "piano_max")}
                for r in db.conn.execute("SELECT * FROM edifici ORDER BY id").fetchall()]
-    stampanti = [{k: r[k] for k in ("uid", "edificio_uid", "piano", "nome", "modello", "ip", "note")}
+    stampanti = [{k: r[k] for k in ("uid", "edificio_uid", "piano", "nome", "modello", "ip", "note",
+                                    "seriale", "fuori_servizio", "stanza_uid")}
                  for r in db.conn.execute(
                      "SELECT s.uid, e.uid AS edificio_uid, s.piano, s.nome, s.modello, s.ip, "
-                     "s.note FROM stampanti s JOIN edifici e ON e.id = s.edificio_id "
-                     "ORDER BY s.id").fetchall()]
+                     "s.note, s.seriale, s.fuori_servizio, s.stanza_uid FROM stampanti s "
+                     "JOIN edifici e ON e.id = s.edificio_id ORDER BY s.id").fetchall()]
     toner = [{k: r[k] for k in ("uid", "stampante_uid", "colore", "data_ora", "note")}
              for r in db.conn.execute(
                  "SELECT t.uid, s.uid AS stampante_uid, t.colore, t.data_ora, t.note "
@@ -2833,6 +3231,8 @@ def verbali_for_phone(db, with_photos):
 def user_cell(u, key):
     if key == "n":
         return u["n"]
+    if key == "dotazione":
+        return dotazione_text(u.get("dotazione"))
     if key == "ultimo":
         return fmt_dt(u["ultimo"]) if u.get("ultimo") else ""
     return u.get(key, "") or ""
@@ -3085,25 +3485,32 @@ class ModalDialog(tk.Toplevel):
 
 
 class UserDialog(ModalDialog):
-    """Scheda di un utente: nome, sede e dati della postazione."""
+    """Scheda di una persona: nome, ufficio, sede, dati della postazione e dotazione."""
 
-    FIELDS = (("Nome e cognome *", "nome"), ("Matricola aziendale", "matricola"),
+    FIELDS = (("Nome e cognome *", "nome"), ("Ufficio", "ufficio"),
+              ("Matricola aziendale", "matricola"),
               ("Sede", "sede"), ("Telefono", "telefono"),
               ("Seriale del PC", "seriale_pc"), ("IMEI cellulare aziendale", "imei"))
 
-    def __init__(self, parent, user, sedi, on_save, seat=None, on_room=None):
+    def __init__(self, parent, user, sedi, on_save, seat=None, on_room=None, uffici=(),
+                 defaults=None):
         super().__init__(parent, "Nuovo utente" if user is None else "Scheda utente")
         self.resizable(False, False)
         self.on_save = on_save
         body = ttk.Frame(self, padding=16)
         body.pack(fill="both", expand=True)
-        user = user or {}
-        self.vars = {k: tk.StringVar(value=user.get(k, "")) for _, k in self.FIELDS}
+        data = dict(defaults or {})
+        data.update(user or {})
+        uffici = list(uffici)
+        self.vars = {k: tk.StringVar(value=data.get(k, "") or "") for _, k in self.FIELDS}
         for i, (label, key) in enumerate(self.FIELDS):
             ttk.Label(body, text=label).grid(row=i, column=0, sticky="w", pady=5, padx=(0, 14))
             if key == "sede":
                 w = ttk.Combobox(body, textvariable=self.vars[key], values=sedi, width=34)
                 bind_autocomplete(w, self.vars[key], lambda: sedi)
+            elif key == "ufficio":
+                w = ttk.Combobox(body, textvariable=self.vars[key], values=uffici, width=34)
+                bind_autocomplete(w, self.vars[key], lambda: uffici)
             else:
                 w = ttk.Entry(body, textvariable=self.vars[key], width=36)
             w.grid(row=i, column=1, sticky="ew", pady=5)
@@ -3113,6 +3520,8 @@ class UserDialog(ModalDialog):
             if i == 0:
                 w.focus_set()
         nrow = len(self.FIELDS)
+        self._build_dotazione(body, nrow, data.get("dotazione"))
+        nrow += 1
         if user:
             ttk.Label(body, text="Dove si siede").grid(row=nrow, column=0, sticky="w", pady=5,
                                                        padx=(0, 14))
@@ -3129,14 +3538,103 @@ class UserDialog(ModalDialog):
                        "utenti vengono uniti.").grid(row=nrow, column=0,
                                                      columnspan=2, sticky="w", pady=(8, 0))
         btns = ttk.Frame(body)
-        btns.grid(row=nrow + 1, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        btns.grid(row=nrow + 1, column=0, columnspan=3, sticky="e", pady=(14, 0))
         ttk.Button(btns, text="Annulla", command=self.destroy).pack(side="right")
         ttk.Button(btns, text="Salva", style="Save.TButton", command=self.save).pack(
             side="right", padx=(0, 8))
         self.bind("<Return>", lambda e: self.save())
 
+    # ----- dotazione: elenco libero di apparecchi (tipo, modello, seriale o IMEI) -----
+    def _build_dotazione(self, body, row, items):
+        self.dotazione = clean_dotazione(items)
+        self.dot_idx = None                      # riga che si sta modificando (None = nuova)
+        self.v_dt, self.v_dm, self.v_ds = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        ttk.Label(body, text="Dotazione").grid(row=row, column=0, sticky="nw", pady=5, padx=(0, 14))
+        box = ttk.Frame(body)
+        box.grid(row=row, column=1, columnspan=2, sticky="ew", pady=5)
+        self.tree_d = ttk.Treeview(box, columns=("tipo", "modello", "seriale"), show="headings",
+                                   height=3, selectmode="browse")
+        for col, text, w in (("tipo", "Apparecchio", 120), ("modello", "Modello", 140),
+                             ("seriale", "Seriale / IMEI", 160)):
+            self.tree_d.heading(col, text=text)
+            self.tree_d.column(col, width=w, anchor="w")
+        self.tree_d.grid(row=0, column=0, columnspan=4, sticky="ew")
+        self.tree_d.bind("<<TreeviewSelect>>", lambda e: self.dot_pick())
+        ttk.Combobox(box, textvariable=self.v_dt, values=TIPI_DOTAZIONE_PERSONA, width=16).grid(
+            row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(box, textvariable=self.v_dm, width=16).grid(row=1, column=1, sticky="w",
+                                                              padx=(6, 0), pady=(6, 0))
+        e_s = ttk.Entry(box, textvariable=self.v_ds, width=20)
+        e_s.grid(row=1, column=2, sticky="w", padx=(6, 0), pady=(6, 0))
+        scan_button(box, self.v_ds, "any", entry=e_s).grid(row=1, column=3, sticky="w",
+                                                           padx=(6, 0), pady=(6, 0))
+        bar = ttk.Frame(box)
+        bar.grid(row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        self.btn_dot = ttk.Button(bar, text="Aggiungi alla dotazione", command=self.dot_add)
+        self.btn_dot.pack(side="left")
+        ttk.Button(bar, text="Togli la riga scelta", command=self.dot_remove).pack(
+            side="left", padx=(8, 0))
+        ttk.Label(box, style="Hint.TLabel", wraplength=420, justify="left",
+                  text="Per cambiare una riga: sceglila nell'elenco, correggi i campi e premi "
+                       "«Salva la riga».").grid(row=3, column=0, columnspan=4, sticky="w",
+                                               pady=(4, 0))
+        self.dot_fill()
+
+    def dot_fill(self):
+        self.tree_d.delete(*self.tree_d.get_children())
+        for i, r in enumerate(self.dotazione):
+            self.tree_d.insert("", "end", iid=str(i), values=(r["tipo"], r["modello"], r["seriale"]))
+
+    def dot_clear(self):
+        self.dot_idx = None
+        for v in (self.v_dt, self.v_dm, self.v_ds):
+            v.set("")
+        self.btn_dot.configure(text="Aggiungi alla dotazione")
+
+    def dot_pick(self):
+        sel = self.tree_d.selection()
+        if not sel:
+            return
+        self.dot_idx = int(sel[0])
+        r = self.dotazione[self.dot_idx]
+        self.v_dt.set(r["tipo"])
+        self.v_dm.set(r["modello"])
+        self.v_ds.set(r["seriale"])
+        self.btn_dot.configure(text="Salva la riga")
+
+    def dot_add(self):
+        rows = clean_dotazione([{"tipo": self.v_dt.get(), "modello": self.v_dm.get(),
+                                 "seriale": self.v_ds.get()}])
+        if not rows:
+            messagebox.showinfo(APP_NAME, "Scrivi almeno il tipo, il modello o il seriale "
+                                          "dell'apparecchio.", parent=self)
+            return
+        if self.dot_idx is not None and self.dot_idx < len(self.dotazione):
+            self.dotazione[self.dot_idx] = rows[0]
+        else:
+            self.dotazione.append(rows[0])
+        self.dot_clear()
+        self.dot_fill()
+
+    def dot_remove(self):
+        sel = self.tree_d.selection()
+        if not sel:
+            messagebox.showinfo(APP_NAME, "Scegli prima una riga della dotazione.", parent=self)
+            return
+        del self.dotazione[int(sel[0])]
+        self.dot_clear()
+        self.dot_fill()
+
     def save(self):
         data = {k: v.get() for k, v in self.vars.items()}
+        pending = clean_dotazione([{"tipo": self.v_dt.get(), "modello": self.v_dm.get(),
+                                    "seriale": self.v_ds.get()}])
+        dot = list(self.dotazione)
+        if pending and self.dot_idx is None:      # riga scritta ma non ancora aggiunta: non si perde
+            dot += pending
+        elif pending and self.dot_idx < len(dot):
+            dot[self.dot_idx] = pending[0]
+        data["dotazione"] = dot
         if self.on_save(data):
             self.destroy()
 
@@ -3194,10 +3692,13 @@ class BuildingDialog(ModalDialog):
 
 
 class PrinterEditDialog(ModalDialog):
-    def __init__(self, parent, printer, building, floor, models, on_save):
+    def __init__(self, parent, printer, building, floor, models, on_save, rooms_fn=None):
         super().__init__(parent, "Nuova stampante" if printer is None else "Modifica stampante")
         self.resizable(False, False)
         self.on_save = on_save
+        self.has_rooms = rooms_fn is not None    # senza elenco stanze, quella salvata non si tocca
+        self.rooms_fn = rooms_fn or (lambda piano: [])
+        self.room_uids = {}                      # codice della stanza -> uid, per il piano scelto
         self.floors = list(range(building["piano_max"], building["piano_min"] - 1, -1))
         self.labels = {floor_label(n): n for n in self.floors}
         p = printer or {}
@@ -3212,41 +3713,78 @@ class PrinterEditDialog(ModalDialog):
         self.v_modello = tk.StringVar(value=p.get("modello", models[0] if models else ""))
         self.v_ip = tk.StringVar(value=p.get("ip", ""))
         self.v_note = tk.StringVar(value=p.get("note", ""))
+        self.v_seriale = tk.StringVar(value=p.get("seriale", ""))
+        self.v_fuori = tk.BooleanVar(value=bool(p.get("fuori_servizio")))
+        self.v_stanza = tk.StringVar()
+        self._stanza_uid0 = p.get("stanza_uid", "") or ""
 
         body = ttk.Frame(self, padding=16)
         body.pack(fill="both", expand=True)
         ttk.Label(body, text="Piano").grid(row=0, column=0, sticky="w", pady=5, padx=(0, 14))
-        ttk.Combobox(body, textvariable=self.v_piano, state="readonly", width=24,
-                     values=[floor_label(n) for n in self.floors]).grid(
-            row=0, column=1, sticky="w", pady=5)
-        ttk.Label(body, text="Nome o posizione").grid(row=1, column=0, sticky="w", pady=5,
+        cb_piano = ttk.Combobox(body, textvariable=self.v_piano, state="readonly", width=24,
+                                values=[floor_label(n) for n in self.floors])
+        cb_piano.grid(row=0, column=1, sticky="w", pady=5)
+        cb_piano.bind("<<ComboboxSelected>>", lambda e: self.fill_rooms())
+        ttk.Label(body, text="Stanza").grid(row=1, column=0, sticky="w", pady=5, padx=(0, 14))
+        self.cb_stanza = ttk.Combobox(body, textvariable=self.v_stanza, state="readonly", width=24,
+                                      values=[])
+        self.cb_stanza.grid(row=1, column=1, sticky="w", pady=5)
+        ttk.Label(body, text="Nome o posizione").grid(row=2, column=0, sticky="w", pady=5,
                                                      padx=(0, 14))
         e = ttk.Entry(body, textvariable=self.v_nome, width=40)
-        e.grid(row=1, column=1, sticky="ew", pady=5)
+        e.grid(row=2, column=1, sticky="ew", pady=5)
         e.focus_set()
-        ttk.Label(body, text="Modello").grid(row=2, column=0, sticky="w", pady=5, padx=(0, 14))
+        ttk.Label(body, text="Modello").grid(row=3, column=0, sticky="w", pady=5, padx=(0, 14))
         ttk.Combobox(body, textvariable=self.v_modello, values=models, width=38).grid(
-            row=2, column=1, sticky="ew", pady=5)
-        ttk.Label(body, text="Indirizzo IP").grid(row=3, column=0, sticky="w", pady=5,
+            row=3, column=1, sticky="ew", pady=5)
+        ttk.Label(body, text="Indirizzo IP").grid(row=4, column=0, sticky="w", pady=5,
                                                   padx=(0, 14))
-        ttk.Entry(body, textvariable=self.v_ip, width=24).grid(row=3, column=1, sticky="w",
+        ttk.Entry(body, textvariable=self.v_ip, width=24).grid(row=4, column=1, sticky="w",
                                                                pady=5)
-        ttk.Label(body, text="Note").grid(row=4, column=0, sticky="w", pady=5, padx=(0, 14))
-        ttk.Entry(body, textvariable=self.v_note, width=40).grid(row=4, column=1, sticky="ew",
+        ttk.Label(body, text="Numero di serie").grid(row=5, column=0, sticky="w", pady=5, padx=(0, 14))
+        sf = ttk.Frame(body)
+        sf.grid(row=5, column=1, sticky="ew", pady=5)
+        e_ser = ttk.Entry(sf, textvariable=self.v_seriale, width=30)
+        e_ser.pack(side="left")
+        scan_button(sf, self.v_seriale, "serial", entry=e_ser).pack(side="left", padx=(6, 0))
+        ttk.Label(body, text="Note").grid(row=6, column=0, sticky="w", pady=5, padx=(0, 14))
+        ttk.Entry(body, textvariable=self.v_note, width=40).grid(row=6, column=1, sticky="ew",
                                                                  pady=5)
+        ttk.Checkbutton(body, text="Fuori servizio (stampante rotta)",
+                        variable=self.v_fuori).grid(row=7, column=1, sticky="w", pady=(4, 0))
         ttk.Label(body, style="Hint.TLabel", wraplength=400, justify="left",
                   text="Nome o posizione, ad esempio \"corridoio ovest\" o \"stanza 12\". "
-                       "Il modello sceglie la foto nella grafica.").grid(
-            row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
+                       "Il modello sceglie la foto nella grafica. Il numero di serie e' sull'etichetta "
+                       "della stampante: puoi anche leggerlo con la fotocamera. "
+                       "Con la spunta \"Fuori servizio\" la stampante resta in elenco ma con una "
+                       "croce rossa, anche sul telefono.").grid(
+            row=8, column=0, columnspan=2, sticky="w", pady=(6, 0))
         btns = ttk.Frame(body)
-        btns.grid(row=6, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        btns.grid(row=9, column=0, columnspan=2, sticky="e", pady=(14, 0))
         ttk.Button(btns, text="Annulla", command=self.destroy).pack(side="right")
         ttk.Button(btns, text="Salva", style="Save.TButton", command=self.save).pack(
             side="right", padx=(0, 8))
+        self.fill_rooms(first=True)
+
+    NO_ROOM = "(nessuna stanza)"
+
+    def fill_rooms(self, first=False):
+        """Elenco delle stanze del piano scelto. Se la stanza di prima non è su questo piano,
+        si torna a «nessuna stanza»."""
+        piano = self.labels.get(self.v_piano.get(), 0)
+        rooms = list(self.rooms_fn(piano))
+        self.room_uids = {r["codice"]: r["uid"] for r in rooms}
+        self.cb_stanza.configure(values=[self.NO_ROOM] + [r["codice"] for r in rooms])
+        keep = self._stanza_uid0 if first else self.room_uids.get(self.v_stanza.get(), "")
+        code = next((c for c, u in self.room_uids.items() if keep and u == keep), "")
+        self.v_stanza.set(code or self.NO_ROOM)
 
     def save(self):
         data = {"piano": self.labels.get(self.v_piano.get(), 0), "nome": self.v_nome.get(),
-                "modello": self.v_modello.get(), "ip": self.v_ip.get(), "note": self.v_note.get()}
+                "modello": self.v_modello.get(), "ip": self.v_ip.get(), "note": self.v_note.get(),
+                "seriale": self.v_seriale.get(), "fuori_servizio": bool(self.v_fuori.get())}
+        if self.has_rooms:
+            data["stanza_uid"] = self.room_uids.get(self.v_stanza.get(), "")
         if self.on_save(data):
             self.destroy()
 
@@ -3356,7 +3894,13 @@ class PrinterDialog(ModalDialog):
             self.img_label.configure(image="", text="[foto non disponibile]")
         self.lbl_name.configure(text=p["nome"] or p["modello"] or "Stampante")
         lines = ["Modello: %s" % (p["modello"] or "-"),
-                 "Dove: %s - %s" % (p["edificio"], floor_label(p["piano"]))]
+                 "Dove: %s - %s%s" % (p["edificio"], floor_label(p["piano"]),
+                                      " - stanza %s" % p["stanza_codice"]
+                                      if p.get("stanza_codice") else "")]
+        if p.get("fuori_servizio"):
+            lines.insert(0, "FUORI SERVIZIO (stampante rotta)")
+        if p.get("seriale"):
+            lines.append("Numero di serie: %s" % p["seriale"])
         if p["ip"]:
             lines.append("IP: %s" % p["ip"])
         if p["note"]:
@@ -3437,7 +3981,8 @@ class PrinterDialog(ModalDialog):
                 self.refresh()
             return ok
 
-        PrinterEditDialog(self, self.printer, building, None, self.app.models_list(), on_save)
+        PrinterEditDialog(self, self.printer, building, None, self.app.models_list(), on_save,
+                          rooms_fn=lambda piano: self.app.db.stanze_of(building["id"], piano))
 
     def delete(self):
         n = len(self.app.db.toner_of(self.printer_id))
@@ -3722,6 +4267,61 @@ class ScortaDialog(ModalDialog):
             self.destroy()
 
 
+class ModelRenameDialog(ModalDialog):
+    """Cambia il nome di un modello su tutte le stampanti e nella scorta toner."""
+
+    def __init__(self, parent, models, count_fn, on_apply):
+        super().__init__(parent, "Correggi il nome di un modello")
+        self.resizable(False, False)
+        self.count_fn = count_fn
+        self.on_apply = on_apply
+        self.v_old = tk.StringVar(value=models[0] if models else "")
+        self.v_new = tk.StringVar(value="")
+        self.v_info = tk.StringVar(value="")
+        body = ttk.Frame(self, padding=16)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="Nome da correggere").grid(row=0, column=0, sticky="w", pady=5,
+                                                        padx=(0, 14))
+        cb = ttk.Combobox(body, textvariable=self.v_old, values=models, width=30,
+                          state="readonly")
+        cb.grid(row=0, column=1, sticky="w", pady=5)
+        cb.bind("<<ComboboxSelected>>", lambda e: self.update_info())
+        ttk.Label(body, text="Nome giusto").grid(row=1, column=0, sticky="w", pady=5, padx=(0, 14))
+        ttk.Entry(body, textvariable=self.v_new, width=32).grid(row=1, column=1, sticky="w",
+                                                                pady=5)
+        ttk.Label(body, style="Hint.TLabel", wraplength=380, justify="left",
+                  textvariable=self.v_info).grid(row=2, column=0, columnspan=2, sticky="w",
+                                                 pady=(6, 0))
+        btns = ttk.Frame(body)
+        btns.grid(row=3, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        ttk.Button(btns, text="Annulla", command=self.destroy).pack(side="right")
+        ttk.Button(btns, text="Cambia nome", style="Save.TButton", command=self.save).pack(
+            side="right", padx=(0, 8))
+        self.update_info()
+
+    def update_info(self):
+        n_p, n_s = self.count_fn(self.v_old.get())
+        self.v_info.set("Lo cambio su %d stampant%s e su %d voc%s della scorta toner. Se per una "
+                        "sola stampante il modello è diverso, lascia stare qui e cambialo dalla "
+                        "scheda di quella stampante." % (
+                            n_p, "e" if n_p == 1 else "i", n_s, "e" if n_s == 1 else "i"))
+
+    def save(self):
+        old, new = self.v_old.get(), " ".join(self.v_new.get().split())
+        if not old:
+            messagebox.showwarning(APP_NAME, "Non c'è nessun modello da correggere.", parent=self)
+            return
+        if not new:
+            messagebox.showwarning(APP_NAME, "Scrivi il nome giusto del modello.", parent=self)
+            return
+        if model_key(old) == model_key(new) and old == new:
+            messagebox.showwarning(APP_NAME, "Il nome nuovo è uguale a quello vecchio.",
+                                   parent=self)
+            return
+        if self.on_apply(old, new):
+            self.destroy()
+
+
 class UserExportDialog(ModalDialog):
     """Scelta dei dati degli utenti da estrarre (IMEI, seriale PC, ...)."""
 
@@ -3854,8 +4454,8 @@ class RoomDialog(ModalDialog):
     """Scheda di una stanza: codice, scrivanie, come arrivarci, chi siede dove, foto e panorami."""
 
     def __init__(self, app, room_id):
-        super().__init__(app, "Stanza", "900x800")
-        self.minsize(820, 680)
+        super().__init__(app, "Stanza", "1020x840")
+        self.minsize(900, 700)
         self.app = app
         self.room_id = room_id
         room = app.db.get_stanza(room_id)
@@ -3890,23 +4490,35 @@ class RoomDialog(ModalDialog):
             row=6, column=0, sticky="w", pady=(6, 2))
         self.lbl_occ = ttk.Label(body, style="Hint.TLabel")
         self.lbl_occ.grid(row=6, column=1, sticky="w", pady=(6, 2))
-        self.tree_p = ttk.Treeview(body, columns=("posto", "nome", "tel", "pc", "imei"),
+        self.tree_p = ttk.Treeview(body, columns=("posto", "nome", "ufficio", "tel", "pc", "imei",
+                                                  "dot"),
                                    show="headings", height=5, selectmode="browse")
-        for col, text, w in (("posto", "Postazione", 100), ("nome", "Persona", 200),
-                             ("tel", "Telefono", 110), ("pc", "Seriale PC", 150),
-                             ("imei", "IMEI", 150)):
+        for col, text, w in (("posto", "Postazione", 90), ("nome", "Persona", 150),
+                             ("ufficio", "Ufficio", 150), ("tel", "Telefono", 90),
+                             ("pc", "Seriale PC", 110), ("imei", "IMEI", 120),
+                             ("dot", "Dotazione", 170)):
             self.tree_p.heading(col, text=text)
             self.tree_p.column(col, width=w, anchor="w")
         self.tree_p.grid(row=7, column=0, columnspan=2, sticky="ew")
+        self.tree_p.bind("<Double-1>", lambda e: self.edit_person())
         pr = ttk.Frame(body)
         pr.grid(row=8, column=0, columnspan=2, sticky="w", pady=(6, 8))
-        self.cb_persona = ttk.Combobox(pr, textvariable=self.v_persona, width=34,
+        pr1 = ttk.Frame(pr)
+        pr1.pack(anchor="w")
+        ttk.Button(pr1, text="Nuova persona…", style="Save.TButton",
+                   command=self.new_person).pack(side="left")
+        ttk.Button(pr1, text="Modifica la persona scelta…", command=self.edit_person).pack(
+            side="left", padx=(8, 0))
+        ttk.Button(pr1, text="Togli dalla stanza", command=self.remove_person).pack(
+            side="left", padx=(8, 0))
+        pr2 = ttk.Frame(pr)
+        pr2.pack(anchor="w", pady=(6, 0))
+        ttk.Label(pr2, text="Persona già in elenco:").pack(side="left")
+        self.cb_persona = ttk.Combobox(pr2, textvariable=self.v_persona, width=34,
                                        values=app.users_cache)
-        self.cb_persona.pack(side="left")
+        self.cb_persona.pack(side="left", padx=(8, 0))
         bind_autocomplete(self.cb_persona, self.v_persona, lambda: app.users_cache)
-        ttk.Button(pr, text="Aggiungi persona", style="Save.TButton",
-                   command=self.add_person).pack(side="left", padx=(8, 0))
-        ttk.Button(pr, text="Togli dalla stanza", command=self.remove_person).pack(
+        ttk.Button(pr2, text="Aggiungi alla stanza", command=self.add_person).pack(
             side="left", padx=(8, 0))
 
         ttk.Label(body, text="Foto e panorami", font=("Segoe UI", 10, "bold")).grid(
@@ -3959,15 +4571,24 @@ class RoomDialog(ModalDialog):
             self.destroy()
             return
         db = self.app.db
-        self.lbl_head.configure(text="%s · %s" % (room["edificio"], floor_label(room["piano"])))
+        head = "%s · %s" % (room["edificio"], floor_label(room["piano"]))
+        prn = db.printers_in_room(room["uid"])
+        if prn:
+            head += "\nStampanti in questa stanza: " + "; ".join(
+                " ".join(x for x in (q["nome"] or q["modello"] or "senza nome",
+                                     ("(" + q["seriale"] + ")") if q["seriale"] else "",
+                                     "FUORI SERVIZIO" if q["fuori_servizio"] else "") if x)
+                for q in prn)
+        self.lbl_head.configure(text=head)
         occ, over = room_occupancy(room)
         self.lbl_occ.configure(text=occ or "scrivanie totali non indicate",
                                foreground=RED if over else GREY)
         self.tree_p.delete(*self.tree_p.get_children())
         for p in db.persone_of(self.room_id):
             self.tree_p.insert("", "end", iid=str(p["utente_id"]),
-                               values=("Postazione %d" % p["numero"], p["nome"], p["telefono"],
-                                       p["seriale_pc"], p["imei"]))
+                               values=("Postazione %d" % p["numero"], p["nome"], p["ufficio"],
+                                       p["telefono"], p["seriale_pc"], p["imei"],
+                                       dotazione_text(p["dotazione"])))
         self.tree_f.delete(*self.tree_f.get_children())
         for f in db.foto_stanza(self.room_id):
             self.tree_f.insert("", "end", iid=str(f["id"]),
@@ -4013,6 +4634,42 @@ class RoomDialog(ModalDialog):
             db.add_user(nome, row["sede"] if row else "", "", "", "", "")
             user = db.find_user(nome)
         self.assign_user(user["id"], user["nome"])
+
+    def new_person(self):
+        """Scheda completa per una persona nuova: nome, ufficio, matricola, PC, IMEI, dotazione.
+        Quando la salvi, siede subito in questa stanza (alla prima postazione libera)."""
+        room = self.room()
+        row = self.app.db.conn.execute("SELECT sede FROM edifici WHERE id = ?",
+                                       (room["edificio_id"],)).fetchone()
+
+        def on_save(data):
+            if not self.app.save_user_card(None, data):
+                return False
+            user = self.app.db.find_user(data["nome"])
+            if user:
+                self.assign_user(user["id"], user["nome"])
+            return True
+        UserDialog(self, None, self.app.sedi_cache, on_save, uffici=self.app.db.uffici(),
+                   defaults={"sede": row["sede"] if row else ""})
+
+    def edit_person(self):
+        sel = self.tree_p.selection()
+        if not sel:
+            messagebox.showinfo(APP_NAME, "Seleziona prima una persona dall'elenco.", parent=self)
+            return
+        user = next((u for u in self.app.users_data if str(u["id"]) == sel[0]), None)
+        if not user:
+            return
+        posto = self.app.db.posto_of_user(user["id"])
+        seat = "%s · Postazione %d" % (posto["codice"], posto["numero"]) if posto else None
+
+        def on_save(data):
+            if not self.app.save_user_card(user, data):
+                return False
+            self.refresh()
+            return True
+        UserDialog(self, user, self.app.sedi_cache, on_save, seat=seat,
+                   uffici=self.app.db.uffici())
 
     def assign_user(self, utente_id, nome):
         db = self.app.db
@@ -5534,6 +6191,68 @@ class App(tk.Tk):
         self.clear_form()
         self.bind("<Control-s>", lambda e: self.save_intervento())
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.after(700, self.check_model_names)
+
+    # ---------------- nomi dei modelli ----------------
+    def check_model_names(self):
+        """Una volta sola: propone di correggere i vecchi nomi sbagliati (C3351i, C360i)."""
+        if self.settings.get("modelli_rinomina_chiesto") == "1":
+            return
+        changed = False
+        for wrong, right in MODELLI_DA_CORREGGERE:
+            for name in self.known_model_names():
+                if model_key(name) != model_key(wrong):
+                    continue
+                n_p, n_s = self.db.count_model(name)
+                if not (n_p or n_s):
+                    continue
+                if messagebox.askyesno(
+                        APP_NAME,
+                        "Nel programma ci sono %d stampant%s (e %d voc%s della scorta toner) con il "
+                        "modello \"%s\".\n\nSul fronte delle stampanti di Via delle Porte Nuove "
+                        "c'è scritto \"%s\". Vuoi cambiare il nome in \"%s\"?\n\n"
+                        "Se qualcuna è davvero un altro modello rispondi No: potrai cambiarlo "
+                        "una stampante alla volta dalla sua scheda, oppure da File › Correggi il "
+                        "nome di un modello stampante." % (
+                            n_p, "e" if n_p == 1 else "i", n_s, "e" if n_s == 1 else "i",
+                            name, right, right)):
+                    self.db.rename_model(name, right)
+                    changed = True
+        self.settings["modelli_rinomina_chiesto"] = "1"
+        save_settings(self.settings)
+        if changed:
+            self.after_printers_change()
+
+    def known_model_names(self):
+        names = list(self.db.models())
+        for r in self.db.scorta_all():
+            if model_key(r["modello"]) not in {model_key(x) for x in names}:
+                names.append(r["modello"])
+        return names
+
+    def rename_model_dialog(self):
+        names = self.known_model_names()
+        if not names:
+            messagebox.showinfo(APP_NAME, "Non ci sono ancora modelli di stampante nel programma.")
+            return
+        ModelRenameDialog(self, names, self.db.count_model, self.apply_model_rename)
+
+    def apply_model_rename(self, old, new):
+        n_p, n_s = self.db.count_model(old)
+        if not messagebox.askyesno(
+                APP_NAME, "Cambio \"%s\" in \"%s\" su %d stampant%s e %d voc%s della scorta "
+                          "toner?\n\nPoi manda di nuovo i dati al telefono, così il cambio arriva "
+                          "anche lì." % (old, new, n_p, "e" if n_p == 1 else "i", n_s,
+                                         "e" if n_s == 1 else "i")):
+            return False
+        try:
+            self.db.rename_model(old, new)
+        except sqlite3.Error as e:
+            messagebox.showerror(APP_NAME, "Non sono riuscito a cambiare il nome:\n%s" % e)
+            return False
+        self.after_printers_change()
+        messagebox.showinfo(APP_NAME, "Fatto: ora il modello è \"%s\"." % new)
+        return True
 
     # ---------------- stile ----------------
     def _setup_style(self):
@@ -5575,7 +6294,10 @@ class App(tk.Tk):
         m = tk.Menu(menubar, tearoff=0)
         m.add_command(label="Importa dati dal telefono…", command=self.import_from_phone)
         m.add_command(label="Esporta dati per il telefono…", command=self.export_for_phone)
+        m.add_command(label="Importa elenco stanze e persone…", command=self.import_rooms_file)
         m.add_separator()
+        m.add_command(label="Correggi il nome di un modello stampante…",
+                      command=self.rename_model_dialog)
         m.add_command(label="Mappa della Toscana…", command=self.open_map)
         m.add_command(label="Dati per i verbali Word…", command=self.verbali_settings)
         m.add_command(label="Apri la cartella dei modelli Word", command=self.open_templates_folder)
@@ -6546,13 +7268,15 @@ class App(tk.Tk):
         mid.grid(row=2, column=0, sticky="nsew")
         mid.columnconfigure(0, weight=1)
         mid.rowconfigure(0, weight=1)
-        cols = ("nome", "matricola", "sede", "telefono", "seriale", "imei", "n")
+        cols = ("nome", "ufficio", "matricola", "sede", "telefono", "seriale", "imei", "dot", "n")
         self.users_tree = ttk.Treeview(mid, columns=cols, show="headings", selectmode="browse")
         for c, title, width, stretch in (
-                ("nome", "Utente", 230, True), ("matricola", "Matricola", 100, False),
-                ("sede", "Sede", 110, False),
-                ("telefono", "Telefono", 130, False), ("seriale", "Seriale PC", 170, False),
-                ("imei", "IMEI cellulare", 170, False), ("n", "Interventi", 80, False)):
+                ("nome", "Utente", 200, True), ("ufficio", "Ufficio", 190, False),
+                ("matricola", "Matricola", 90, False),
+                ("sede", "Sede", 100, False),
+                ("telefono", "Telefono", 110, False), ("seriale", "Seriale PC", 140, False),
+                ("imei", "IMEI cellulare", 140, False), ("dot", "Dotazione", 190, False),
+                ("n", "Interventi", 70, False)):
             self.users_tree.heading(c, text=title)
             self.users_tree.column(c, width=width, anchor="center" if c == "n" else "w",
                                    stretch=stretch)
@@ -6604,14 +7328,15 @@ class App(tk.Tk):
         for u in self.users_data:
             if sede and sede != u["sede"].casefold():
                 continue
-            text = " ".join((u["nome"], u["matricola"], u["sede"], u["telefono"],
-                             u["seriale_pc"], u["imei"]))
+            dot = dotazione_text(u["dotazione"])
+            text = " ".join((u["nome"], u["ufficio"], u["matricola"], u["sede"], u["telefono"],
+                             u["seriale_pc"], u["imei"], dot))
             if terms and not matches_all(terms, text):
                 continue
             self.users_visible.append(u)
             self.users_tree.insert("", "end", iid=str(u["id"]), values=(
-                u["nome"], u["matricola"], u["sede"], u["telefono"], u["seriale_pc"], u["imei"],
-                u["n"]))
+                u["nome"], u["ufficio"], u["matricola"], u["sede"], u["telefono"], u["seriale_pc"],
+                u["imei"], dot, u["n"]))
 
     def describe_user_scope(self):
         parts = []
@@ -6652,7 +7377,8 @@ class App(tk.Tk):
         return next((u for u in self.users_data if str(u["id"]) == sel[0]), None)
 
     def new_user(self):
-        UserDialog(self, None, self.sedi_cache, lambda data: self.save_user_card(None, data))
+        UserDialog(self, None, self.sedi_cache, lambda data: self.save_user_card(None, data),
+                   uffici=self.db.uffici())
 
     def edit_user(self):
         user = self.selected_user()
@@ -6663,7 +7389,7 @@ class App(tk.Tk):
                     if posto else None)
             UserDialog(self, user, self.sedi_cache, lambda data: self.save_user_card(user, data),
                        seat=seat, on_room=(lambda: self.open_room_anywhere(posto["stanza_id"]))
-                       if posto else None)
+                       if posto else None, uffici=self.db.uffici())
 
     def save_user_card(self, user, data):
         nome = normalize_name(data["nome"])
@@ -6672,12 +7398,15 @@ class App(tk.Tk):
             return False
         fields = (normalize_name(data["sede"]), data["telefono"].strip(),
                   data["seriale_pc"].strip(), data["imei"].strip(), data["matricola"].strip())
+        ufficio = " ".join(str(data.get("ufficio") or "").split())
+        dotazione = clean_dotazione(data.get("dotazione"))
         try:
             if user is None:
-                _, created = self.db.add_user(nome, *fields)
+                uid, created = self.db.add_user(nome, *fields)
                 if not created:
                     messagebox.showinfo(APP_NAME, "%s è già nella lista." % nome)
                     return False
+                self.db.set_user_extra(uid, ufficio, dotazione)
                 self.set_status("Utente aggiunto alla lista: %s." % nome)
             else:
                 other = self.db.find_user(nome)
@@ -6691,6 +7420,7 @@ class App(tk.Tk):
                     self.db.merge_users(user["id"], other["id"])
                 else:
                     self.db.update_user(user["id"], nome, *fields)
+                    self.db.set_user_extra(user["id"], ufficio, dotazione)
         except sqlite3.Error as e:
             messagebox.showerror(APP_NAME, "Non sono riuscito a salvare:\n%s" % e)
             return False
@@ -6922,6 +7652,14 @@ class App(tk.Tk):
         else:
             c.create_rectangle(ix, py, ix + iw, py + ih, fill=WHITE, outline=NAVY, tags=(tag,))
             c.create_text(cx, py + ih / 2, text="Stampante", fill=NAVY, tags=(tag,))
+        fuori = bool(p.get("fuori_servizio"))
+        if fuori:
+            # croce rossa sopra la foto: la stampante e' rotta
+            m = 6
+            c.create_line(ix + m, py + m, ix + iw - m, py + ih - m, fill=RED, width=5,
+                          capstyle="round", tags=(tag,))
+            c.create_line(ix + iw - m, py + m, ix + m, py + ih - m, fill=RED, width=5,
+                          capstyle="round", tags=(tag,))
 
         # bollini: rosso = ticket Konica ancora aperto (col numero), giallo = scorta del modello bassa
         red = p.get("man_richieste") or 0
@@ -6942,6 +7680,8 @@ class App(tk.Tk):
         lines = [(p["nome"] or p["modello"] or "Stampante", ("Segoe UI", 9, "bold"), NAVY)]
         if p["nome"] and p["modello"]:
             lines.append((p["modello"], ("Segoe UI", 8), GREY))
+        if fuori:
+            lines.append(("FUORI SERVIZIO", ("Segoe UI", 9, "bold"), RED))
         if red:
             lines.append(("tecnico richiesto (%d)" % red, ("Segoe UI", 8, "bold"), RED))
         if low:
@@ -7157,14 +7897,21 @@ class App(tk.Tk):
             messagebox.showinfo(APP_NAME, "Crea prima un edificio.")
             return
         PasteDialog(self, "Incolla più stanze",
-                    "Un codice per riga (vanno bene anche virgole o punti e virgola), per "
-                    "esempio copiati da Excel. Le stanze già presenti su questo piano non "
-                    "vengono duplicate.\n%s · %s" % (b["nome"], floor_label(fl)),
+                    "Una stanza per riga. Per indicare anche le postazioni scrivi per esempio "
+                    "T12; 3  oppure  T12 - 3  (o due colonne copiate da Excel). Senza numero "
+                    "crei solo la stanza; più codici sulla stessa riga si separano con la virgola. "
+                    "Le stanze già presenti non si duplicano: se scrivi un numero diverso di "
+                    "postazioni lo aggiorno.\n%s · %s" % (b["nome"], floor_label(fl)),
                     lambda text: self.bulk_rooms_ok(b["id"], fl, text))
 
     def bulk_rooms_ok(self, building_id, floor, text):
         r = self.db.add_stanze_bulk(building_id, floor, text)
         msg = "Stanze create: %d." % len(r["nuove"])
+        con = [c for c in r["nuove"] if c in r["scrivanie"]]
+        if con:
+            msg += "\nCon le postazioni indicate: %d." % len(con)
+        if r["aggiornate"]:
+            msg += "\nPostazioni aggiornate in: %s." % ", ".join(r["aggiornate"])
         if r["esistenti"]:
             msg += "\nGià presenti (non duplicate): %s." % ", ".join(r["esistenti"])
         if r["scartate"]:
@@ -7479,7 +8226,8 @@ class App(tk.Tk):
             messagebox.showinfo(APP_NAME, "Crea prima un edificio.")
             return
         PrinterEditDialog(self, None, b, floor, self.models_list(),
-                          lambda data: self.save_printer(None, b["id"], data))
+                          lambda data: self.save_printer(None, b["id"], data),
+                          rooms_fn=lambda piano: self.db.stanze_of(b["id"], piano))
 
     def save_printer(self, printer_id, building_id, data):
         nome = " ".join(data["nome"].split())
@@ -7487,12 +8235,26 @@ class App(tk.Tk):
         if not nome and not modello:
             messagebox.showwarning(APP_NAME, "Scrivi almeno il nome o il modello della stampante.")
             return False
+        seriale = clean_serial(data.get("seriale"))
+        other = self.db.printer_with_serial(seriale, printer_id)
+        if other and not messagebox.askyesno(
+                APP_NAME, "Il numero di serie %s e' gia' della stampante \"%s\" (%s, %s).\n\n"
+                          "Un numero di serie dovrebbe essere diverso per ogni stampante: "
+                          "potrebbe essere un errore di lettura. Vuoi salvare lo stesso?" % (
+                              seriale, other["nome"] or other["modello"] or "senza nome",
+                              other["edificio"], floor_label(other["piano"]))):
+            return False
         args = (data["piano"], nome, modello, data["ip"].strip(), data["note"].strip())
+        # senza la voce nei dati, lo stato "fuori servizio" resta com'era
+        fuori = bool(data["fuori_servizio"]) if "fuori_servizio" in data else None
+        stanza = data["stanza_uid"] if "stanza_uid" in data else None   # senza la voce resta com'era
         try:
             if printer_id is None:
-                self.db.add_stampante(building_id, *args)
+                self.db.add_stampante(building_id, *args, seriale=seriale,
+                                      fuori_servizio=bool(fuori), stanza_uid=stanza or "")
             else:
-                self.db.update_stampante(printer_id, *args)
+                self.db.update_stampante(printer_id, *args, seriale=seriale, fuori_servizio=fuori,
+                                         stanza_uid=stanza)
         except sqlite3.Error as e:
             messagebox.showerror(APP_NAME, "Non sono riuscito a salvare:\n%s" % e)
             return False
@@ -8678,6 +9440,57 @@ class App(tk.Tk):
             self.after_manut_change()
         if res["toner_nuovi"]:
             self.after_toner_change()
+        messagebox.showinfo(APP_NAME, "Importazione completata.\n\n" + "\n".join(lines))
+
+    def import_rooms_file(self):
+        b = self.current_building()
+        if not b:
+            messagebox.showinfo(APP_NAME, "Crea prima un edificio (scheda Stampanti), poi importa "
+                                          "l'elenco.")
+            return
+        path = filedialog.askopenfilename(
+            title="Importa elenco stanze e persone",
+            filetypes=[("Elenco stanze e persone", "*.json"), ("Tutti i file", "*.*")])
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict) or data.get("tipo") != ELENCO_TIPO:
+                raise ValueError("Questo non è un elenco di stanze e persone dell'app Help Desk.")
+        except (OSError, ValueError) as e:
+            messagebox.showerror(APP_NAME, "Non riesco a leggere il file:\n%s" % e)
+            return
+        n_s, n_p = len(data.get("stanze") or []), len(data.get("stampanti") or [])
+        if not messagebox.askyesno(
+                APP_NAME, "Nel file ci sono %d stanze e %d stampanti.\n\nLe metto nell'edificio "
+                          "«%s». Quello che c'è già non viene duplicato né sovrascritto.\n\n"
+                          "Vuoi continuare?" % (n_s, n_p, b["nome"])):
+            return
+        try:
+            res = import_rooms_list(self.db, data, b["id"])
+        except (ValueError, sqlite3.Error) as e:
+            messagebox.showerror(APP_NAME, "Importazione non riuscita:\n%s" % e)
+            return
+        self.refresh_users()
+        self.after_printers_change()
+        lines = ["Stanze: nuove %d, già presenti %d (scrivanie aggiornate: %d)"
+                 % (res["stanze_nuove"], res["stanze_esistenti"], res["stanze_aggiornate"]),
+                 "Persone: nuove %d, già in elenco %d; messe in stanza %d, già lì %d"
+                 % (res["persone_nuove"], res["persone_esistenti"], res["persone_assegnate"],
+                    res["persone_gia_in_stanza"]),
+                 "Uffici scritti: %d" % res["uffici_scritti"],
+                 "Stampanti: nuove %d, aggiornate %d, già presenti %d"
+                 % (res["stampanti_nuove"], res["stampanti_aggiornate"],
+                    res["stampanti_gia_presenti"])]
+        if res["persone_altrove"]:
+            lines.append("\nPersone lasciate dove sono (siedono già in un'altra stanza):")
+            lines += ["   " + t for t in res["persone_altrove"][:12]]
+            if len(res["persone_altrove"]) > 12:
+                lines.append("   … e altre %d" % (len(res["persone_altrove"]) - 12))
+        if res["scartati"]:
+            lines.append("\nNon importati:")
+            lines += ["   " + t for t in res["scartati"][:12]]
         messagebox.showinfo(APP_NAME, "Importazione completata.\n\n" + "\n".join(lines))
 
     def open_data_folder(self):

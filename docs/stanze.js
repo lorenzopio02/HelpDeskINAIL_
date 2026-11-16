@@ -24,6 +24,32 @@ window.ROOMS = (function () {
     return { good, bad };
   }
 
+  /* una stanza per riga, con le postazioni se scritte: "T12; 3", "T12 - 3", "T12 (3)", due colonne da Excel */
+  const DESK = "(?:postazion[ei]|posti|scrivani[ae]|desks?)";
+  const PAIR = [
+    new RegExp("^([^;\\t]+?)\\s*(?:[;\\t:=]|\\s[-\u2013\u2014]\\s)\\s*(\\d{1,3})\\s*(?:" + DESK + ")?\\s*$", "i"),
+    new RegExp("^([^;\\t()]+?)\\s*\\(\\s*(\\d{1,3})\\s*(?:" + DESK + ")?\\s*\\)\\s*$", "i")
+  ];
+  function parseRooms(text) {
+    const order = [], desks = new Map(), bad = [];
+    const add = (code, n) => {
+      const c = String(code).split(/\s+/).filter(Boolean).join(" ");
+      if (!c) return;
+      if (c.length > CODE_MAX) { bad.push(c); return; }
+      const k = cf(c);
+      if (!desks.has(k)) { order.push(c); desks.set(k, n); } else if (n != null) desks.set(k, n);
+    };
+    for (let line of String(text || "").split(/[\r\n]+/)) {
+      line = line.trim();
+      if (!line) continue;
+      let m = null;
+      for (const rx of PAIR) { m = rx.exec(line); if (m) break; }
+      if (m) add(m[1], parseInt(m[2], 10));
+      else for (const part of line.split(/[;,\t]+/)) add(part, null);
+    }
+    return { rooms: order.map(c => ({ c, n: desks.get(cf(c)) })), bad };
+  }
+
   /* ---------- dati ---------- */
   let S = [], P = [];   // stanze e postazioni (piccole: si rileggono sempre)
   async function load() { S = await getAll("stanze"); P = await getAll("postazioni"); }
@@ -58,15 +84,20 @@ window.ROOMS = (function () {
   }
   async function addRooms(euid, piano, text) {
     await load();
-    const { good, bad } = parseCodes(text), have = new Set(roomsOf(euid, piano).map(r => cf(r.codice)));
-    let nuove = 0, esistenti = 0;
-    for (const c of good) {
-      if (have.has(cf(c))) { esistenti++; continue; }
-      await put("stanze", { uid: "ro-" + uuid(), edificio_uid: euid, piano, codice: c, scrivanie: 0, note: "", come: "", px: null, py: null, eliminata: false, modificato: nowIso() });
+    const { rooms, bad } = parseRooms(text), cur = new Map(roomsOf(euid, piano).map(r => [cf(r.codice), r]));
+    let nuove = 0, esistenti = 0, aggiornate = 0;
+    for (const { c, n } of rooms) {
+      const ex = cur.get(cf(c));
+      if (ex) {
+        if (n != null && n !== num(ex.scrivanie)) { await put("stanze", { ...ex, scrivanie: n, modificato: nowIso() }); aggiornate++; }
+        else esistenti++;
+        continue;
+      }
+      await put("stanze", { uid: "ro-" + uuid(), edificio_uid: euid, piano, codice: c, scrivanie: n == null ? 0 : n, note: "", come: "", px: null, py: null, eliminata: false, modificato: nowIso() });
       nuove++;
     }
     await load();
-    return { nuove, esistenti, scartate: bad };
+    return { nuove, esistenti, aggiornate, scartate: bad };
   }
   async function saveRoom(uid, f) {
     await load();
@@ -269,7 +300,8 @@ window.ROOMS = (function () {
     S.filter(r => !r.eliminata && r.edificio_uid === b.uid).forEach(r => set.add(r.piano));
     return [...set].sort((a, c) => c - a);
   }
-  const phoneBits = u => [u && u.telefono ? "Tel " + esc(u.telefono) : "", u && u.seriale_pc ? "PC " + esc(u.seriale_pc) : "", u && u.imei ? "IMEI " + esc(u.imei) : ""].filter(Boolean).join(" · ");
+  const dotBits = u => (u && typeof dotText === "function" && dotText(u.dotazione)) ? "Dotazione: " + esc(dotText(u.dotazione)) : "";
+  const phoneBits = u => [u && u.ufficio ? esc(u.ufficio) : "", u && u.telefono ? "Tel " + esc(u.telefono) : "", u && u.seriale_pc ? "PC " + esc(u.seriale_pc) : "", u && u.imei ? "IMEI " + esc(u.imei) : "", dotBits(u)].filter(Boolean).join(" · ");
   const note = (t, err) => { flash = { t, err: !!err }; };
 
   async function render() {
@@ -379,24 +411,25 @@ window.ROOMS = (function () {
   function bulkDialog(euid, piano) {
     const m = $("modal");
     m.innerHTML = `<div class="card"><h3>Incolla più stanze</h3><div class="meta">${esc(bName(euid))} · ${floorLabel(piano)}</div>
-      <div class="hint">Un codice per riga (vanno bene anche virgole). Le stanze già presenti su questo piano non vengono duplicate.</div>
-      <label for="bkTxt">Codici</label><textarea id="bkTxt" style="min-height:140px" autocapitalize="characters" spellcheck="false" placeholder="T1&#10;T2&#10;T12"></textarea>
+      <div class="hint">Una stanza per riga. Per indicare anche le postazioni scrivi per esempio <b>T12; 3</b> oppure <b>T12 - 3</b> (o due colonne copiate da Excel). Senza numero crei solo la stanza; più codici sulla stessa riga si separano con la virgola. Le stanze già presenti non si duplicano: se scrivi un numero diverso di postazioni lo aggiorno.</div>
+      <label for="bkTxt">Stanze</label><textarea id="bkTxt" style="min-height:140px" autocapitalize="characters" spellcheck="false" placeholder="T1; 2&#10;T2 - 3&#10;T12; 3"></textarea>
       <div class="hint" id="bkInfo"></div>
       <button class="btn green" id="bkOk" type="button">Crea le stanze</button><button class="btn" id="bkNo" type="button">Annulla</button><div id="bkMsg"></div></div>`;
     m.classList.remove("hidden");
     const info = async () => {
       await load();
-      const { good, bad } = parseCodes($("bkTxt").value), have = new Set(roomsOf(euid, piano).map(r => cf(r.codice)));
-      const nu = good.filter(c => !have.has(cf(c))).length;
-      $("bkInfo").textContent = good.length || bad.length ? `Verranno create ${nu} stanze nuove` + (good.length - nu ? `, ${good.length - nu} già presenti` : "") + (bad.length ? `, ${bad.length} scartate perché più lunghe di ${CODE_MAX} caratteri` : "") + "." : "";
+      const { rooms, bad } = parseRooms($("bkTxt").value), have = new Map(roomsOf(euid, piano).map(r => [cf(r.codice), r]));
+      const nu = rooms.filter(x => !have.has(cf(x.c))).length, up = rooms.filter(x => have.has(cf(x.c)) && x.n != null && x.n !== num(have.get(cf(x.c)).scrivanie)).length;
+      const con = rooms.filter(x => !have.has(cf(x.c)) && x.n != null).length, gia = rooms.length - nu - up;
+      $("bkInfo").textContent = rooms.length || bad.length ? `Verranno create ${nu} stanze nuove` + (con ? ` (${con} con le postazioni indicate)` : "") + (up ? `, ${up} aggiornate nelle postazioni` : "") + (gia ? `, ${gia} già presenti` : "") + (bad.length ? `, ${bad.length} scartate perché più lunghe di ${CODE_MAX} caratteri` : "") + "." : "";
     };
     $("bkTxt").addEventListener("input", info);
     $("bkNo").onclick = () => m.classList.add("hidden");
     $("bkOk").onclick = async () => {
       const r = await addRooms(euid, piano, $("bkTxt").value);
-      if (!r.nuove && !r.esistenti && !r.scartate.length) return show($("bkMsg"), "Scrivi almeno un codice.", true);
+      if (!r.nuove && !r.esistenti && !r.aggiornate && !r.scartate.length) return show($("bkMsg"), "Scrivi almeno un codice.", true);
       m.classList.add("hidden");
-      note(`Stanze create: ${r.nuove}` + (r.esistenti ? `, già presenti: ${r.esistenti}` : "") + (r.scartate.length ? `, scartate perché troppo lunghe: ${r.scartate.join(", ")}` : "") + ".", !r.nuove && !!r.scartate.length);
+      note(`Stanze create: ${r.nuove}` + (r.aggiornate ? `, postazioni aggiornate: ${r.aggiornate}` : "") + (r.esistenti ? `, già presenti: ${r.esistenti}` : "") + (r.scartate.length ? `, scartate perché troppo lunghe: ${r.scartate.join(", ")}` : "") + ".", !r.nuove && !!r.scartate.length);
       render();
     };
   }
@@ -450,7 +483,7 @@ window.ROOMS = (function () {
       $("roPL").querySelectorAll(".pk").forEach(c => c.onclick = () => doAssign(uid, c.dataset.k, back));
       if ($("roNewU")) $("roNewU").onclick = async () => {
         const b = edifici.find(x => x.uid === r.edificio_uid) || {};
-        await put("utenti", { key: keyOf(raw), nome: raw, matricola: "", sede: b.sede || "", telefono: "", seriale_pc: "", imei: "", modificato: nowIso() });
+        await put("utenti", { key: keyOf(raw), nome: raw, ufficio: "", dotazione: [], matricola: "", sede: b.sede || "", telefono: "", seriale_pc: "", imei: "", modificato: nowIso() });
         await loadUsers(); doAssign(uid, keyOf(raw), back);
       };
     };
@@ -530,9 +563,9 @@ window.ROOMS = (function () {
     }
   }
 
-  return { load, render, openRoom, openFloor, floorMenu, dove, parseCodes, cleanCode,
+  return { load, render, openRoom, openFloor, floorMenu, dove, parseCodes, parseRooms, cleanCode,
            addRoom, addRooms, saveRoom, setPos, deleteRoom, assign, unassign, dropUser, renameUser,
            addFoto, delFoto, setPianta, delPianta, pianta, fotosOf, exportItems, countNew, importData,
-           peopleIn, seatOf, roomsOf, occ, lab,
+           peopleIn, seatOf, roomsOf, occ, lab, roomCode: uid => { const r = uid && room(uid); return r ? r.codice : ""; },
            _state: () => ({ S, P, curF, view, mark, markUid, zoom }) };
 })();
