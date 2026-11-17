@@ -1450,7 +1450,8 @@ class Database:
     def users_basic(self):
         """Tutte le persone con i dati che servono a riconoscerle (per l'importazione da Excel)."""
         return [dict(r) for r in self.conn.execute(
-            "SELECT id, nome, matricola, sede, telefono, ufficio, ordine FROM utenti ORDER BY id")]
+            "SELECT id, nome, matricola, sede, telefono, ufficio, ordine, seriale_pc "
+            "FROM utenti ORDER BY id")]
 
     def uffici(self):
         """Gli uffici già scritti (senza doppioni), per il completamento automatico."""
@@ -3381,6 +3382,126 @@ def apply_people_plan(db, plan):
             db.set_user_extra(rec["id"], ufficio=ch["ufficio"])
         if "ordine" in ch:
             db.set_user_ordine(rec["id"], ch["ordine"])
+
+
+# ---------------------------------------------------------------------------------------------
+# Seriali dei PC da un file Excel: colonne «Nominativo» e «PC» (il nome del PC nel sistema)
+# ---------------------------------------------------------------------------------------------
+PC_NAME_RE = re.compile(r"^\s*\d{5}\s*-\s*([A-Za-z0-9]{5,15})\s*$")
+
+
+def parse_pc_serial(value):
+    """Il numero di serie dal nome del PC: «60016-AB12CDE» -> «AB12CDE» (le cinque cifre prima del
+    trattino sono il codice dell'ente, non fanno parte del seriale). Un nome che non ha questa
+    forma (per esempio «21000PC0001», un nome casuale o «PC non trovato») non è un seriale: vuoto."""
+    m = PC_NAME_RE.match(str(value or ""))
+    return m.group(1).upper() if m else ""
+
+
+def read_pc_xlsx(path):
+    """Legge un Excel con una colonna di nomi (Nominativo, Nome, Utente...) e una dei PC (PC, PC
+    (displayName), Seriale, S/N). Restituisce {nome: [valori]} (una persona può avere più righe)."""
+    try:
+        from openpyxl import load_workbook
+        wb = load_workbook(path, data_only=True)
+    except Exception as e:
+        raise ValueError("non riesco ad aprire il file Excel (%s)" % e)
+    for ws in wb.worksheets:
+        cols, found = None, {}
+        for row in ws.iter_rows(values_only=True):
+            if cols is None:
+                heads = [_clean(v).casefold() for v in row]
+                ni = next((i for i, v in enumerate(heads)
+                           if v in ("nominativo", "nome", "utente", "dipendente")), None)
+                pi = next((i for i, v in enumerate(heads) if i != ni and v.startswith(
+                    ("pc", "seriale", "s/n", "sn", "serial"))), None)
+                if ni is not None and pi is not None:
+                    cols = (ni, pi)
+                continue
+            ni, pi = cols
+            nome = " ".join(_clean(row[ni]).split()) if ni < len(row) else ""
+            if nome:
+                val = " ".join(_clean(row[pi]).split()) if pi < len(row) else ""
+                found.setdefault(nome, []).append(val)
+        if cols is not None:
+            return found
+    raise ValueError("non sembra un elenco di PC: servono le colonne «Nominativo» e «PC»")
+
+
+def merge_pc_entries(parts):
+    """Più file con le stesse persone: i valori si sommano (senza ripetere quelli uguali)."""
+    out = {}
+    for part in parts:
+        for nome, vals in part.items():
+            cur = out.setdefault(nome, [])
+            for v in vals:
+                if v not in cur:
+                    cur.append(v)
+    return out
+
+
+def plan_pc_serials(users, entries):
+    """Prepara l'assegnazione dei seriali senza scrivere niente. users: db.users_basic(); entries:
+    {nome: [nomi dei PC]}. Chi è nel file ma non nell'app NON si aggiunge. Chi ha già un seriale
+    scritto non viene cambiato. Se una persona ha più PC si scrive il primo seriale valido."""
+    by_words = {}
+    for u in users:      # anche col «Cognome Nome» della lista INAIL (campo «ordine»), se c'è
+        for name in {u["nome"], u.get("ordine") or u["nome"]}:
+            lst = by_words.setdefault(" ".join(sorted(key_name(name).split())), [])
+            if u not in lst:
+                lst.append(u)
+    st = {"nel_file": len(entries), "scritti": 0, "gia_uguali": 0, "diversi": [], "non_in_app": 0,
+          "ambigui": [], "senza_pc": 0, "nome_non_seriale": [], "piu_pc": []}
+    def disp(u):                 # nei rapporti: «Cognome Nome», così gli elenchi sono per cognome
+        return u.get("ordine") or u["nome"]
+    actions = []
+    used = {clean_serial(u.get("seriale_pc") or "").replace(" ", "").upper(): u["nome"]
+            for u in users if clean_serial(u.get("seriale_pc") or "")}   # seriali già dati
+    for nome, vals in entries.items():
+        hits = by_words.get(" ".join(sorted(key_name(normalize_name(nome)).split())), [])
+        if not hits:
+            st["non_in_app"] += 1
+            continue
+        if len(hits) > 1:
+            st["ambigui"].append("%s: nell'app ci sono %d persone che corrispondono (%s): "
+                                 "scrivi il seriale a mano" % (
+                                     normalize_name(nome), len(hits),
+                                     ", ".join(disp(x) for x in hits)))
+            continue
+        u = hits[0]
+        serials = []
+        for v in vals:
+            sn = parse_pc_serial(v)
+            if sn and sn not in serials:
+                serials.append(sn)
+        if not serials:
+            real = [v for v in vals if v and "non trovato" not in v.casefold()]
+            if real:
+                st["nome_non_seriale"].append("%s: %s" % (disp(u), ", ".join(real)))
+            else:
+                st["senza_pc"] += 1
+            continue
+        if len(serials) > 1:
+            st["piu_pc"].append("%s: %s" % (disp(u), ", ".join(serials)))
+        sn = serials[0]
+        cur = clean_serial(u.get("seriale_pc") or "")
+        if not cur:
+            if sn in used:
+                st["ambigui"].append("%s: seriale %s già dato a %s" % (disp(u), sn, used[sn]))
+                continue
+            used[sn] = disp(u)
+            actions.append({"id": u["id"], "nome": u["nome"], "seriale": sn})
+            st["scritti"] += 1
+        elif cur.replace(" ", "").casefold() == sn.casefold():
+            st["gia_uguali"] += 1
+        else:
+            st["diversi"].append("%s: nell'app %s, nel file %s" % (disp(u), cur, sn))
+    return {"actions": actions, "stats": st}
+
+
+def apply_pc_plan(db, plan):
+    for a in plan["actions"]:
+        db.set_user_codes(a["id"], seriale_pc=a["seriale"])
 
 
 ELENCO_TIPO = "helpdesk-elenco-stanze"
@@ -8117,6 +8238,7 @@ class App(tk.Tk):
         m.add_command(label="Importa elenco stanze e persone…", command=self.import_rooms_file)
         m.add_command(label="Importa persone da Excel (lista INAIL)…",
                       command=self.import_people_excel)
+        m.add_command(label="Importa seriali dei PC da Excel…", command=self.import_pc_serials)
         m.add_command(label="Unisci doppioni stampanti…", command=self.merge_printers_dialog)
         m.add_separator()
         m.add_command(label="Correggi il nome di un modello stampante…",
@@ -11693,6 +11815,63 @@ class App(tk.Tk):
         lines.append("\nPer portare tutto sul telefono: File › Esporta dati per il telefono.")
         messagebox.showinfo(APP_NAME, "Importazione completata.\n\n" + "\n".join(lines))
         return True
+
+    def import_pc_serials(self):
+        paths = filedialog.askopenfilenames(
+            title="Importa seriali dei PC da Excel",
+            filetypes=[("Excel", "*.xlsx"), ("Tutti i file", "*.*")])
+        if not paths:
+            return
+        parts, errors = [], []
+        for p in paths:
+            try:
+                parts.append(read_pc_xlsx(p))
+            except ValueError as e:
+                errors.append("%s: %s" % (os.path.basename(p), e))
+        if errors:
+            messagebox.showwarning(APP_NAME, "Questi file non li posso usare:\n\n" +
+                                   "\n".join(errors))
+        if not parts:
+            return
+        users = self.db.users_basic()
+        plan = plan_pc_serials(users, merge_pc_entries(parts))
+        s = plan["stats"]
+        if not messagebox.askyesno(
+                APP_NAME, "Nei file ci sono %d persone.\n\nScrivo il seriale del PC a %d persone "
+                          "dell'app.\nGià scritto uguale: %d. Già scritto diverso (non lo "
+                          "tocco): %d.\nNel file ma non nell'app (le ignoro, non le aggiungo): "
+                          "%d.\nSenza PC nel file: %d.\n\nVuoi continuare?"
+                % (s["nel_file"], s["scritti"], s["gia_uguali"], len(s["diversi"]),
+                   s["non_in_app"], s["senza_pc"] + len(s["nome_non_seriale"]))):
+            return
+        try:
+            apply_pc_plan(self.db, plan)
+        except (ValueError, sqlite3.Error) as e:
+            messagebox.showerror(APP_NAME, "Importazione non riuscita:\n%s" % e)
+            return
+        self.refresh_users()
+        lines = ["Seriali scritti: %d" % s["scritti"],
+                 "Già uguali: %d; già diversi (non toccati): %d"
+                 % (s["gia_uguali"], len(s["diversi"])),
+                 "Persone nel file ma non nell'app (ignorate): %d" % s["non_in_app"]]
+
+        def more(title, items, limit=15):
+            if items:
+                lines.append("\n%s (%d):" % (title, len(items)))
+                lines.extend("   " + t for t in items[:limit])
+                if len(items) > limit:
+                    lines.append("   … e altre %d" % (len(items) - limit))
+        more("Il nome del PC non contiene un seriale (lasciato vuoto)", s["nome_non_seriale"])
+        more("Seriale diverso da quello già scritto (non toccato)", s["diversi"])
+        more("Più PC: ho scritto il primo", s["piu_pc"])
+        more("Da controllare a mano", s["ambigui"])
+        # chi nell'app resta senza seriale del PC (gli sportelli non sono persone)
+        mancano = sorted(((u.get("ordine") or u["nome"]) for u in self.db.users_basic()
+                          if not u.get("seriale_pc") and not u["nome"].casefold().startswith(
+                              "sportello")), key=str.casefold)
+        more("Nell'app senza seriale del PC: li scrivi tu a mano", mancano, 40)
+        lines.append("\nPer portarli sul telefono: File › Esporta dati per il telefono.")
+        messagebox.showinfo(APP_NAME, "Importazione completata.\n\n" + "\n".join(lines))
 
     def open_data_folder(self):
         try:

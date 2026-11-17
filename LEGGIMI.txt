@@ -2,6 +2,10 @@ HELP DESK INAIL - PC + app per iPhone
 =====================================
 
 NOVITA' DI QUESTA VERSIONE
+ - SERIALI DEI PC DA EXCEL (solo PC): File > "Importa seriali dei PC da Excel...". Scegli uno o piu'
+   file con le colonne "Nominativo" e "PC" (o "PC (displayName)"). Per ogni persona che c'e' nell'app
+   scrive il seriale del PC. Le persone che sono solo nel file NON vengono aggiunte. Vedi la sezione
+   SERIALI DEI PC DA EXCEL piu' sotto.
  - PERSONE IN ORDINE PER COGNOME (PC e telefono): gli elenchi delle persone (scheda Utenti, scelta
    dell'utente, persone di una stanza) sono in ordine alfabetico per COGNOME, non per nome. Lo
    facciamo con il "Cognome Nome" che c'e' nella lista INAIL: serve aver fatto l'importazione da
@@ -694,6 +698,22 @@ PERSONE DA EXCEL (come funziona)
    cellulari anche sul telefono.
  - NON provato qui: la finestra su un PC Windows vero (provata con finestre finte e con i tuoi tre
    file di esempio, a secco).
+
+SERIALI DEI PC DA EXCEL (come funziona)
+ - Fai PRIMA "Importa persone da Excel": cosi' l'app conosce il "Cognome Nome" ufficiale di ognuno e
+   riconosce anche chi ha il nome scritto in modo un po' diverso (per esempio un accento o una lettera).
+ - Dal nome del PC al seriale: "60016-AB12CDE" diventa il seriale "AB12CDE" (le 5 cifre prima del
+   trattino sono il codice dell'ente, non fanno parte del seriale: cosi' il seriale coincide con
+   quello dell'etichetta e si ritrova con la fotocamera). Un nome senza questa forma (per esempio
+   "21000PC0001", un nome casuale tipo "60016aFpsZeDiyV" oppure "PC non trovato nell'export") NON e'
+   un seriale: la persona resta vuota e compare nel rapporto ("Il nome del PC non contiene un seriale").
+ - Chi e' solo nel file e non nell'app NON viene aggiunto. Se un seriale era gia' scritto (anche da te
+   a mano) non viene cambiato: se e' diverso te lo dice nel rapporto. Se una persona ha piu' PC si
+   scrive il primo seriale valido. Lo stesso seriale non viene dato a due persone.
+ - Prima di scrivere ti fa vedere quante persone riceveranno il seriale; alla fine il rapporto elenca
+   chi nell'app resta SENZA seriale (da scrivere a mano; gli "Sportello" non contano).
+ - Si puo' rifare quando vuoi: non cambia niente se non c'e' niente di nuovo. Con "Esporta dati per il
+   telefono" i seriali arrivano anche sul telefono.
 
 BOLLE DEI TONER (come funzionano)
  - Telefono, scheda Stampanti: in alto "Bolle toner" con "Nuova bolla (arrivo toner)" e l'elenco
