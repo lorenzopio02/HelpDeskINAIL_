@@ -55,14 +55,15 @@ window.ROOMS = (function () {
   async function load() { S = await getAll("stanze"); P = await getAll("postazioni"); }
   const room = uid => S.find(r => r.uid === uid && !r.eliminata) || null;
   const roomsOf = (euid, piano) => S.filter(r => !r.eliminata && r.edificio_uid === euid && r.piano === piano).sort((a, b) => cmp(a.codice, b.codice));
-  const peopleIn = ruid => P.filter(p => p.stanza_uid === ruid && room(ruid)).sort((a, b) => (a.numero - b.numero) || cmp(a.utente, b.utente));
+  const sortName = n => { const u = users.find(x => x.key === keyOf(n || "")); return (u && u.ordine) || n || ""; };   /* per cognome */
+  const peopleIn = ruid => P.filter(p => p.stanza_uid === ruid && room(ruid)).sort((a, b) => (a.numero - b.numero) || cmp(sortName(a.utente), sortName(b.utente)));
   const seatOf = k => { const p = P.find(x => x.k === k && x.stanza_uid); return p && room(p.stanza_uid) ? p : null; };
   const userOf = k => users.find(u => u.key === k) || null;
   const bName = euid => (edifici.find(x => x.uid === euid) || {}).nome || "?";
   const fullName = r => `${bName(r.edificio_uid)} · ${floorLabel(r.piano)} · ${r.codice}`;
   function occ(r) { const n = peopleIn(r.uid).length, tot = num(r.scrivanie); return { n, tot, txt: tot > 0 ? `occupate ${n}/${tot}` : "", over: tot > 0 && n > tot }; }
   const lab = r => `${r.codice} · ${occ(r).n}`;
-  const dispCmp = (a, b) => cmp(a.utente, b.utente);
+  const dispCmp = (a, b) => cmp(sortName(a.utente), sortName(b.utente));
 
   async function renumberRoom(ruid, now, bump) {
     const rows = P.filter(p => p.stanza_uid === ruid).sort((a, b) => (a.numero - b.numero) || dispCmp(a, b));

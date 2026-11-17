@@ -429,6 +429,7 @@ function normName(n) {
   return n;
 }
 const keyOf = n => normName(n).toLowerCase();
+const sameWords = (a, b) => keyOf(a || "").split(" ").sort().join(" ") === keyOf(b || "").split(" ").sort().join(" ");
 const SEDI = ["Arezzo","Carrara","DR Toscana","Firenze","Grosseto","Livorno","Lucca","Massa","Pisa","Pistoia","Prato","Siena"];
 const STATI = ["Aperto", "In attesa", "Risolto"], STATI_T = ["Richiesto", "Eseguito"];
 const stOf = i => STATI.includes(i.stato) ? i.stato : "Risolto";
@@ -458,7 +459,7 @@ function shrink(file, max = 1800) {
 let users = [], editUid = null, photos = [], autoFor = null, sediList = [...SEDI];
 
 async function loadUsers() {
-  users = (await getAll("utenti")).sort((a, b) => a.nome.localeCompare(b.nome, "it"));
+  users = (await getAll("utenti")).sort((a, b) => (a.ordine || a.nome).localeCompare(b.ordine || b.nome, "it"));   /* per COGNOME: «ordine» = «Cognome Nome» dalla lista INAIL */
   const sedi = new Set(SEDI); users.forEach(u => u.sede && sedi.add(u.sede));
   (await getAll("interventi")).forEach(i => i.sede && sedi.add(i.sede));
   edifici.forEach(e => e.sede && sedi.add(e.sede));
@@ -619,7 +620,7 @@ $("btnSave").onclick = async () => {
   const k = keyOf(nome), old = users.find(u => u.key === k);
   const fields = { matricola: $("fMat").value.trim(), sede, telefono: $("fTel").value.trim(), seriale_pc: $("fSn").value.trim(), imei: $("fImei").value.trim() };
   const changed = !old || ["matricola", "sede", "telefono", "seriale_pc", "imei"].some(f => (old[f] || "") !== fields[f]);
-  if (changed) await put("utenti", { key: k, nome: old ? old.nome : nome, ...fields, modificato: mod });
+  if (changed) await put("utenti", { ...(old || {}), key: k, nome: old ? old.nome : nome, ...fields, modificato: mod });   /* ...old: ufficio, dotazione e ordine non si perdono */
   const prev = editUid ? await getKey("interventi", editUid) : null;
   await put("interventi", {
     uid: editUid || uuid(), data_ora: toDataOra($("fDt").value), utente: old ? old.nome : nome, sede,
@@ -818,7 +819,7 @@ function editUser(k) {
     const nome = normName($("eNome").value); if (!nome) return show($("eMsg"), "Scrivi il nome.", true);
     const nk = keyOf(nome);
     if (nk !== u.key && users.some(x => x.key === nk)) return show($("eMsg"), "Esiste già un utente con questo nome.", true);
-    const nu = { key: nk, nome, ufficio: oneLine($("eUff").value), dotazione: cleanDot(readDot()), matricola: $("eMat").value.trim(), sede: normName($("eSede").value), telefono: $("eTel").value.trim(), seriale_pc: $("eSn").value.trim(), imei: $("eImei").value.trim(), modificato: nowIso() };
+    const nu = { key: nk, nome, ufficio: oneLine($("eUff").value), dotazione: cleanDot(readDot()), matricola: $("eMat").value.trim(), sede: normName($("eSede").value), telefono: $("eTel").value.trim(), seriale_pc: $("eSn").value.trim(), imei: $("eImei").value.trim(), ordine: (!isNew && sameWords(u.nome, nome)) ? (u.ordine || "") : "", modificato: nowIso() };
     if (!isNew && nk !== u.key) {
       await del("utenti", u.key);
       for (const i of await getAll("interventi")) if (keyOf(i.utente) === u.key) { i.utente = nome; i.modificato = nowIso(); await put("interventi", i); }
@@ -1237,7 +1238,7 @@ async function buildExport(mode) {
   const usersOut = [...us, ...users.filter(u => needed.has(u.key) && !us.includes(u))];
   return {
     tipo: "helpdesk-telefono", versione: 6, creato: nowIso(),
-    utenti: usersOut.map(u => ({ nome: u.nome, ufficio: u.ufficio || "", matricola: u.matricola || "", sede: u.sede || "", telefono: u.telefono || "", seriale_pc: u.seriale_pc || "", imei: u.imei || "", dotazione: cleanDot(u.dotazione), modificato: u.modificato || nowIso() })),
+    utenti: usersOut.map(u => ({ nome: u.nome, ufficio: u.ufficio || "", matricola: u.matricola || "", sede: u.sede || "", telefono: u.telefono || "", seriale_pc: u.seriale_pc || "", imei: u.imei || "", dotazione: cleanDot(u.dotazione), ordine: u.ordine || "", modificato: u.modificato || nowIso() })),
     interventi: items.map(i => ({ uid: i.uid, data_ora: i.data_ora, utente: i.utente, sede: i.sede || "", richiesta: i.richiesta, soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", stato: stOf(i), modificato: i.modificato, foto: (i.foto || []).map(f => ({ nome: f.nome, data: f.data })) })),
     toner: tons.map(t => ({ uid: t.uid, stampante_uid: t.stampante_uid, colore: t.colore, data_ora: t.data_ora, note: t.note || "", bolla_uid: t.bolla_uid || "", modificato: t.modificato })),
     bolle: window.BOL ? BOL.exportItems(mode, last) : [],
@@ -1271,7 +1272,7 @@ async function mergeFile(file, restore) {
   for (const u of data.utenti || []) {
     const nome = normName(u.nome || ""); if (!nome) continue;
     const k = keyOf(nome), cur = users.find(x => x.key === k), mod = u.modificato || "";
-    const rec = { key: k, nome: cur ? cur.nome : nome, ufficio: "ufficio" in u ? oneLine(u.ufficio) : (cur ? cur.ufficio || "" : ""), dotazione: "dotazione" in u ? cleanDot(u.dotazione) : (cur ? cleanDot(cur.dotazione) : []), matricola: "matricola" in u ? String(u.matricola || "").trim() : (cur ? cur.matricola || "" : ""), sede: normName(u.sede || ""), telefono: String(u.telefono || "").trim(), seriale_pc: String(u.seriale_pc || "").trim(), imei: String(u.imei || "").trim(), modificato: mod || nowIso() };
+    const rec = { key: k, nome: cur ? cur.nome : nome, ufficio: "ufficio" in u ? oneLine(u.ufficio) : (cur ? cur.ufficio || "" : ""), dotazione: "dotazione" in u ? cleanDot(u.dotazione) : (cur ? cleanDot(cur.dotazione) : []), matricola: "matricola" in u ? String(u.matricola || "").trim() : (cur ? cur.matricola || "" : ""), sede: normName(u.sede || ""), telefono: String(u.telefono || "").trim(), seriale_pc: String(u.seriale_pc || "").trim(), imei: String(u.imei || "").trim(), ordine: "ordine" in u ? String(u.ordine || "").trim() : (cur ? cur.ordine || "" : ""), modificato: mod || nowIso() };
     if (fromPc) rec.daPC = rec.modificato;   /* arrivato dal PC: non conta come «da inviare» finché non lo modifichi */
     if (!cur) { await put("utenti", rec); nu++; }
     else if (mod && mod > (cur.modificato || "")) { await put("utenti", rec); au++; }
