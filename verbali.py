@@ -18,6 +18,7 @@ Questo file non usa tkinter: si può provare anche senza finestre.
 """
 import base64
 import copy
+import json
 import os
 import re
 import shutil
@@ -410,9 +411,28 @@ def storico(rows):
     return out
 
 
+def _dot_scheda(user):
+    """Le righe della dotazione scritta nella scheda della persona: [{"tipo","modello","seriale"}]."""
+    d = (user or {}).get("dotazione") or []
+    if isinstance(d, (str, bytes)):
+        try:
+            d = json.loads(d or "[]")
+        except ValueError:
+            d = []
+    return [r for r in d if isinstance(r, dict)] if isinstance(d, (list, tuple)) else []
+
+
+def _non_trasferibile(r):
+    """Telefono Teams o fisso, monitor, presa di rete, stampante, token: non si consegnano con
+    un verbale di trasferimento o di assegnazione."""
+    t = ((r.get("tipo") or "") + " " + (r.get("modello") or "")).casefold()
+    return any(w in t for w in ("teams", "audiocodes", "telefono fisso", "monitor", "presa", "stampante",
+                                "token", "smart card"))
+
+
 def dispositivi_utente(st, nome, user=None):
     """Gli apparati di una persona: quelli dei verbali gia' fatti, poi il seriale PC e l'IMEI
-    scritti nella sua scheda utente."""
+    scritti nella sua scheda utente, poi i notebook, i cellulari e i tablet della sua dotazione."""
     key = nome_pulito(nome).casefold()
     res = [dict(x) for x in st["dispositivi"] if x["utente"].casefold() == key]
     seen = {_codice_key(x["seriale"]) for x in res if x["seriale"]}
@@ -422,7 +442,54 @@ def dispositivi_utente(st, nome, user=None):
             seen.add(_codice_key(ser))
             res.append({"tipologia": tip, "marca_modello": "", "seriale": ser,
                         "utente": nome_pulito(nome)})
+    for r in _dot_scheda(user):
+        tip = tipologia_da_dotazione(r.get("tipo"))
+        if not tip or _non_trasferibile(r):
+            continue
+        ser, mod = (r.get("seriale") or "").strip(), (r.get("modello") or "").strip()
+        if ser:
+            k = _codice_key(ser)
+            if k in seen:                      # gia' in elenco: gli do il modello se manca
+                for x in res:
+                    if _codice_key(x["seriale"]) == k and not x["marca_modello"] and mod:
+                        x["marca_modello"] = mod
+                continue
+            seen.add(k)
+            res.append({"tipologia": tip, "marca_modello": mod, "seriale": ser,
+                        "utente": nome_pulito(nome)})
+        elif mod and not any(x["tipologia"] == tip for x in res):
+            res.append({"tipologia": tip, "marca_modello": mod, "seriale": "",
+                        "utente": nome_pulito(nome)})
     return res
+
+
+def dotazione_da_scheda(user):
+    """Le righe del verbale di assegnazione (tipo, modello, codice, iccid, numero) ricavate dalla
+    scheda della persona: notebook, smartphone, SIM e cuffie con il loro seriale o IMEI."""
+    out, has_nb, has_ph = [], False, False
+    ser_pc, imei = ((user or {}).get("seriale_pc") or "").strip(), ((user or {}).get("imei") or "").strip()
+    for r in _dot_scheda(user):
+        t = (r.get("tipo") or "").casefold()
+        mod, ser = (r.get("modello") or "").strip(), (r.get("seriale") or "").strip()
+        if re.search(r"\bsim\b", t):
+            out.append({"tipo": TIPI_DOTAZIONE[3], "modello": mod, "codice": "", "iccid": ser, "numero": ""})
+        elif "cuffi" in t:
+            out.append({"tipo": TIPI_DOTAZIONE[1], "modello": mod, "codice": ser, "iccid": "", "numero": ""})
+        elif _non_trasferibile(r):
+            continue
+        elif tipologia_da_dotazione(r.get("tipo")) == "Notebook":
+            out.append({"tipo": TIPI_DOTAZIONE[0], "modello": mod, "codice": ser or (ser_pc if not has_nb else ""),
+                        "iccid": "", "numero": ""})
+            has_nb = True
+        elif tipologia_da_dotazione(r.get("tipo")) == "Smartphone":
+            out.append({"tipo": TIPI_DOTAZIONE[2], "modello": mod, "codice": ser or (imei if not has_ph else ""),
+                        "iccid": "", "numero": ""})
+            has_ph = True
+    if not has_nb and ser_pc:
+        out.append({"tipo": TIPI_DOTAZIONE[0], "modello": "", "codice": ser_pc, "iccid": "", "numero": ""})
+    if not has_ph and imei:
+        out.append({"tipo": TIPI_DOTAZIONE[2], "modello": "", "codice": imei, "iccid": "", "numero": ""})
+    return out
 
 
 def trova_dispositivo(st, seriale, users=()):
@@ -436,8 +503,13 @@ def trova_dispositivo(st, seriale, users=()):
     for u in users:
         for tip, ser in (("Notebook", u.get("seriale_pc")), ("Smartphone", u.get("imei"))):
             if ser and _codice_key(ser) == key:
-                return {"tipologia": tip, "marca_modello": "", "seriale": ser.strip(),
+                mod = next((x["marca_modello"] for x in dispositivi_utente({"dispositivi": []}, u.get("nome", ""), u)
+                            if _codice_key(x["seriale"]) == key), "")
+                return {"tipologia": tip, "marca_modello": mod, "seriale": ser.strip(),
                         "utente": u.get("nome", "")}
+        for x in dispositivi_utente({"dispositivi": []}, u.get("nome", ""), u):      # anche la dotazione
+            if x["seriale"] and _codice_key(x["seriale"]) == key:
+                return x
     return None
 
 

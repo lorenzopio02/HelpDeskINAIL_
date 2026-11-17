@@ -2,6 +2,22 @@ HELP DESK INAIL - PC + app per iPhone
 =====================================
 
 NOVITA' DI QUESTA VERSIONE
+ - TICKET DI SERVICENOW COME INTERVENTI (solo PC): File > "Importa interventi da ServiceNow
+   (Excel)...". Scegli il file Excel esportato da ServiceNow (anche piu' file insieme, anche lo
+   stesso file piu' volte: non crea doppioni). L'app unisce le righe dello stesso ticket (le
+   "transizioni" sono 3-4 per ticket): UN intervento per ticket, col numero (RIC.../INC...) nel
+   campo ticket. Prima di scrivere ti dice quanti ticket ci sono, quanti sono nuovi, quante persone
+   e sedi crea. Vedi IMPORTARE I TICKET DA SERVICENOW piu' sotto.
+ - VERBALI, SCEGLI LA PERSONA E SI COMPILA DA SOLO (PC e telefono): nel verbale di Trasferimento o
+   di Presa in carico, quando scegli la persona (o apri il verbale dalla sua scheda) l'app scrive
+   da sola tipologia, modello e seriale/IMEI SUOI, e il telefono per i contatti; l'elenco dei
+   seriali e degli "apparati gia' noti" mostra SOLO quelli di quella persona (non piu' quelli di
+   tutti). Se serve un apparato di un'altra persona: spunta "mostra anche gli altri" sul PC, o
+   tocca "Mostra anche gli altri" sul telefono; oppure svuota il nome. Se cambi persona cambiano
+   anche i suoi dati, ma quello che hai scritto a mano resta. Nel verbale di Assegnazione la
+   dotazione scritta nella scheda (notebook, smartphone, SIM, cuffie con seriale/IMEI) e' gia'
+   nell'elenco: togli le righe che non servono. Non vengono proposti monitor, telefoni Teams e
+   prese di rete. Sul telefono la versione resta "helpdesk-v28".
  - EMAIL DELLE PERSONE (PC e telefono): nella scheda della persona c'e' il campo "Email" e il
    pulsante "Scrivi mail" (apre il programma di posta con un messaggio nuovo). L'email si cerca
    come tutto il resto, si copia con "Copia dati" e viaggia fra PC e telefono. L'importazione
@@ -36,7 +52,7 @@ NOVITA' DI QUESTA VERSIONE
    facciamo con il "Cognome Nome" che c'e' nella lista INAIL: serve aver fatto l'importazione da
    Excel (qui sotto). Chi non e' nella lista resta ordinato come e' scritto. I nomi non cambiano:
    cambia solo l'ordine. Sul telefono arriva con "Esporta dati per il telefono" + "Ricevi dal PC"
-   (riapri l'app: versione "helpdesk-v27").
+   (riapri l'app: versione "helpdesk-v28").
  - Correzione sul telefono: se registravi un intervento cambiando matricola, sede, telefono, seriale
    o IMEI di una persona, l'ufficio e la dotazione di quella persona si perdevano: ora restano.
  - PERSONE DA EXCEL (solo PC): File > "Importa persone da Excel (lista INAIL)...". Scegli uno o piu'
@@ -390,6 +406,45 @@ VERBALI COMPILATI DA SOLI (stesso comportamento sul PC e sul telefono)
  - Il telefono usa i verbali che ha: per averli tutti anche li', portali dal PC (File > Esporta dati
    per il telefono) e importali con "Ricevi dal PC".
 
+IMPORTARE I TICKET DA SERVICENOW
+ Serve un file Excel esportato da ServiceNow (elenco dei ticket: tasto destro sul titolo di una
+ colonna > Esporta > Excel). Il file deve avere almeno il numero del ticket (colonna "Task" o
+ "Numero") e la descrizione. L'app riconosce le colonne dal titolo: Aperto, Aperto da, Chiamante
+ (o "Richiesto per"), Stato, Breve descrizione, Descrizione, Sede, CI interessato, Note di
+ chiusura (o "Note di risoluzione").
+ - UN INTERVENTO PER TICKET: le righe con lo stesso numero si uniscono. Vale la data di apertura
+   piu' vecchia e lo stato dell'ultima riga.
+ - STATO: Chiuso e Risolto = "Risolto"; Assegnato e In lavorazione = "Aperto"; In attesa = "In
+   attesa". Gli ANNULLATI si saltano (te ne dice il numero).
+ - TESTO: nella richiesta va la descrizione, senza l'intestazione "Ticket in gestione dal tecnico
+   ...", senza saluti ("Buongiorno", "Grazie e buona giornata"), senza la tua firma e il tuo
+   telefono. L'ortografia NON viene corretta: il testo resta quello di ServiceNow.
+   La categoria ("Ambito PdL - ...") e il dispositivo (CI) vanno nelle note.
+ - LA PERSONA, in quest'ordine: 1) "Chiamante" / "Richiesto per" se il file ce l'ha; 2) "Aperto da"
+   se non sei tu; 3) quando il ticket l'hai aperto tu per qualcuno: la matricola scritta nel
+   testo, il seriale del PC (CI o testo), l'IMEI, il nome scritto nel testo, il cognome dopo
+   "dott./dott.ssa/ing."; 4) se non si capisce: la persona "Da assegnare (ServiceNow)" (di solito
+   stampanti, rete, UPS: nel testo c'e' solo "l'utente"). Nelle note dell'intervento c'e' scritto
+   come e' stata trovata la persona ("utente dedotto da seriale"...).
+ - PERSONE NUOVE: se la persona non e' nell'app viene creata come "Cognome Nome" (per i nomi di
+   ServiceNow, scritti "NOME COGNOME", l'ultima parola e' il cognome; "Della Polla Generoso"
+   resta insieme). CONTROLLA l'elenco nel rapporto: un cognome doppio puo' venire girato male.
+   Una persona gia' nell'app, anche col nome in ordine diverso, non si duplica.
+ - SEDE: la sede del ticket. "Firenze- Porte Nuove" = Firenze; "Direzione Regionale Toscana" = DR
+   Toscana. Una persona di Lucca va in Lucca. Una sede fuori Toscana (Ravenna, DR Piemonte...) si
+   CREA e la persona viene messa li'. A chi e' gia' nell'app la sede si scrive SOLO se non ce
+   l'aveva; se e' diversa non si cambia (te lo dice il rapporto).
+ - SENZA DOPPIONI: lanciandola due volte, o con lo stesso file piu' volte, non aggiunge niente.
+   Gli interventi che avevi scritto a mano non si toccano.
+ - SECONDO EXPORT (con Chiamante e Note di chiusura): importalo dopo. I ticket gia' importati
+   si riconoscono dal numero: se hanno la persona "dedotta" o "non riconosciuta" la correggo con
+   il Chiamante, e dove la soluzione e' vuota scrivo le Note di chiusura. Cio' che hai scritto tu
+   (soluzione, persona) non si cancella.
+ - Il rapporto completo (persone create, ticket da controllare a mano) e' nel file
+   rapporto_importazione_servicenow.txt, nella cartella dei dati (File > "Apri la cartella dei
+   dati"). Per portare tutto sul telefono: File > "Esporta dati per il telefono".
+ - I dati di ServiceNow restano sul tuo PC: non vanno su GitHub e non sono in questa cartella.
+
 VERBALI WORD
  - Scheda "Verbali": 4 pulsanti per creare un verbale. Dalla scheda "Utenti" c'e' anche
    "Crea verbale per questo utente..." (nome, matricola e telefono si compilano da soli) e
@@ -625,7 +680,7 @@ SCRIVANIE DISEGNATE (PC e telefono)
    quelli in uso, non dei tuoi apparecchi: se non ti piacciono si cambiano.
  - Un modello diverso dai tre cellulari o dai due Dell (voce "Altro: ...") ha un disegno semplice,
    senza foto. Senza nessuna scelta la scrivania mostra solo monitor, tastiera e mouse.
- - Telefono: dopo aver caricato i file nuovi su GitHub riapri l'app (versione "helpdesk-v27"),
+ - Telefono: dopo aver caricato i file nuovi su GitHub riapri l'app (versione "helpdesk-v28"),
    poi rifai l'esportazione dal PC e "Ricevi dal PC", cosi' scrivanie, cellulari e portatili
    arrivano uguali.
 
@@ -754,7 +809,7 @@ UNIRE LE PERSONE DOPPIE (come funziona)
  - Il nome vecchio viene ricordato: se dal telefono arriva ancora un intervento col nome vecchio va
    sulla persona che resta. Lo stesso vale se cambi il nome a una persona dalla sua scheda.
  - TELEFONO: dopo "Esporta dati per il telefono" + "Ricevi dal PC" (riapri l'app: versione
-   "helpdesk-v27") il doppione sparisce anche li': gli interventi fatti col nome vecchio e i dati
+   "helpdesk-v28") il doppione sparisce anche li': gli interventi fatti col nome vecchio e i dati
    che mancavano passano alla persona che resta (gli interventi gia' mandati non vengono rimandati).
    Se scrivi di nuovo apposta il nome vecchio come nuova persona, l'app lo accetta.
  - Un'unione NON si disfa da sola: prima di unire fai un salvataggio (File > "Salva una copia di backup").
@@ -810,7 +865,7 @@ PRESA DI RETE (PC e telefono)
    modifica piu' recente): se compare una presa che non ti aspetti controlla il bollino dopo lo
    scambio.
  - Scambio PC <-> telefono: la presa viaggia con il resto della dotazione. Dopo aver caricato i file
-   nuovi su GitHub riapri l'app (versione "helpdesk-v27") e rifai "Ricevi dal PC".
+   nuovi su GitHub riapri l'app (versione "helpdesk-v28") e rifai "Ricevi dal PC".
  - NON provato qui: PC e iPhone veri, fotocamera vera su una placca vera (provato con finestre finte,
    con un browser di prova e con una fotocamera simulata).
 

@@ -210,6 +210,9 @@
     }
     return out;
   }
+  /* telefono Teams o fisso, monitor, presa, stampante, token: non si consegnano con un verbale */
+  const nonTrasferibile = r => /teams|audiocodes|telefono fisso|monitor|presa|stampante|token|smart card/.test((str(r.tipo) + " " + str(r.modello)).toLowerCase());
+  const dotScheda = u => (u && Array.isArray(u.dotazione) ? u.dotazione : []).filter(r => r && typeof r === "object");
   function dispositiviUtente(st, nome, u) {
     const key = nomePulito(nome).toLowerCase(), res = st.dispositivi.filter(x => x.utente.toLowerCase() === key).map(x => ({ ...x }));
     const seen = new Set(res.filter(x => x.seriale).map(x => codeKey(x.seriale)));
@@ -217,12 +220,39 @@
       const ser = str(ser0);
       if (ser && !seen.has(codeKey(ser))) { seen.add(codeKey(ser)); res.push({ tipologia: tip, marca_modello: "", seriale: ser, utente: nomePulito(nome) }); }
     }
+    for (const r of dotScheda(u)) {      /* notebook, cellulari e tablet della dotazione scritta nella scheda */
+      const tip = tipDaDot(r.tipo); if (!tip || nonTrasferibile(r)) continue;
+      const ser = str(r.seriale), mod = str(r.modello);
+      if (ser) {
+        const k = codeKey(ser);
+        if (seen.has(k)) { for (const x of res) if (codeKey(x.seriale) === k && !x.marca_modello && mod) x.marca_modello = mod; continue; }
+        seen.add(k); res.push({ tipologia: tip, marca_modello: mod, seriale: ser, utente: nomePulito(nome) });
+      } else if (mod && !res.some(x => x.tipologia === tip)) res.push({ tipologia: tip, marca_modello: mod, seriale: "", utente: nomePulito(nome) });
+    }
     return res;
+  }
+  /* assegnazione: le righe della dotazione ricavate dalla scheda (notebook, smartphone, SIM, cuffie con seriale o IMEI) */
+  function dotazioneDaScheda(u) {
+    const out = [], serPc = str(u && u.seriale_pc), imei = str(u && u.imei); let hasNb = false, hasPh = false;
+    for (const r of dotScheda(u)) {
+      const t = str(r.tipo).toLowerCase(), mod = str(r.modello), ser = str(r.seriale);
+      if (/\bsim\b/.test(t)) out.push({ tipo: TIPI_DOT[3], modello: mod, codice: "", iccid: ser, numero: "" });
+      else if (t.includes("cuffi")) out.push({ tipo: TIPI_DOT[1], modello: mod, codice: ser, iccid: "", numero: "" });
+      else if (nonTrasferibile(r)) continue;
+      else if (tipDaDot(r.tipo) === "Notebook") { out.push({ tipo: TIPI_DOT[0], modello: mod, codice: ser || (hasNb ? "" : serPc), iccid: "", numero: "" }); hasNb = true; }
+      else if (tipDaDot(r.tipo) === "Smartphone") { out.push({ tipo: TIPI_DOT[2], modello: mod, codice: ser || (hasPh ? "" : imei), iccid: "", numero: "" }); hasPh = true; }
+    }
+    if (!hasNb && serPc) out.push({ tipo: TIPI_DOT[0], modello: "", codice: serPc, iccid: "", numero: "" });
+    if (!hasPh && imei) out.push({ tipo: TIPI_DOT[2], modello: "", codice: imei, iccid: "", numero: "" });
+    return out;
   }
   function trovaDispositivo(st, seriale, usrs) {
     const key = codeKey(seriale); if (!key) return null;
     const x = st.dispositivi.find(d => codeKey(d.seriale) === key); if (x) return { ...x };
-    for (const u of usrs || []) for (const [tip, ser] of [["Notebook", u.seriale_pc], ["Smartphone", u.imei]]) if (ser && codeKey(ser) === key) return { tipologia: tip, marca_modello: "", seriale: str(ser), utente: u.nome || "" };
+    for (const u of usrs || []) {
+      for (const [tip, ser] of [["Notebook", u.seriale_pc], ["Smartphone", u.imei]]) if (ser && codeKey(ser) === key) { const m = dispositiviUtente({ dispositivi: [] }, u.nome || "", u).find(x => codeKey(x.seriale) === key); return { tipologia: tip, marca_modello: m ? m.marca_modello : "", seriale: str(ser), utente: u.nome || "" }; }
+      const x = dispositiviUtente({ dispositivi: [] }, u.nome || "", u).find(d => d.seriale && codeKey(d.seriale) === key); if (x) return x;      // anche la dotazione
+    }
     return null;
   }
   const etichetta = x => [x.tipologia, x.marca_modello, x.seriale ? "S/N " + x.seriale : "", x.utente ? `(${x.utente})` : ""].filter(Boolean).join(" · ");
@@ -648,16 +678,24 @@
     const t = S.tipo, g = k => { const e = $("v_" + k); return e ? e.value : ""; };
     const ac = (k, fn) => { if ($("v_" + k)) autoComplete($("v_" + k), fn); };
     const setIfEmpty = (k, v) => { const e = $("v_" + k); if (e && v && !e.value.trim()) e.value = v; };
+    /* il dato della persona va nel campo se è vuoto o se c'ero io (per la persona di prima): cambiando persona cambiano anche i suoi dati; quello che scrivi tu resta */
+    const autoVals = {};
+    const autoSet = (k, v) => { const e = $("v_" + k); if (!e) return; v = v || ""; const cur = e.value.trim(); if (!cur || cur === autoVals[k]) { e.value = v; autoVals[k] = v; } };
     const uk = userKeyOf(t);
     const lines = txt => txt.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
     const luoghiItems = () => uniq([...histVals("provenienza"), ...histVals("destinazione"), ...luoghi().map(x => x.text)]).map(text => ({ text }));
     const collegaItems = () => { const base = userItems(), names = new Set(base.map(i => i.text.toLowerCase())); return [...base, ...histVals("collega").filter(x => !names.has(x.toLowerCase())).map(text => ({ text }))]; };
+    let showAll = false;      /* «mostra anche gli altri»: i seriali e gli apparati delle altre persone */
     const serialItems = () => {
-      const grp = groupOf(g("tipologia")), seen = new Set(), items = [];
+      const grp = groupOf(g("tipologia")), seen = new Set(), items = [], who = curUser(), mine = who ? dispositiviUtente(H, who.nome, who).filter(x => x.seriale) : [];
       const add = (ser, tip, mm, ut) => { ser = str(ser); const k = codeKey(ser); if (!ser || seen.has(k)) return; seen.add(k); items.push({ text: ser, hay: [ser, tip, mm, ut].join(" "), sub: [tip, mm, ut && `(${ut})`].filter(Boolean).join(" · "), grp: groupOf(tip) }); };
+      const byGrp = a => grp ? [...a.filter(i => i.grp === grp), ...a.filter(i => i.grp !== grp)] : a;
+      mine.forEach(x => add(x.seriale, x.tipologia, x.marca_modello, x.utente));
+      const mineN = items.length;
+      if (mineN && !showAll) return byGrp(items);      // con una persona scelta: solo i suoi
       H.dispositivi.forEach(x => add(x.seriale, x.tipologia, x.marca_modello, x.utente));
-      users.forEach(u => { add(u.seriale_pc, "Notebook", "", u.nome); add(u.imei, "Smartphone", "", u.nome); });
-      return grp ? [...items.filter(i => i.grp === grp), ...items.filter(i => i.grp !== grp)] : items;
+      users.forEach(u => { add(u.seriale_pc, "Notebook", "", u.nome); add(u.imei, "Smartphone", "", u.nome); dispositiviUtente({ dispositivi: [] }, u.nome, u).forEach(x => add(x.seriale, x.tipologia, x.marca_modello, x.utente)); });
+      return [...byGrp(items.slice(0, mineN)), ...byGrp(items.slice(mineN))];      // prima i suoi, poi gli altri
     };
     ac("tipologia", histItems("tipologia", TIPOLOGIE)); ac("titolo", histItems("titolo", TITOLI_LISTA.filter(Boolean))); ac("sede_citta", histItems("sede_citta", sediList)); ac("col_codice", listItems(COLONNE));
     ac("marca_modello", histItems("marca_modello")); ac("seriale", serialItems); ac("contatti", histItems("contatti"));
@@ -682,15 +720,24 @@
       for (const k of ["tipologia", "marca_modello", "seriale"]) { const e = $("v_" + k); if (e && (override || (dev[k] && !e.value.trim()))) e.value = dev[k] || ""; }
       if (uk && dev.utente && !$("v_" + uk).value.trim()) { $("v_" + uk).value = dev.utente; picked(); }
     };
-    const drawDevs = devs => {
+    let ownerKey = null, ownerDevs = [], devAuto = null;
+    const drawDevs = (devs, others) => {
       if (!devBox) return;
-      devBox.innerHTML = devs.length ? `<div class="hint">Apparati già noti di questa persona: tocca per compilare tipologia, modello e seriale.</div><div class="chips">${devs.map((x, i) => `<button type="button" data-i="${i}">${esc(etichetta({ ...x, utente: "" }))}</button>`).join("")}</div>` : "";
-      devBox.querySelectorAll("button").forEach(b => b.onclick = () => applyDevice(devs[+b.dataset.i], true));
+      const all = others || [];
+      devBox.innerHTML = devs.length || all.length ? `<div class="hint">${devs.length ? "Apparati già noti di questa persona: tocca per compilare tipologia, modello e seriale." : "Di questa persona non ho apparati: scegli uno degli altri o scrivi il seriale."}</div><div class="chips">${devs.concat(all).map((x, i) => `<button type="button" data-i="${i}">${esc(etichetta({ ...x, utente: i >= devs.length ? x.utente : "" }))}</button>`).join("")}</div>` + (devs.length || showAll ? `<div class="chips"><button type="button" data-all="1">${showAll ? "Mostra solo i suoi" : "Mostra anche gli altri"}</button></div>` : "") : "";
+      devBox.querySelectorAll("button[data-i]").forEach(b => b.onclick = () => applyDevice(devs.concat(all)[+b.dataset.i], true));
+      const tg = devBox.querySelector("button[data-all]"); if (tg) tg.onclick = () => { showAll = !showAll; const u = curUser(); if (u) drawDevs(ownerDevs, showAll ? otherDevices(ownerDevs) : []); };
     };
+    const otherDevices = mine => { const seen = new Set(mine.map(x => codeKey(x.seriale)).filter(Boolean)); return H.dispositivi.filter(x => x.seriale && !seen.has(codeKey(x.seriale))).slice(0, 40); };
     const userDevices = u => {
-      const devs = dispositiviUtente(H, u.nome, u);
-      drawDevs(devs);
-      if (devs.length && !["tipologia", "marca_modello", "seriale"].some(k => g(k).trim())) applyDevice(devs[0]);
+      const devs = dispositiviUtente(H, u.nome, u), same = ownerKey === u.key, prev = ownerDevs;
+      ownerKey = u.key; ownerDevs = devs;
+      drawDevs(devs, showAll ? otherDevices(devs) : []);
+      const keys = ["tipologia", "marca_modello", "seriale"], cur = keys.map(k => g(k).trim()), ser = codeKey(cur[2]);
+      const mine = !cur.some(Boolean) || (devAuto && cur.join("|") === devAuto) || (!same && ser && prev.some(d => codeKey(d.seriale) === ser));
+      if (!mine) return;      // l'hai scritto o scelto tu: non lo tocco
+      if (devs.length) { applyDevice(devs[0], true); devAuto = keys.map(k => g(k).trim()).join("|"); }
+      else if (cur.some(Boolean)) { keys.forEach(k => { const e = $("v_" + k); if (e) e.value = ""; }); devAuto = null; }      // erano gli apparati della persona di prima
     };
     /* se cambi la tipologia (PC o cellulare) metto il seriale/IMEI giusto della persona */
     const deviceHint = () => {
@@ -704,7 +751,7 @@
       if (wanted.length && !g("marca_modello").trim()) $("v_marca_modello").value = wanted[0].marca_modello;
     };
     /* assegnazione: per un notebook o uno smartphone propongo il seriale/IMEI della persona */
-    let dotAuto = null;
+    let dotAuto = null, dotCardRows = [], loadDotCard = () => {};
     const dotHint = () => {
       const u = t === "assegnazione" ? curUser() : null; if (!u || !$("v_dTipo")) return;
       const cur = $("v_dCodice").value.trim(); if (cur && cur !== dotAuto) return;      // l'hai scritto tu: non lo tocco
@@ -715,13 +762,13 @@
       const u = curUser(); if (!u) return;
       const inp = $("v_" + uk);
       if (t === "trasferimento" || t === "assegnazione") { if (inp.value !== u.nome) inp.value = u.nome; }
-      if (t === "trasferimento") setIfEmpty("contatti", u.telefono);
+      if (t === "trasferimento") autoSet("contatti", u.telefono);
       else if (t === "presa_in_carico") { const w = u.matricola ? `${u.nome} (matricola ${u.matricola})` : u.nome; if (inp.value !== w) inp.value = w; }
-      else if (t === "assegnazione") { setIfEmpty("matricola", u.matricola); setIfEmpty("titolo", H.titoli[u.nome.toLowerCase()] || ""); dotHint(); }
+      else if (t === "assegnazione") { autoSet("matricola", u.matricola); autoSet("titolo", H.titoli[u.nome.toLowerCase()] || ""); loadDotCard(u); dotHint(); }
       if (t === "trasferimento" || t === "presa_in_carico") userDevices(u);
       deviceHint();
     }
-    if (uk) $("v_" + uk).addEventListener("change", () => { if (!curUser()) drawDevs([]); picked(); });
+    if (uk) $("v_" + uk).addEventListener("change", () => { if (!curUser()) { ownerKey = null; ownerDevs = []; if (!g(uk).trim()) drawDevs([]); } picked(); });
     if ($("v_tipologia")) { $("v_tipologia").addEventListener("input", deviceHint); $("v_tipologia").addEventListener("change", deviceHint); }
     if ($("v_seriale")) $("v_seriale").addEventListener("change", () => { const dev = trovaDispositivo(H, g("seriale"), users); if (dev) applyDevice(dev); });
 
@@ -837,11 +884,20 @@
       S.flush = () => { if (["v_dModello", "v_dCodice", "v_dIccid", "v_dNumero"].some(i => $(i).value.trim() && !(i === "v_dCodice" && $(i).value.trim() === dotAuto))) add(); };
       $("v_dAdd").onclick = add;
       $("v_dTipo").addEventListener("input", () => { sim(); dotHint(); }); $("v_dTipo").addEventListener("change", () => { sim(); dotHint(); });
+      /* la dotazione della scheda della persona va già nell'elenco; quello che aggiungi o correggi tu resta */
+      loadDotCard = u => {
+        if (S.dotazione.some(r => !dotCardRows.some(a => JSON.stringify(a) === JSON.stringify(r)))) return;
+        const rows = dotazioneDaScheda(u); S.dotazione = rows.map(r => ({ ...r })); dotCardRows = rows.map(r => ({ ...r })); draw();
+      };
       sim(); draw();
     }
     $("v_cancel").onclick = () => { const uid = S.uid; closeModal(); if (uid) showVer(uid); };
     $("v_save").onclick = save;
-    if (!S.uid && uk && curUser()) picked();      // «Nuovo verbale» dalla scheda di un utente: parto già compilato
+    if (!S.uid && uk && curUser()) {
+      const u0 = curUser();
+      for (const [k, v] of [["contatti", u0.telefono], ["matricola", u0.matricola]]) { const e = $("v_" + k); if (e && v && e.value.trim() === v) autoVals[k] = v; }      // messi da me: cambiando persona cambiano
+      picked();
+    }      // «Nuovo verbale» dalla scheda di un utente: parto già compilato
   }
 
   function collect() {

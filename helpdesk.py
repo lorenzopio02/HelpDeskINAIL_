@@ -49,6 +49,11 @@ except ImportError:
     CD = None
 
 try:
+    import servicenow as SN       # importazione dei ticket di ServiceNow come interventi
+except ImportError:
+    SN = None
+
+try:
     import corridoio3d as C3D     # visite 3D: passeggiata nel piano e edificio intero
 except ImportError:
     C3D = None
@@ -1595,8 +1600,8 @@ class Database:
     def users_basic(self):
         """Tutte le persone con i dati che servono a riconoscerle (per l'importazione da Excel)."""
         return [dict(r) for r in self.conn.execute(
-            "SELECT id, nome, matricola, sede, telefono, ufficio, ordine, seriale_pc, email "
-            "FROM utenti ORDER BY id")]
+            "SELECT id, nome, matricola, sede, telefono, ufficio, ordine, seriale_pc, email, "
+            "imei, dotazione FROM utenti ORDER BY id")]
 
     def uffici(self):
         """Gli uffici già scritti (senza doppioni), per il completamento automatico."""
@@ -1819,6 +1824,35 @@ class Database:
                  iid),
             )
         return created
+
+    def interventi_per_import(self):
+        """Gli interventi già scritti, per riconoscere quelli che l'importazione ha già messo."""
+        return [dict(r) for r in self.conn.execute(
+            "SELECT id, ticket, soluzione, note, utente_id FROM interventi")]
+
+    def update_intervento_import(self, iid, soluzione=None, utente=None, togli_dedotto=False):
+        """Dopo un'importazione: scrive la soluzione (solo se è vuota) e/o cambia la persona di un
+        intervento importato con la persona «dedotta» (e toglie la dicitura che lo diceva)."""
+        row = self.conn.execute("SELECT soluzione, note FROM interventi WHERE id = ?",
+                                (iid,)).fetchone()
+        if not row:
+            return False
+        sol, note, uid = row["soluzione"], row["note"], None
+        if soluzione and not (sol or "").strip():
+            sol = soluzione
+        with self.conn:
+            if utente:
+                uid, _ = self._get_or_create_user(utente, update=False)
+            if togli_dedotto:
+                note = re.sub(r"( - utente dedotto da [^\n]*| - utente non riconosciuto)(?=\n|$)",
+                              "", note or "")
+            if uid is not None:
+                self.conn.execute("UPDATE interventi SET utente_id=?, soluzione=?, note=?, "
+                                  "modificato=? WHERE id=?", (uid, sol, note, now_utc_iso(), iid))
+            else:
+                self.conn.execute("UPDATE interventi SET soluzione=?, note=?, modificato=? "
+                                  "WHERE id=?", (sol, note, now_utc_iso(), iid))
+        return True
 
     def set_stato(self, iid, stato):
         with self.conn:
@@ -7730,6 +7764,15 @@ class VerbaleDialog(ModalDialog):
         self._sede_auto = {}
         self._marca_auto = ""          # marca rimasta scritta dal giro prima (non digitata da te)
         self._suggest_adders = {}
+        self._auto_vals = {}           # campi messi da me per la persona scelta (si cambiano se cambi persona)
+        self._dev_auto = None          # (tipologia, modello, seriale) messi da me
+        self._owner_key = None         # la persona di cui sto mostrando gli apparati
+        self._owner_devs = []
+        self._dot_card_rows = []       # righe di dotazione che ho caricato io dalla scheda
+        self._serial_all = []
+        self.serial_cb = None
+        self.dev_hint_lbl = None
+        self.show_all = tk.BooleanVar(value=False)      # «mostra anche gli apparati degli altri»
 
         outer = ttk.Frame(self)
         outer.pack(fill="both", expand=True)
@@ -7756,6 +7799,17 @@ class VerbaleDialog(ModalDialog):
         self.firme_panel.grid(row=self.row, column=0, columnspan=2, sticky="ew", pady=(14, 0))
         self.row += 1
         self.firme_scelte = self.firme_panel.scelte()
+        if self.user_key and self.v[self.user_key].get().strip():
+            self._init_user()                  # aperto con la persona gia' scelta: compilo i suoi dati
+
+    def _init_user(self):
+        u = self._current_user()
+        if not u:
+            return
+        for key, val in (("contatti", u["telefono"]), ("matricola", u["matricola"])):
+            if key in self.v and val and self.v[key].get().strip() == val:
+                self._auto_vals[key] = val      # messo da me: cambiando persona cambia anche lui
+        self._user_picked()
 
     # ----- costruzione dei campi -----
     def _wheel_on_combo(self, event):
@@ -7882,25 +7936,52 @@ class VerbaleDialog(ModalDialog):
         if key in self.v and value and not self.v[key].get().strip():
             self.v[key].set(value)
 
+    def _auto_set(self, key, value):
+        """Scrivo il dato della persona nel campo se e' vuoto, o se c'ero io (per la persona di
+        prima): cosi' cambiando persona cambiano anche i suoi dati. Quello che scrivi tu resta."""
+        if key not in self.v:
+            return
+        value = value or ""
+        cur = self.v[key].get().strip()
+        if not cur or cur == self._auto_vals.get(key):
+            self.v[key].set(value)
+            self._auto_vals[key] = value
+
     def _user_picked(self, event=None):
         u = self._current_user()
         if not u:
+            if self.user_key and not self.v[self.user_key].get().strip():
+                self._owner_key = None
+                self._owner_devs = []
+                self._owner_lists(None)           # nome tolto: tornano gli elenchi di tutti
             return
         if self.tipo in ("trasferimento", "assegnazione") and self.v[self.user_key].get() != u["nome"]:
             self.v[self.user_key].set(u["nome"])      # nome scritto come in lista
         if self.tipo == "trasferimento":
-            self._set_if_empty("contatti", u["telefono"])
+            self._auto_set("contatti", u["telefono"])
         elif self.tipo == "presa_in_carico":
             wanted = "%s (matricola %s)" % (u["nome"], u["matricola"]) if u["matricola"] else u["nome"]
             if self.v["utente"].get() != wanted:
                 self.v["utente"].set(wanted)
         elif self.tipo == "assegnazione":
-            self._set_if_empty("matricola", u["matricola"])
-            self._set_if_empty("titolo", self.hist["titoli"].get(u["nome"].casefold(), ""))
+            self._auto_set("matricola", u["matricola"])
+            self._auto_set("titolo", self.hist["titoli"].get(u["nome"].casefold(), ""))
+            self._dot_from_card(u)
             self._dot_hint()
         if self.tipo in ("trasferimento", "presa_in_carico"):
             self._user_devices(u)
         self._device_hint()
+
+    def _dot_from_card(self, u):
+        """Assegnazione: carico nell'elenco la dotazione scritta nella scheda della persona
+        (notebook, smartphone, SIM, cuffie con seriale/IMEI). Non tocco quello che hai scritto tu."""
+        auto = self._dot_card_rows
+        if any(r not in auto for r in self.dotazione):
+            return
+        rows = VB.dotazione_da_scheda(u)
+        self.dotazione = [dict(r) for r in rows]
+        self._dot_card_rows = [dict(r) for r in rows]
+        self._fill_dot()
 
     # ----- apparati gia' noti (dai verbali precedenti e dalla scheda utente) -----
     @staticmethod
@@ -7955,12 +8036,64 @@ class VerbaleDialog(ModalDialog):
             self.v[uk].set(dev["utente"])
             self._user_picked()
 
+    def _set_serial_values(self, vals=None):
+        """L'elenco dei seriali del campo: tutti, oppure solo quelli della persona scelta."""
+        if self.serial_cb is None:
+            return
+        vals = list(vals) if vals is not None else self._serial_values()
+        self._serial_all[:] = vals            # e' la stessa lista che usa il completamento automatico
+        self.serial_cb.configure(values=vals)
+
+    def _owner_lists(self, nome, devs=None):
+        """Con una persona scelta mostro solo i SUOI apparati e seriali; senza, quelli di tutti.
+        La spunta «anche gli altri» aggiunge in coda gli apparati delle altre persone."""
+        allv = self.show_all.get()
+        if nome and devs:
+            self._set_device_list(devs + self.hist["dispositivi"][:80] if allv else devs)
+            sers = [d["seriale"] for d in devs if d["seriale"]]
+            if allv:
+                have = {s.casefold() for s in sers}
+                sers += [x for x in self._serial_values() if x.casefold() not in have]
+            self._set_serial_values(sers)
+            note = ("prima gli apparati di %s, poi quelli degli altri" if allv
+                    else "solo gli apparati di %s") % nome
+        elif nome:
+            self._set_device_list()
+            self._set_serial_values()
+            note = "di %s non ho apparati: scegli o scrivi il seriale" % nome
+        else:
+            self._set_device_list()
+            self._set_serial_values()
+            note = ""
+        if self.dev_hint_lbl is not None:
+            self.dev_hint_lbl.configure(text=note or "compila tipologia, modello e seriale")
+
+    def _toggle_all(self, *_):
+        u = self._current_user()
+        self._owner_lists(u["nome"] if u else None, self._owner_devs if u else None)
+
     def _user_devices(self, u):
         devs = VB.dispositivi_utente(self.hist, u["nome"], u)
-        self._set_device_list(devs + self.hist["dispositivi"][:80])   # prima i suoi, poi tutti gli altri
-        if devs and "tipologia" in self.v and not any(
-                self.v[k].get().strip() for k in ("tipologia", "marca_modello", "seriale")):
-            self._apply_device(devs[0])
+        same = self._owner_key == key_name(u["nome"])
+        prev = self._owner_devs
+        self._owner_key, self._owner_devs = key_name(u["nome"]), devs
+        self._owner_lists(u["nome"], devs)
+        if "tipologia" not in self.v:
+            return
+        keys = ("tipologia", "marca_modello", "seriale")
+        cur = tuple(self.v[k].get().strip() for k in keys)
+        ser = VB._codice_key(cur[2])
+        mine = (not any(cur) or cur == self._dev_auto
+                or (not same and bool(ser) and any(VB._codice_key(d["seriale"]) == ser for d in prev)))
+        if not mine:
+            return                       # l'hai scritto o scelto tu: non lo tocco
+        if devs:
+            self._apply_device(devs[0], override=True)
+            self._dev_auto = tuple(self.v[k].get().strip() for k in keys)
+        elif any(cur):
+            for k in keys:               # erano gli apparati della persona di prima
+                self.v[k].set("")
+            self._dev_auto = None
 
     def _device_chosen(self, event=None):
         dev = self.dev_map.get(self.dev_var.get())
@@ -7975,7 +8108,9 @@ class VerbaleDialog(ModalDialog):
     def _serial_values(self):
         vals, seen = [], set()
         for x in [d["seriale"] for d in self.hist["dispositivi"]] + \
-                [u.get(k, "") for u in self.app.users_data for k in ("seriale_pc", "imei")]:
+                [u.get(k, "") for u in self.app.users_data for k in ("seriale_pc", "imei")] + \
+                [d["seriale"] for u in self.app.users_data
+                 for d in VB.dispositivi_utente({"dispositivi": []}, u["nome"], u)]:
             if x and x.casefold() not in seen:
                 seen.add(x.casefold())
                 vals.append(x)
@@ -7989,8 +8124,11 @@ class VerbaleDialog(ModalDialog):
             self.dev_cb.pack(side="left")
             self.dev_cb.bind("<<ComboboxSelected>>", self._device_chosen)
             self.dev_cb.bind("<MouseWheel>", self._wheel_on_combo)
-            ttk.Label(fr, text="compila tipologia, modello e seriale", style="Hint.TLabel").pack(
-                side="left", padx=(8, 0))
+            self.dev_hint_lbl = ttk.Label(fr, text="compila tipologia, modello e seriale",
+                                          style="Hint.TLabel")
+            self.dev_hint_lbl.pack(side="left", padx=(8, 0))
+            ttk.Checkbutton(fr, text="mostra anche gli altri", variable=self.show_all,
+                            command=self._toggle_all).pack(side="left", padx=(10, 0))
         self._line("Apparato già noto", build)
         self._set_device_list()
 
@@ -8016,7 +8154,9 @@ class VerbaleDialog(ModalDialog):
         self._device_row()
         self._tipologia()
         self._hcombo("Marca / Modello", "marca_modello", "marca_modello", 44)
-        _, cb = self._combo("Numero di serie", "seriale", self._serial_values(), 36, scan=self._serial_picked)
+        self._serial_all = self._serial_values()
+        _, cb = self._combo("Numero di serie", "seriale", self._serial_all, 36, scan=self._serial_picked)
+        self.serial_cb = cb
         self._on_pick(cb, self._serial_picked)
         luoghi = self.app.verbale_luoghi()
         self._hcombo("Provenienza (struttura)", "provenienza", "provenienza", 64, base=luoghi)
@@ -8031,7 +8171,9 @@ class VerbaleDialog(ModalDialog):
         self._device_row()
         self._tipologia("Tipologia dispositivo *")
         self._hcombo("Marca e modello", "marca_modello", "marca_modello", 44)
-        _, cb = self._combo("Numero seriale", "seriale", self._serial_values(), 36, scan=self._serial_picked)
+        self._serial_all = self._serial_values()
+        _, cb = self._combo("Numero seriale", "seriale", self._serial_all, 36, scan=self._serial_picked)
+        self.serial_cb = cb
         self._on_pick(cb, self._serial_picked)
         self._user_combo("Utente assegnatario *", "utente")
         self._entry("N° INC", "inc", 24, hint="il ticket dell'incidente")
@@ -8880,6 +9022,8 @@ class App(tk.Tk):
         m.add_command(label="Importa persone da Excel (lista INAIL)…",
                       command=self.import_people_excel)
         m.add_command(label="Importa seriali dei PC da Excel…", command=self.import_pc_serials)
+        m.add_command(label="Importa interventi da ServiceNow (Excel)…",
+                      command=self.import_servicenow)
         m.add_command(label="Unisci persone doppie…", command=self.merge_duplicates_dialog)
         m.add_command(label="Unisci doppioni stampanti…", command=self.merge_printers_dialog)
         m.add_separator()
@@ -12708,6 +12852,102 @@ class App(tk.Tk):
         more("Nell'app senza seriale del PC: li scrivi tu a mano", mancano, 40)
         lines.append("\nPer portarli sul telefono: File › Esporta dati per il telefono.")
         messagebox.showinfo(APP_NAME, "Importazione completata.\n\n" + "\n".join(lines))
+
+    def import_servicenow(self):
+        if SN is None:
+            messagebox.showerror(APP_NAME, "Manca il file servicenow.py accanto al programma.")
+            return
+        paths = filedialog.askopenfilenames(
+            title="Importa interventi da ServiceNow",
+            filetypes=[("Excel", "*.xlsx"), ("Tutti i file", "*.*")])
+        if not paths:
+            return
+        rows, errors = [], []
+        for p in paths:
+            try:
+                rows += SN.read_rows(p)
+            except ValueError as e:
+                errors.append("%s: %s" % (os.path.basename(p), e))
+        if errors:
+            messagebox.showwarning(APP_NAME, "Questi file non li posso usare:\n\n" +
+                                   "\n".join(errors))
+        if not rows:
+            return
+        try:
+            tickets = SN.group_tickets(rows)
+            plan = SN.plan_import(tickets, self.db.users_basic(), self.db.interventi_per_import(),
+                                  self.db.sedi(), SN.technician_name(rows))
+        except (ValueError, sqlite3.Error) as e:
+            messagebox.showerror(APP_NAME, "Non riesco a preparare l'importazione:\n%s" % e)
+            return
+        s = plan["stats"]
+        if not s["nuovi"] and not (plan["soluzioni"] or plan["riassegna"]):
+            messagebox.showinfo(
+                APP_NAME, "Non c'è niente da importare.\n\nTicket nel file: %d (da %d righe).\n"
+                          "Già nell'app: %d. Annullati (saltati): %d."
+                % (s["ticket"], s["righe_file"], s["gia_presenti"], s["annullati"]))
+            return
+        sedi = (" Sedi nuove da creare: %s." % ", ".join(plan["sedi_nuove"])
+                if plan["sedi_nuove"] else "")
+        if not messagebox.askyesno(
+                APP_NAME,
+                "Nel file ci sono %d righe, cioè %d ticket (uno per ticket, senza doppioni).\n\n"
+                "Interventi nuovi da aggiungere: %d.\nGià nell'app: %d. Annullati (saltati): %d.\n\n"
+                "Persone nuove da creare: %d.%s\nUtente preso da chi ha aperto il ticket: %d; "
+                "dedotto da matricola, seriale o testo: %d; non riconosciuto (va su «%s»): %d.\n\n"
+                "Vuoi continuare?"
+                % (s["righe_file"], s["ticket"], s["nuovi"], s["gia_presenti"], s["annullati"],
+                   len([u for u in plan["utenti_nuovi"] if u["nome"] != SN.DA_ASSEGNARE]), sedi,
+                   s["da_richiedente"] + s["da_chiamante"], s["dedotti"], SN.DA_ASSEGNARE,
+                   s["senza_utente"])):
+            return
+        try:
+            SN.apply_plan(self.db, plan)
+        except (ValueError, sqlite3.Error) as e:
+            messagebox.showerror(APP_NAME, "Importazione non riuscita:\n%s" % e)
+            return
+        self.refresh_users()
+        self.refresh_stats()
+        self.apply_filters()
+        report = ["Interventi aggiunti: %d" % s["nuovi"],
+                  "Già nell'app (non toccati): %d" % s["gia_presenti"],
+                  "Annullati (saltati): %d" % s["annullati"],
+                  "Persone nuove create: %d" % len([u for u in plan["utenti_nuovi"]
+                                                     if u["nome"] != SN.DA_ASSEGNARE]),
+                  "Sedi nuove create: %s" % (", ".join(plan["sedi_nuove"]) or "nessuna"),
+                  "Sede scritta a persone che non l'avevano: %d" % s["sede_scritta"],
+                  "Persone con sede diversa da quella del ticket (lasciata com'era): %d"
+                  % s["sede_diversa"],
+                  "Utente da chi ha aperto il ticket: %d" % (s["da_richiedente"] + s["da_chiamante"]),
+                  "Utente dedotto: %d (%s)" % (s["dedotti"], ", ".join(
+                      "%s %d" % (k, v) for k, v in sorted(s["per_come"].items())) or "-"),
+                  "Utente non riconosciuto (su «%s»): %d" % (SN.DA_ASSEGNARE, s["senza_utente"])]
+        if s["soluzioni_aggiunte"]:
+            report.append("Soluzioni aggiunte a interventi già presenti: %d" % s["soluzioni_aggiunte"])
+        if s["riassegnati"]:
+            report.append("Interventi con utente corretto: %d" % s["riassegnati"])
+        extra = []
+        if plan["utenti_nuovi"]:
+            extra.append("\nPersone create (controlla cognome e nome):")
+            extra += ["   %s%s" % (u["nome"], " - %s" % u["sede"] if u["sede"] else "")
+                      for u in plan["utenti_nuovi"]]
+        if plan["controllare"]:
+            extra.append("\nDa controllare a mano:")
+            extra += ["   " + t for t in plan["controllare"]]
+        path = os.path.join(data_dir(), "rapporto_importazione_servicenow.txt")
+        saved = ""
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\n".join(report + extra) + "\n")
+            saved = "\n\nIl rapporto completo è in:\n%s" % path
+        except OSError:
+            pass
+        short = report + (["\nDa controllare a mano: %d (nel rapporto)" % len(plan["controllare"])]
+                          if plan["controllare"] else [])
+        if len(plan["utenti_nuovi"]):
+            short.append("Persone nuove nel rapporto: %d" % len(plan["utenti_nuovi"]))
+        short.append("\nPer portare tutto sul telefono: File › Esporta dati per il telefono.")
+        messagebox.showinfo(APP_NAME, "Importazione completata.\n\n" + "\n".join(short) + saved)
 
     def open_data_folder(self):
         try:
