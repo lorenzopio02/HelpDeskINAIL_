@@ -53,11 +53,6 @@ try:
 except ImportError:
     SN = None
 
-try:
-    import corridoio3d as C3D     # visite 3D: passeggiata nel piano e edificio intero
-except ImportError:
-    C3D = None
-
 APP_NAME = "Help Desk INAIL"
 
 # Colori presi dal logo INAIL
@@ -8780,83 +8775,6 @@ class MergeDuplicatesDialog(ModalDialog):
             self.destroy()
 
 
-class Walk3DHost:
-    """Ponte tra le visite 3D (corridoio3d.py) e i dati dell'app: stanze, persone, stampanti di un piano."""
-
-    def __init__(self, app):
-        self.app = app
-        self.parent = app
-        self._pimg = {}
-        self._pcache = (None, 0.0, [])
-
-    # --- dati
-    def building(self, eid):
-        return next((b for b in self.app.db.edifici() if b["id"] == eid), None)
-
-    def building_name(self, eid):
-        b = self.building(eid)
-        return b["nome"] if b else ""
-
-    def floors(self, eid):
-        """I piani dell'edificio dal piu' basso (anche quelli fuori dall'intervallo ma con stanze o stampanti)."""
-        b = self.building(eid)
-        if not b:
-            return []
-        f = set(range(min(b["piano_min"], b["piano_max"]), max(b["piano_min"], b["piano_max"]) + 1))
-        f.update(r["piano"] for r in self.app.db.stanze_of(eid))
-        f.update(p["piano"] for p in self._printers(eid))
-        return sorted(f)
-
-    def _printers(self, eid):
-        key, when, rows = self._pcache
-        if key != eid or time.time() - when > 3.0:
-            rows = self.app.db.printers_of(eid)
-            self._pcache = (eid, time.time(), rows)
-        return rows
-
-    def floor_data(self, eid, piano):
-        db = self.app.db
-        rooms = []
-        for r in db.stanze_of(eid, piano):
-            ppl = db.persone_of(r["id"])
-            miss = sum(1 for p in ppl for d in desk_devices(p) if not d["value"])
-            rooms.append({"uid": r["uid"], "id": r["id"], "codice": r["codice"],
-                          "scrivanie": r["scrivanie"] or 0, "miss": miss,
-                          "persone": [{"nome": p["nome"], "ufficio": p.get("ufficio") or ""} for p in ppl]})
-        prs = []
-        for p in self._printers(eid):
-            if p["piano"] != piano:
-                continue
-            prs.append({"uid": str(p["id"]), "nome": p["nome"], "modello": p["modello"],
-                        "stanza": p.get("stanza_codice") or "", "red": p.get("man_richieste") or 0,
-                        "low": bool(p.get("scorta_bassa")), "fuori": bool(p.get("fuori_servizio"))})
-        return {"edificio": self.building_name(eid), "piano": piano, "label": floor_label(piano),
-                "rooms": rooms, "printers": prs}
-
-    def printer_image(self, modello):
-        key = "%s_m" % printer_image_key(modello)
-        if key not in self._pimg:
-            try:
-                from PIL import Image
-                self._pimg[key] = Image.open(io.BytesIO(base64.b64decode(PRINTER_IMAGES[key]))).convert("RGBA")
-            except Exception:
-                self._pimg[key] = None
-        return self._pimg[key]
-
-    # --- la foto del personaggio: solo in questa cartella, mai nei backup, nei file per il telefono o su GitHub
-    def avatar_path(self):
-        return os.path.join(data_dir(), C3D.AVATAR_NAME)
-
-    # --- azioni
-    def open_room(self, room_id):
-        if self.app.db.get_stanza(room_id):
-            return RoomDialog(self.app, room_id)
-        return None
-
-    def open_walk(self, eid, piano):
-        self.app.open_walk_3d(eid, piano)
-
-
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -9030,8 +8948,6 @@ class App(tk.Tk):
         m.add_command(label="Correggi il nome di un modello stampante…",
                       command=self.rename_model_dialog)
         m.add_command(label="Mappa della Toscana…", command=self.open_map)
-        m.add_command(label="Passeggiata nel piano in 3D…", command=self.open_walk_3d)
-        m.add_command(label="Edificio intero in 3D…", command=self.open_tower_3d)
         m.add_command(label="Verbali in serie (un Word per ogni persona)…", command=self.verbali_serie)
         m.add_command(label="Dati per i verbali Word…", command=self.verbali_settings)
         m.add_command(label="Apri la cartella dei modelli Word", command=self.open_templates_folder)
@@ -9689,63 +9605,6 @@ class App(tk.Tk):
         self.var_f_stato.set(FILTRO_STATO[1])
         self.nb.select(self.tab_reg)
 
-    # --- visite 3D (passeggiata nel piano, edificio intero)
-    def _walk_host(self):
-        if C3D is None:
-            messagebox.showinfo(
-                APP_NAME, "Le visite 3D non sono disponibili: nel programma manca il file "
-                          "corridoio3d.py. Caricalo su GitHub insieme a helpdesk.py e aspetta che "
-                          "il programma si ricrei.")
-            return None
-        if self.__dict__.get("_w3d") is None:
-            self._w3d = Walk3DHost(self)
-        return self._w3d
-
-    def _open_3d_window(self, attr, factory):
-        old = self.__dict__.get(attr)
-        if old is not None:
-            try:
-                if old.winfo_exists():
-                    old.close()
-            except Exception:
-                pass
-        win = factory()
-        setattr(self, attr, win)
-        return win
-
-    def open_walk_3d(self, eid=None, piano=None, mode=None):
-        """Passeggiata nel piano (di default il piano scelto in «Piani e stanze»)."""
-        host = self._walk_host()
-        if host is None:
-            return None
-        b = self.current_building()
-        if eid is None:
-            if not b:
-                messagebox.showinfo(APP_NAME, "Crea prima un edificio (scheda Edificio).")
-                return None
-            eid = b["id"]
-        if piano is None:
-            piano = self.rooms_floor()
-            if piano is None:
-                piano = 0
-        if not self.db.stanze_of(eid, piano):
-            messagebox.showinfo(
-                APP_NAME, "Su questo piano non ci sono ancora stanze: creale in «Piani e stanze» "
-                          "(o importa l'elenco con File > Importa elenco stanze e persone).")
-            return None
-        return self._open_3d_window("_walk_win", lambda: C3D.WalkWindow(host, eid, piano, mode))
-
-    def open_tower_3d(self):
-        """L'edificio scelto, intero, con i suoi piani impilati."""
-        host = self._walk_host()
-        if host is None:
-            return None
-        b = self.current_building()
-        if not b:
-            messagebox.showinfo(APP_NAME, "Crea prima un edificio (scheda Edificio).")
-            return None
-        return self._open_3d_window("_tower_win", lambda: C3D.TowerWindow(host, b["id"]))
-
     def open_map(self):
         MapDialog(self)
 
@@ -10365,8 +10224,6 @@ class App(tk.Tk):
                    command=self.delete_building).pack(side="left", padx=(8, 0))
         ttk.Button(bar, text="Unisci doppioni stampanti…", command=self.merge_printers_dialog).pack(
             side="left", padx=(8, 0))
-        ttk.Button(bar, text="Edificio in 3D", command=self.open_tower_3d).pack(
-            side="left", padx=(8, 0))
 
         cf = ttk.Frame(t)
         cf.grid(row=1, column=0, sticky="nsew")
@@ -10618,10 +10475,6 @@ class App(tk.Tk):
         ttk.Button(bar, text="+ Nuova stanza…", style="Save.TButton",
                    command=self.new_room).pack(side="left")
         ttk.Button(bar, text="Incolla più stanze…", command=self.bulk_rooms).pack(
-            side="left", padx=(8, 0))
-        ttk.Button(bar, text="Passeggiata nel piano 3D", command=self.open_walk_3d).pack(
-            side="left", padx=(8, 0))
-        ttk.Button(bar, text="Edificio in 3D", command=self.open_tower_3d).pack(
             side="left", padx=(8, 0))
         self.lbl_rfloor = ttk.Label(bar, style="Hint.TLabel")
         self.lbl_rfloor.pack(side="left", padx=(16, 0))

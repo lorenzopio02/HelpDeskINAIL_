@@ -942,13 +942,12 @@ function renderBld() {
   const floors = new Set(); for (let f = Math.max(b.piano_min, b.piano_max); f >= Math.min(b.piano_min, b.piano_max); f--) floors.add(f);
   ps.forEach(s => floors.add(s.piano));
   const list = [...floors].sort((a, c) => c - a), sc = scorteNow();
-  $("bld").innerHTML = `<button class="btn navy" id="bldTower" type="button">🏢 Edificio in 3D</button><div class="bld"><div class="roof">${esc(b.nome)}${b.sede ? " · " + esc(b.sede) : ""}</div>` + list.map(f => {
+  $("bld").innerHTML = `<div class="bld"><div class="roof">${esc(b.nome)}${b.sede ? " · " + esc(b.sede) : ""}</div>` + list.map(f => {
     const here = ps.filter(s => s.piano === f);
     return `<div class="floor"><div class="fl" data-f="${f}">${floorLabel(f)}${window.BOL ? BOL.badge(b.uid, f) : ""}</div><div class="ps">${here.map(s => prCard(s, sc)).join("") || `<span class="meta" style="align-self:center">nessuna stampante</span>`}</div></div>`;
   }).join("") + `</div>`;
   $("bld").querySelectorAll(".pr").forEach(c => c.onclick = () => openPrinter(c.dataset.u));
   $("bld").querySelectorAll(".fl").forEach(c => c.onclick = () => window.ROOMS && ROOMS.floorMenu(b.uid, +c.dataset.f));
-  if ($("bldTower")) $("bldTower").onclick = () => window.CORR && CORR.openTower(b.uid);
 }
 /* bollini: rosso = ticket Konica ancora "Richiesto" (col numero); giallo = scorta del suo modello sotto soglia */
 function prnFlags(s, sc) {
@@ -1457,6 +1456,5 @@ wire("btnImport", "imFile", false); wire("btnRestore", "rsFile", true);
 <script src="barcode.js"></script>
 <script src="qr.js"></script>
 <script src="scan.js"></script>
-<script src="corridoio.js"></script>
 </body>
 </html>

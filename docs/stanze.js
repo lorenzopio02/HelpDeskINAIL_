@@ -625,8 +625,7 @@ window.ROOMS = (function () {
     h += edifici.length > 1 ? `<select id="rsB">${edifici.map(e => `<option value="${esc(e.uid)}"${e.uid === b.uid ? " selected" : ""}>${esc(e.nome)}${e.sede ? " (" + esc(e.sede) + ")" : ""}</option>`).join("")}</select>` : "";
     h += `<div class="chips" id="rsF">${floors.map(f => { const n = roomsOf(b.uid, f).length; return `<button type="button" data-f="${f}" class="${f === curF ? "on" : ""}">${floorLabel(f)}${n ? ` (${n})` : ""}</button>`; }).join("")}</div>`;
     h += `<div class="card"><h3>${esc(b.nome)} · ${floorLabel(curF)}</h3><div class="meta">${rs.length} ${rs.length === 1 ? "stanza" : "stanze"} · ${ppl.length} ${ppl.length === 1 ? "persona" : "persone"} · ${prs.length} ${prs.length === 1 ? "stampante" : "stampanti"}</div>
-      <div class="row"><div><button class="btn green" id="rsNew" type="button">＋ Nuova stanza</button></div><div><button class="btn navy" id="rsBulk" type="button">Incolla più stanze</button></div></div>
-      <div class="row"><div><button class="btn" id="rsWalk" type="button">🚶 Passeggiata nel piano</button></div><div><button class="btn" id="rsTower" type="button">🏢 Edificio in 3D</button></div></div></div>`;
+      <div class="row"><div><button class="btn green" id="rsNew" type="button">＋ Nuova stanza</button></div><div><button class="btn navy" id="rsBulk" type="button">Incolla più stanze</button></div></div></div>`;
     /* pianta */
     h += `<div class="card" id="rsPlan"><h3>Pianta del piano</h3>`;
     h += `<div class="seg" id="rsView"><button type="button" data-v="foto" class="${view === "foto" ? "on" : ""}"${hasPl ? "" : " disabled"}>Foto della pianta</button><button type="button" data-v="schema" class="${view === "schema" ? "on" : ""}">Schema</button></div>`;
@@ -667,8 +666,6 @@ window.ROOMS = (function () {
     if ($("rsB")) $("rsB").onchange = e => { bSel = e.target.value; curF = null; mark = false; markUid = null; zoom = 1; again(); };
     $("rsF").querySelectorAll("button").forEach(x => x.onclick = () => { curF = +x.dataset.f; mark = false; markUid = null; view = ""; zoom = 1; again(); });
     $("rsNew").onclick = () => newRoomDialog(b.uid, curF);
-    $("rsWalk").onclick = () => window.CORR && CORR.openWalk(b.uid, curF);
-    $("rsTower").onclick = () => window.CORR && CORR.openTower(b.uid);
     $("rsBulk").onclick = () => bulkDialog(b.uid, curF);
     $("rsView").querySelectorAll("button").forEach(x => x.onclick = () => { if (x.disabled) return; view = x.dataset.v; again(); });
     if ($("rsDesks")) { wireDesks($("rsDesks"), null, "floor"); $("rsDesks").querySelectorAll(".dl").forEach(c => c.onclick = () => openRoom(c.dataset.r)); }
@@ -855,12 +852,10 @@ window.ROOMS = (function () {
     m.innerHTML = `<div class="card"><h3>${esc(bName(euid))} · ${floorLabel(piano)}</h3><div class="meta">${rs.length} ${rs.length === 1 ? "stanza" : "stanze"} · ${n} ${n === 1 ? "persona" : "persone"}${pl && pl.foto ? " · pianta caricata" : " · pianta non ancora caricata"}</div>
       <button class="btn green" id="fmOpen" type="button">🗺 Apri pianta</button>
       <button class="btn navy" id="fmNew" type="button">＋ Nuova stanza</button>
-      ${rs.length ? `<button class="btn" id="fmWalk" type="button">🚶 Passeggiata nel piano (3D)</button>` : ""}
       <button class="btn" id="fmNo" type="button">Chiudi</button></div>`;
     m.classList.remove("hidden");
     $("fmOpen").onclick = () => openFloor(euid, piano);
     $("fmNew").onclick = () => { bSel = euid; curF = piano; newRoomDialog(euid, piano); };
-    if ($("fmWalk")) $("fmWalk").onclick = () => { m.classList.add("hidden"); window.CORR && CORR.openWalk(euid, piano); };
     $("fmNo").onclick = () => m.classList.add("hidden");
   }
   /* «Dove si siede» nella scheda utente */

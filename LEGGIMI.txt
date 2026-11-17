@@ -2,6 +2,12 @@ HELP DESK INAIL - PC + app per iPhone
 =====================================
 
 NOVITA' DI QUESTA VERSIONE
+ - TOLTE LE VISITE 3D DEL CORRIDOIO E DELL'EDIFICIO (PC e telefono): non c'e' piu' la "Passeggiata
+   nel piano in 3D" ne' l'"Edificio in 3D" (menu File, schede Edificio e Piani e stanze, telefono:
+   scheda del piano e scheda Edificio), e nemmeno "La mia faccia". Piani, stanze, persone,
+   stampanti e la visita 3D della singola stanza sul telefono restano come prima. La foto che
+   avevi scelto per "La mia faccia" (file la_mia_faccia.png nella cartella dei dati del PC) non
+   serve piu': puoi cancellarla. Sul telefono la versione diventa "helpdesk-v29".
  - TICKET DI SERVICENOW COME INTERVENTI (solo PC): File > "Importa interventi da ServiceNow
    (Excel)...". Scegli il file Excel esportato da ServiceNow (anche piu' file insieme, anche lo
    stesso file piu' volte: non crea doppioni). L'app unisce le righe dello stesso ticket (le
@@ -17,7 +23,7 @@ NOVITA' DI QUESTA VERSIONE
    anche i suoi dati, ma quello che hai scritto a mano resta. Nel verbale di Assegnazione la
    dotazione scritta nella scheda (notebook, smartphone, SIM, cuffie con seriale/IMEI) e' gia'
    nell'elenco: togli le righe che non servono. Non vengono proposti monitor, telefoni Teams e
-   prese di rete. Sul telefono la versione resta "helpdesk-v28".
+   prese di rete. Sul telefono la versione diventa "helpdesk-v29".
  - EMAIL DELLE PERSONE (PC e telefono): nella scheda della persona c'e' il campo "Email" e il
    pulsante "Scrivi mail" (apre il programma di posta con un messaggio nuovo). L'email si cerca
    come tutto il resto, si copia con "Copia dati" e viaggia fra PC e telefono. L'importazione
@@ -60,33 +66,6 @@ NOVITA' DI QUESTA VERSIONE
    file scegli la SEDE (DR Toscana, Firenze...): se il foglio si chiama "DIREZIONE REGIONALE..." o
    "FIRENZE..." la propone da sola; negli altri casi la scegli tu. Poi "Importa". Vedi la sezione
    PERSONE DA EXCEL piu' sotto.
- - PASSEGGIATA NEL PIANO IN 3D (PC e telefono): vedi il piano come un vero corridoio. Due modi:
-     * DALL'ALTO: il piano come una casa delle bambole, con le stanze, le scrivanie, le stampanti nel
-       corridoio e una TARGHETTA in piedi davanti a ogni stanza. Si gira trascinando, ci si avvicina
-       (rotellina o + e -), si scorre lungo il corridoio col cursore.
-     * CAMMINA (prima persona): cammini nel corridoio con le frecce (o W A S D), ti giri a destra e a
-       sinistra e sulle PORTE vedi le TARGHETTE come quelle vere: pannello blu col NUMERO NUOVO della
-       stanza in bianco grassetto e, sotto, il pannello chiaro con l'UFFICIO in grassetto e il NOME
-       delle persone. Il pallino sulla targhetta e' verde se i codici sono tutti scritti, rosso se ne
-       manca qualcuno, grigio se la stanza e' libera. In basso (PC) o nel riquadro (telefono) compare
-       la targhetta che stai guardando con il pulsante "Entra" che apre la stanza. "Vai a..." ti porta
-       davanti a una stanza. In alto a destra c'e' la MINI-MAPPA del piano con il tuo segnaposto
-       (clic o tocco su una stanza = ci vai).
-     * Sul PC: File > "Passeggiata nel piano in 3D..." oppure, in "Piani e stanze", il pulsante
-       "Passeggiata nel piano 3D" (apre il piano scelto). Sul telefono: nella scheda del piano
-       ("Piani e stanze") i pulsanti "Passeggiata nel piano" e "Edificio in 3D".
- - EDIFICIO INTERO IN 3D (PC e telefono): tutti i piani impilati. Giri intorno al palazzo
-   trascinando, ti avvicini con rotellina / + e -, e clicchi (o tocchi) un piano per entrarci a
-   camminare. A sinistra c'e' l'elenco dei piani con stanze, persone e stampanti (ticket aperti,
-   toner basso). Sul PC: File > "Edificio intero in 3D...", oppure il pulsante "Edificio in 3D"
-   nella scheda Edificio e in "Piani e stanze". Sul telefono: scheda Edificio, pulsante "Edificio in
-   3D". Le targhette e i colori sono disegnati dai dati che l'app ha gia' (stanze, persone,
-   stampanti): se cambi un nome e chiudi la scheda, la passeggiata si aggiorna.
- - LA MIA FACCIA (PC e telefono): pulsante "La mia faccia..." (PC) / smile (telefono) nella
-   passeggiata in prima persona. Scegli una tua foto: viene ritagliata quadrata e messa al posto
-   del pallino verde sulla mini-mappa. La foto resta SOLO sul dispositivo dove l'hai scelta (sul PC
-   nella cartella dei dati, file la_mia_faccia.png; sul telefono dentro l'app): NON va nei file di
-   scambio, NON va nel backup, NON va su GitHub. Con "Togli la foto" la cancelli.
  - BARRETTE DEL TONER STIMATE (PC e telefono): sotto ogni colore di ogni stampante c'e' una barretta
    che STIMA quanto toner resta, dai giorni passati dall'ultimo cambio e da quanto sono durati i
    cambi precedenti di quel colore. Non e' il livello vero letto dalla stampante. Tratteggiata =
@@ -147,8 +126,7 @@ NOVITA' DI QUESTA VERSIONE
    trascinando il dito, ti avvicini con due dita o con + e -. Sotto ogni scrivania ci sono i pallini
    dei codici (verde = scritto, rosso = manca). Tocchi una scrivania e si apre a pagina intera con i
    bollini; "Torna alla stanza 3D" ti riporta dentro. Non e' una realta' aumentata con la fotocamera
-   (su iPhone da una pagina web non si puo'): e' una visita 3D disegnata dai dati. I corridoi e
-   l'edificio sono nelle visite 3D del piano (vedi sopra). Sul PC la stanza resta la vista a scrivanie. Si puo'
+   (su iPhone da una pagina web non si puo'): e' una visita 3D disegnata dai dati. Sul PC la stanza resta la vista a scrivanie. Si puo'
    aprire anche dal browser del PC, ma i dati stanno nel telefono (o nel browser dove li importi).
  - SCRIVANIA A PAGINA INTERA CON I BOLLINI (PC e telefono): quando apri una scrivania si apre a
    PAGINA INTERA, con la scrivania in grande e un BOLLINO su ogni dispositivo: computer, MONITOR
@@ -331,10 +309,11 @@ NOVITA' DI QUESTA VERSIONE
 1) AGGIORNARE IL PROGRAMMA DEL PC
  - Nel repository: Add file > Upload files.
  - Trascina helpdesk.py (sostituisce il vecchio), printer_images.py, verbali.py, verbali_modelli.py,
-   requirements.txt (sostituisce il vecchio: ora comprende numpy e opencv per la fotocamera) e,
-   codici.py (la lettura dei codici con la fotocamera) e, NUOVO, corridoio3d.py (le visite 3D
-   del PC: passeggiata nel piano ed edificio intero). Se dimentichi corridoio3d.py il programma si
-   apre lo stesso, ma i pulsanti 3D dicono che manca il file.
+   requirements.txt (sostituisce il vecchio: ora comprende numpy e opencv per la fotocamera) e
+   codici.py (la lettura dei codici con la fotocamera) e, NUOVO, servicenow.py (l'importazione dei
+   ticket di ServiceNow). Se dimentichi servicenow.py il programma si apre lo stesso, ma la voce
+   "Importa interventi da ServiceNow" dice che manca il file. Se vuoi, cancella da GitHub
+   corridoio3d.py: le visite 3D del corridoio e dell'edificio sono state tolte e non serve piu'.
  - Cambia anche build.yml (serve per i verbali e per la fotocamera): su GitHub apri
    .github/workflows/build.yml, tasto matita, cancella tutto e incolla il contenuto del build.yml
    di questo zip, poi Commit. (Oppure trascina la cartella .github di questo zip.)
@@ -347,8 +326,8 @@ NOVITA' DI QUESTA VERSIONE
  - Trascina l'INTERA cartella "docs" di questo zip (se non si carica la cartella, carica
    i file che ci sono dentro e scrivi "docs/" davanti al nome quando GitHub lo chiede).
    File nuovi rispetto a prima: verbali.js (scheda Verbali), stanze.js (Piani e stanze), toscana.js
-   (Mappa della Toscana), barcode.js e scan.js (lettura dei codici con la fotocamera) e, NUOVO,
-   corridoio.js (passeggiata nel piano ed edificio in 3D).
+   (Mappa della Toscana), barcode.js e scan.js (lettura dei codici con la fotocamera).
+   Se vuoi, cancella da GitHub docs/corridoio.js: la passeggiata 3D e l'edificio 3D sono stati tolti.
  - Commit changes.
  - La prima volta: Settings > Pages > "Build and deployment": Source = "Deploy from a branch",
    Branch = main, cartella = /docs > Save.
@@ -907,47 +886,6 @@ SUL PC: LA FINESTRA DELLA FOTOCAMERA
    (la creazione del .exe avviene su GitHub e non l'ho potuta eseguire). Provato con una webcam
    simulata (video di codici), con finestre finte e con foto. Se dopo l'aggiornamento il programma
    non parte o la finestra della fotocamera da' errore, dimmelo con il messaggio che compare.
-
-PASSEGGIATA NEL PIANO E EDIFICIO IN 3D
- - Come e' disegnato: il corridoio ha le stanze con i NUMERI DISPARI da una parte e i PARI
-   dall'altra (come nei corridoi veri); se i codici non hanno numeri (per esempio "Sala riunioni")
-   le stanze si alternano a sinistra e a destra. Ogni stanza ha la sua porta e, accanto, la
-   targhetta. In fondo al corridoio c'e' la scritta USCITA e, davanti, le stampanti del piano che
-   non sono dentro una stanza (con i bollini rossi dei ticket aperti e giallo del toner basso, e una
-   croce rossa se sono fuori servizio).
- - Targhetta: numero della stanza (nuovo), ufficio, nomi (fino a 3, poi "+N"). Se la scritta e'
-   lunga si rimpicciolisce o va a capo. Pallino: verde = tutti i codici delle scrivanie scritti,
-   rosso = ne manca qualcuno, grigio = stanza libera.
- - PC, comandi in prima persona: frecce su/giu (o W/S) = avanti/indietro; frecce destra/sinistra
-   (o D/A) = ti giri; trascini il mouse = guardi intorno; rotellina = avanti/indietro; clic su una
-   porta o su una targhetta, oppure Invio, oppure il pulsante "Entra nella stanza" = apri la stanza
-   (quando chiudi la scheda la passeggiata si aggiorna); "Vai a..." = ti porta davanti a una stanza;
-   clic sulla mini-mappa = ci vai. Esc chiude la finestra.
- - PC, vista dall'alto: trascini = giri e inclini; rotellina o + e - = ti avvicini; il cursore
-   "Lungo il corridoio" (o le frecce su/giu) ti sposta lungo il piano; clic su una stanza o su una
-   targhetta = apri la stanza. Passando col mouse sopra una stanza o una porta si illumina.
- - Come funziona sul PC: Tk non ha il 3D, quindi il programma lo disegna da solo con Pillow (la
-   libreria delle immagini che c'e' gia'). Mentre ti muovi il disegno e' piu' rapido; appena ti fermi
-   si rifa' con i bordi lisci. Se il computer e' lento la camminata puo' scattare un po': nulla di
-   grave, e' solo grafica, i dati non vengono toccati.
- - Telefono: stessi modi (Dall'alto / Cammina), ma con i quattro tasti (avanti, indietro, gira a sinistra, gira a destra) da tenere premuti (o il dito
-   per guardare intorno) e il pulsante "Vai a...". Il disegno e' fatto con la grafica 3D del browser.
- - LA FOTO NON ESCE DAL DISPOSITIVO: sul PC sta in %APPDATA%\HelpDeskINAIL\la_mia_faccia.png (la
-   cartella che si apre con File > Apri la cartella dei dati) ed e' fuori da backup, file per il
-   telefono e GitHub. Non caricarla mai su GitHub.
- - NON provato qui: PC, iPhone e fotocamera veri. Provato il motore con immagini di prova (targhette
-   a sinistra/destra, ritaglio vicino ai muri, clic sulle porte), le finestre con una finta finestra
-   e il telefono con un browser di prova. Se una finestra non si apre o scatta troppo, dimmelo.
-
-STAMPANTI DOPPIE (come sistemarle)
- 1) File > Salva una copia di backup (per sicurezza).
- 2) File > "Unisci doppioni stampanti...": per ogni stampante VECCHIA (senza seriale) l'app propone
-    la NUOVA piu' probabile (stesso piano e modello, nome simile). Controlla e scegli; "(non unire)"
-    lascia com'e'. Conferma: resta la nuova (nome e seriale del file) con tutto lo storico.
- 3) Se l'importazione dell'elenco ti dice "ATTENZIONE: N stampanti da unire", e' questo il momento.
- 4) "Esporta dati per il telefono" e, sul telefono, "Ricevi dal PC": il telefono toglie le vecchie.
- - Resta della vecchia, se mancano nella nuova: IP, note, modello, stanza (le note si accodano
-   separate da " | "); "fuori servizio" resta se lo era una delle due.
 
 NUMERO DI SERIE DELLE STAMPANTI
  - Dove si scrive: PC > Stampanti > Edificio e stampanti > scegli la stampante > "Modifica
