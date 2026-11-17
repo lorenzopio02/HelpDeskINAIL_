@@ -259,7 +259,7 @@ input[type=date]::-webkit-date-and-time-value,input[type=datetime-local]::-webki
  <section id="p-usr" class="hidden">
   <h2>Utenti</h2>
   <div class="row"><div><button class="btn green" type="button" id="uNew">＋ Nuovo utente</button></div><div><button class="btn navy" type="button" id="uExport">⬇ Esporta dati</button></div></div>
-  <label for="uSearch">Cerca</label><input id="uSearch" type="search" data-scan="any" placeholder="Nome, matricola, telefono, seriale, IMEI…">
+  <label for="uSearch">Cerca</label><input id="uSearch" type="search" data-scan="any" placeholder="Nome, matricola, telefono, email, seriale, IMEI…">
   <label for="uSede">Sede</label><select id="uSede"></select>
   <div class="hint" id="uCount"></div>
   <div id="uList"></div>
@@ -436,6 +436,14 @@ const stOf = i => STATI.includes(i.stato) ? i.stato : "Risolto";
 const stTag = s => `<span class="tag st-${esc(s).replace(/ /g, "-")}">${esc(s)}</span>`;
 const stColor = s => ({ "Aperto": "#d12233", "In attesa": "#b36b00", "Richiesto": "#d12233", "Eseguito": "#237a3c", "Risolto": "#237a3c" })[s];
 const matOf = name => { const u = users.find(x => x.key === keyOf(name)); return (u && u.matricola) || ""; };
+const mailOf = name => { const u = users.find(x => x.key === keyOf(name)); return (u && u.email) || ""; };
+const cleanMail = t => String(t || "").replace(/\s+/g, "").toLowerCase().slice(0, 120);
+const validMail = t => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(t);
+/* apre il programma di posta con un messaggio nuovo (un link «mailto:» toccato) */
+function openMail(addr) {
+  const a = cleanMail(addr); if (!validMail(a)) return false;
+  const l = document.createElement("a"); l.href = "mailto:" + a; l.style.display = "none"; document.body.appendChild(l); l.click(); l.remove(); return true;
+}
 function show(el, text, err) { el.innerHTML = text ? `<div class="msg${err ? " err" : ""}">${esc(text)}</div>` : ""; }
 
 /* riduce le foto (lato lungo max 1800 px) per risparmiare spazio */
@@ -457,8 +465,49 @@ function shrink(file, max = 1800) {
 
 /* ================== Stato ================== */
 let users = [], editUid = null, photos = [], autoFor = null, sediList = [...SEDI];
+/* persone unite (o rinominate) sul PC: «nome vecchio (chiave)» -> «nome che resta». Serve a non far tornare i doppioni */
+let uniU = {};
+/* dalla chiave di un nome vecchio alla persona che resta (segue anche più unioni di fila); null se non è un nome unito */
+function unionEnd(k) {
+  let cur = null, hops = 0;
+  while (uniU[k] && hops++ < 8) { cur = uniU[k]; k = keyOf(cur); }
+  return cur ? { key: k, nome: cur } : null;
+}
+/* il nome con cui scrivere una persona: se «nome» è un nome unito a un'altra persona (e qui non c'è nessuno con quel nome) uso quella che resta */
+function canonUser(nome) {
+  const n0 = normName(nome), k = keyOf(n0);
+  if (!k || users.some(u => u.key === k)) return n0;
+  const end = unionEnd(k), t = end && end.key !== k && users.find(u => u.key === end.key);
+  return t ? t.nome : n0;
+}
+/* applica le unioni fatte sul PC: i dati che mancano passano alla persona che resta, i suoi interventi pure, il doppione sparisce */
+async function applyUnions() {
+  let np = 0, ni = 0;
+  for (const dk of Object.keys(uniU)) {
+    const end = unionEnd(dk); if (!end || end.key === dk) continue;
+    const t = users.find(x => x.key === end.key); if (!t) continue;      /* la persona che resta non è ancora arrivata dal PC */
+    const d = users.find(x => x.key === dk);
+    if (d) {
+      const fill = {};
+      for (const f of ["ufficio", "sede", "telefono", "email", "matricola", "seriale_pc", "imei", "ordine"]) if (!t[f] && d[f]) fill[f] = d[f];
+      const mine = cleanDot(t.dotazione), same = (a, b) => ["tipo", "modello", "seriale"].every(f => a[f].toLowerCase() === b[f].toLowerCase());
+      const dot = cleanDot([...mine, ...cleanDot(d.dotazione).filter(x => !mine.some(y => same(x, y)))]);
+      if (Object.keys(fill).length || dot.length !== mine.length) await put("utenti", { ...t, ...fill, dotazione: dot });   /* «modificato» non cambia: il PC ha già fatto la stessa unione */
+      if (window.ROOMS) {
+        await ROOMS.load();
+        if (ROOMS.seatOf(dk)) { if (ROOMS.seatOf(t.key)) await ROOMS.dropUser(dk); else await ROOMS.renameUser(dk, t.key, t.nome); }
+        else await ROOMS.dropUser(dk);
+      }
+      await del("utenti", dk); np++;
+    }
+    for (const i of await getAll("interventi")) if (keyOf(i.utente) === dk) { await put("interventi", { ...i, utente: t.nome }); ni++; }   /* senza toccare «modificato»: quelli già mandati restano mandati */
+    users = await getAll("utenti");
+  }
+  return { np, ni };
+}
 
 async function loadUsers() {
+  uniU = (await getMeta("utentiUniti")) || {};
   users = (await getAll("utenti")).sort((a, b) => (a.ordine || a.nome).localeCompare(b.ordine || b.nome, "it"));   /* per COGNOME: «ordine» = «Cognome Nome» dalla lista INAIL */
   const sedi = new Set(SEDI); users.forEach(u => u.sede && sedi.add(u.sede));
   (await getAll("interventi")).forEach(i => i.sede && sedi.add(i.sede));
@@ -612,13 +661,14 @@ function clearForm() {
 $("btnCancelEdit").onclick = () => { clearForm(); show($("newMsg"), ""); };
 
 $("btnSave").onclick = async () => {
-  const nome = normName($("fUser").value), req_ = $("fReq").value.trim();
+  const typed = normName($("fUser").value), nome = canonUser(typed), req_ = $("fReq").value.trim();
   if (!$("fDt").value) return show($("newMsg"), "Controlla data e ora.", true);
   if (!nome) return show($("newMsg"), "Scrivi il nome dell'utente.", true);
   if (!req_) return show($("newMsg"), "Scrivi per cosa ti hanno chiamato.", true);
   const sede = normName($("fSede").value), mod = nowIso();
   const k = keyOf(nome), old = users.find(u => u.key === k);
   const fields = { matricola: $("fMat").value.trim(), sede, telefono: $("fTel").value.trim(), seriale_pc: $("fSn").value.trim(), imei: $("fImei").value.trim() };
+  if (old && nome !== typed) for (const f of Object.keys(fields)) fields[f] = fields[f] || old[f] || "";      /* nome vecchio unito a un'altra persona: i campi lasciati vuoti non cancellano i suoi dati */
   const changed = !old || ["matricola", "sede", "telefono", "seriale_pc", "imei"].some(f => (old[f] || "") !== fields[f]);
   if (changed) await put("utenti", { ...(old || {}), key: k, nome: old ? old.nome : nome, ...fields, modificato: mod });   /* ...old: ufficio, dotazione e ordine non si perdono */
   const prev = editUid ? await getKey("interventi", editUid) : null;
@@ -627,7 +677,7 @@ $("btnSave").onclick = async () => {
     richiesta: req_, soluzione: $("fSol").value.trim(), note: $("fNote").value.trim(), ticket: $("fTicket").value.trim(),
     stato: $("fStato").value, foto: photos, creato: prev ? prev.creato : mod, modificato: mod
   });
-  const msg = (editUid ? "Modifiche salvate." : "Intervento salvato.") + (old ? "" : " Nuovo utente aggiunto: " + nome + ".") + (photos.length ? ` Foto: ${photos.length}.` : "") + ($("fStato").value !== "Risolto" ? ` Resta da seguire (${$("fStato").value}).` : "");
+  const msg = (editUid ? "Modifiche salvate." : "Intervento salvato.") + (nome !== typed ? ` «${typed}» è già unito a «${nome}» sul PC: ho usato «${nome}».` : "") + (old ? "" : " Nuovo utente aggiunto: " + nome + ".") + (photos.length ? ` Foto: ${photos.length}.` : "") + ($("fStato").value !== "Risolto" ? ` Resta da seguire (${$("fStato").value}).` : "");
   clearForm(); await loadUsers(); await stats(); show($("newMsg"), msg);
 };
 
@@ -640,11 +690,11 @@ async function copyText(t) {
   }
 }
 function userLines(o) {
-  return [["Utente", o.nome], ["Matricola", o.mat], ["Sede", o.sede], ["Telefono", o.tel], ["Seriale PC", o.sn], ["IMEI cellulare", o.imei]]
+  return [["Utente", o.nome], ["Matricola", o.mat], ["Sede", o.sede], ["Telefono", o.tel], ["Email", o.email], ["Seriale PC", o.sn], ["IMEI cellulare", o.imei]]
     .filter(([k, v]) => v && String(v).trim()).map(([k, v]) => `${k}: ${String(v).trim()}`).join("\n");
 }
 $("btnCopy").onclick = async () => {
-  const t = userLines({ nome: normName($("fUser").value), mat: $("fMat").value, sede: normName($("fSede").value), tel: $("fTel").value, sn: $("fSn").value, imei: $("fImei").value });
+  const t = userLines({ nome: normName($("fUser").value), mat: $("fMat").value, sede: normName($("fSede").value), tel: $("fTel").value, email: mailOf($("fUser").value), sn: $("fSn").value, imei: $("fImei").value });
   if (!t) return show($("newMsg"), "Non c'è ancora nessun dato da copiare.", true);
   const ok = await copyText(t);
   show($("newMsg"), ok ? "Dati dell'utente copiati: ora puoi incollarli nel ticket." : "Non sono riuscito a copiare: tieni premuto sul testo per copiarlo a mano.", !ok);
@@ -715,7 +765,7 @@ async function openDetail(uid) {
   const m = $("modal");
   m.innerHTML = `<div class="card full"><h3>${esc(i.utente)}</h3><div class="meta">${fmtDt(i.data_ora)}${i.sede ? " · " + esc(i.sede) : ""}${i.ticket ? " · Ticket " + esc(i.ticket) : ""}</div>
     <div style="margin:6px 0">${stTag(stOf(i))}</div>
-    ${u.matricola || u.telefono || u.seriale_pc || u.imei ? `<div class="meta" style="margin-top:6px">${u.matricola ? "Matr. " + esc(u.matricola) + " · " : ""}${u.telefono ? "Tel " + esc(u.telefono) + " · " : ""}${u.seriale_pc ? "SN " + esc(u.seriale_pc) + " · " : ""}${u.imei ? "IMEI " + esc(u.imei) : ""}</div>` : ""}
+    ${u.matricola || u.telefono || u.email || u.seriale_pc || u.imei ? `<div class="meta" style="margin-top:6px">${u.matricola ? "Matr. " + esc(u.matricola) + " · " : ""}${u.telefono ? "Tel " + esc(u.telefono) + " · " : ""}${u.email ? `<a class="mailLink" href="mailto:${esc(u.email)}">${esc(u.email)}</a> · ` : ""}${u.seriale_pc ? "SN " + esc(u.seriale_pc) + " · " : ""}${u.imei ? "IMEI " + esc(u.imei) : ""}</div>` : ""}
     <label>Per cosa mi hanno chiamato</label><div style="white-space:pre-wrap">${esc(i.richiesta)}</div>
     ${i.soluzione ? `<label>Come ho risolto</label><div style="white-space:pre-wrap">${esc(i.soluzione)}</div>` : ""}
     ${i.note ? `<label>Note</label><div style="white-space:pre-wrap">${esc(i.note)}</div>` : ""}
@@ -730,7 +780,7 @@ async function openDetail(uid) {
   m.classList.remove("hidden");
   $("dClose").onclick = () => m.classList.add("hidden");
   if ($("dDone")) $("dDone").onclick = async () => { i.stato = "Risolto"; i.modificato = nowIso(); await put("interventi", i); m.classList.add("hidden"); await stats(); renderReg(); };
-  $("dCopy").onclick = async () => { const ok = await copyText(userLines({ nome: i.utente, mat: u.matricola, sede: i.sede, tel: u.telefono, sn: u.seriale_pc, imei: u.imei })); show($("dMsg"), ok ? "Dati dell'utente copiati: ora puoi incollarli nel ticket." : "Copia non riuscita.", !ok); };
+  $("dCopy").onclick = async () => { const ok = await copyText(userLines({ nome: i.utente, mat: u.matricola, sede: i.sede, tel: u.telefono, email: u.email, sn: u.seriale_pc, imei: u.imei })); show($("dMsg"), ok ? "Dati dell'utente copiati: ora puoi incollarli nel ticket." : "Copia non riuscita.", !ok); };
   $("dDel").onclick = async () => { if (confirm("Eliminare questo intervento dal telefono?")) { await del("interventi", uid); m.classList.add("hidden"); await stats(); renderReg(); } };
   $("dEdit").onclick = () => { m.classList.add("hidden"); loadInForm(i, u, false); };
   $("dDup").onclick = () => { m.classList.add("hidden"); loadInForm(i, u, true); };
@@ -755,12 +805,13 @@ async function renderUsers() {
   const all = await getAll("interventi"), count = {}, last = {};
   all.forEach(i => { const k = keyOf(i.utente); count[k] = (count[k] || 0) + 1; if (!last[k] || i.data_ora > last[k]) last[k] = i.data_ora; });
   const q = words($("uSearch").value), sede = $("uSede").value;
-  usrFiltered = users.filter(u => { const h = [u.nome, u.ufficio, u.matricola, u.sede, u.telefono, u.seriale_pc, u.imei, dotText(u.dotazione)].join(" ").toLowerCase(); return (!sede || u.sede === sede) && q.every(t => h.includes(t)); })
+  usrFiltered = users.filter(u => { const h = [u.nome, u.ufficio, u.matricola, u.sede, u.telefono, u.email, u.seriale_pc, u.imei, dotText(u.dotazione)].join(" ").toLowerCase(); return (!sede || u.sede === sede) && q.every(t => h.includes(t)); })
     .map(u => ({ ...u, n: count[u.key] || 0, ultimo: last[u.key] || "" }));
   $("uCount").textContent = `Utenti: ${usrFiltered.length} su ${users.length}`;
   $("uList").innerHTML = usrFiltered.map(u => `<div class="card" data-k="${esc(u.key)}"><h3>${esc(u.nome)}</h3>
     <div class="meta">${u.matricola ? "Matricola " + esc(u.matricola) + " · " : ""}${esc(u.sede || "sede non indicata")} · ${u.n} interventi</div>
     ${u.ufficio ? `<div class="meta">${esc(u.ufficio)}</div>` : ""}
+    ${u.email ? `<div class="meta">✉ ${esc(u.email)}</div>` : ""}
     <div class="meta">${u.telefono ? "Tel " + esc(u.telefono) + " · " : ""}${u.seriale_pc ? "SN " + esc(u.seriale_pc) + " · " : ""}${u.imei ? "IMEI " + esc(u.imei) : ""}</div>
     ${cleanDot(u.dotazione).length ? `<div class="meta">Dotazione: ${esc(dotText(u.dotazione))}</div>` : ""}</div>`).join("") || `<div class="hint">Nessun utente. Si aggiungono da soli quando salvi un intervento.</div>`;
   $("uList").querySelectorAll(".card").forEach(c => c.onclick = () => editUser(c.dataset.k));
@@ -771,7 +822,7 @@ $("uNew").onclick = () => editUser(null);
 $("uExport").onclick = () => openExport("usr");
 function editUser(k) {
   const isNew = !k;
-  const u = isNew ? { key: "", nome: "", ufficio: "", matricola: "", sede: "", telefono: "", seriale_pc: "", imei: "", dotazione: [] } : users.find(x => x.key === k);
+  const u = isNew ? { key: "", nome: "", ufficio: "", matricola: "", sede: "", telefono: "", email: "", seriale_pc: "", imei: "", dotazione: [] } : users.find(x => x.key === k);
   if (!u) return;
   let dot = cleanDot(u.dotazione);
   const m = $("modal");
@@ -781,6 +832,8 @@ function editUser(k) {
     <label>Matricola aziendale</label><input id="eMat" autocapitalize="characters" value="${esc(u.matricola)}">
     <label>Sede</label><input id="eSede" autocomplete="off" autocorrect="off" spellcheck="false" autocapitalize="words" value="${esc(u.sede)}">
     <label>Telefono</label><input id="eTel" inputmode="tel" value="${esc(u.telefono)}">
+    <label>Email</label><input id="eMail" type="email" inputmode="email" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" value="${esc(u.email || "")}">
+    <button class="btn" id="eMailTo" type="button">✉ Scrivi mail</button>
     <label>Seriale PC</label><input id="eSn" data-scan="serial" value="${esc(u.seriale_pc)}">
     <label>IMEI cellulare</label><input id="eImei" inputmode="numeric" data-scan="imei" value="${esc(u.imei)}">
     <label>Dotazione</label><div id="eDot"></div>
@@ -804,9 +857,14 @@ function editUser(k) {
   drawDot();
   $("eDotAdd").onclick = () => { dot = readDot(); dot.push({ tipo: "", modello: "", seriale: "" }); drawDot(); const last = $("eDot").querySelectorAll(".dT"); if (last.length) last[last.length - 1].focus(); };
   $("eClose").onclick = () => m.classList.add("hidden");
+  $("eMailTo").onclick = () => {
+    const a = cleanMail($("eMail").value);
+    if (!a) return show($("eMsg"), "Scrivi prima l'email di questa persona.", true);
+    if (!openMail(a)) show($("eMsg"), "Questa email non sembra valida.", true);
+  };
   if (!isNew) {
     if (window.ROOMS) ROOMS.dove(u.key, $("eDove"));
-    $("eCopy").onclick = async () => { const ok = await copyText(userLines({ nome: u.nome, mat: $("eMat").value, sede: $("eSede").value, tel: $("eTel").value, sn: $("eSn").value, imei: $("eImei").value })); show($("eMsg"), ok ? "Dati dell'utente copiati." : "Copia non riuscita.", !ok); };
+    $("eCopy").onclick = async () => { const ok = await copyText(userLines({ nome: u.nome, mat: $("eMat").value, sede: $("eSede").value, tel: $("eTel").value, email: cleanMail($("eMail").value), sn: $("eSn").value, imei: $("eImei").value })); show($("eMsg"), ok ? "Dati dell'utente copiati." : "Copia non riuscita.", !ok); };
     $("eVer").onclick = () => VER.chooseTipo(u);
     $("eSee").onclick = () => { m.classList.add("hidden"); $("rUser").value = u.nome; ["rSede", "rTicket", "rTicketNo", "rDal", "rAl", "rSearch", "rStato"].forEach(id => $(id).value = ""); if (window.TOSCANA) TOSCANA.setView("l"); go("reg"); };
     $("eDel").onclick = async () => {
@@ -819,7 +877,10 @@ function editUser(k) {
     const nome = normName($("eNome").value); if (!nome) return show($("eMsg"), "Scrivi il nome.", true);
     const nk = keyOf(nome);
     if (nk !== u.key && users.some(x => x.key === nk)) return show($("eMsg"), "Esiste già un utente con questo nome.", true);
-    const nu = { key: nk, nome, ufficio: oneLine($("eUff").value), dotazione: cleanDot(readDot()), matricola: $("eMat").value.trim(), sede: normName($("eSede").value), telefono: $("eTel").value.trim(), seriale_pc: $("eSn").value.trim(), imei: $("eImei").value.trim(), ordine: (!isNew && sameWords(u.nome, nome)) ? (u.ordine || "") : "", modificato: nowIso() };
+    const mail = cleanMail($("eMail").value);
+    if (mail && !validMail(mail)) return show($("eMsg"), "L'email non sembra valida (manca la @ o il dominio).", true);
+    const nu = { key: nk, nome, ufficio: oneLine($("eUff").value), dotazione: cleanDot(readDot()), matricola: $("eMat").value.trim(), sede: normName($("eSede").value), telefono: $("eTel").value.trim(), email: mail, seriale_pc: $("eSn").value.trim(), imei: $("eImei").value.trim(), ordine: (!isNew && sameWords(u.nome, nome)) ? (u.ordine || "") : "", modificato: nowIso() };
+    if (uniU[nk]) { delete uniU[nk]; await setMeta("utentiUniti", uniU); }      /* lo scrivo di nuovo apposta: non è più un nome da rimandare */
     if (!isNew && nk !== u.key) {
       await del("utenti", u.key);
       for (const i of await getAll("interventi")) if (keyOf(i.utente) === u.key) { i.utente = nome; i.modificato = nowIso(); await put("interventi", i); }
@@ -1078,7 +1139,7 @@ function renderScorta() {
 }
 
 /* ================== Esporta PDF / Excel ================== */
-const USER_COLS = [["nome", "Utente", 55, 26, true], ["matricola", "Matricola", 28, 14, true], ["ufficio", "Ufficio", 45, 26, false], ["sede", "Sede", 30, 16, true], ["telefono", "Telefono", 35, 18, true], ["seriale_pc", "Seriale PC", 45, 22, true], ["imei", "IMEI cellulare", 45, 20, true], ["dotazione", "Dotazione", 70, 40, false], ["n", "N. interventi", 22, 14, false], ["ultimo", "Ultimo intervento", 32, 18, false]];
+const USER_COLS = [["nome", "Utente", 55, 26, true], ["matricola", "Matricola", 28, 14, true], ["ufficio", "Ufficio", 45, 26, false], ["sede", "Sede", 30, 16, true], ["telefono", "Telefono", 35, 18, true], ["email", "Email", 55, 30, false], ["seriale_pc", "Seriale PC", 45, 22, true], ["imei", "IMEI cellulare", 45, 20, true], ["dotazione", "Dotazione", 70, 40, false], ["n", "N. interventi", 22, 14, false], ["ultimo", "Ultimo intervento", 32, 18, false]];
 const tally = arr => { const m = new Map(); arr.forEach(x => m.set(x, (m.get(x) || 0) + 1)); return [...m].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(b[0], "it")); };
 function dsInt() {
   const f = regFilter(), items = regFiltered;
@@ -1238,7 +1299,7 @@ async function buildExport(mode) {
   const usersOut = [...us, ...users.filter(u => needed.has(u.key) && !us.includes(u))];
   return {
     tipo: "helpdesk-telefono", versione: 6, creato: nowIso(),
-    utenti: usersOut.map(u => ({ nome: u.nome, ufficio: u.ufficio || "", matricola: u.matricola || "", sede: u.sede || "", telefono: u.telefono || "", seriale_pc: u.seriale_pc || "", imei: u.imei || "", dotazione: cleanDot(u.dotazione), ordine: u.ordine || "", modificato: u.modificato || nowIso() })),
+    utenti: usersOut.map(u => ({ nome: u.nome, ufficio: u.ufficio || "", matricola: u.matricola || "", sede: u.sede || "", telefono: u.telefono || "", email: u.email || "", seriale_pc: u.seriale_pc || "", imei: u.imei || "", dotazione: cleanDot(u.dotazione), ordine: u.ordine || "", modificato: u.modificato || nowIso() })),
     interventi: items.map(i => ({ uid: i.uid, data_ora: i.data_ora, utente: i.utente, sede: i.sede || "", richiesta: i.richiesta, soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", stato: stOf(i), modificato: i.modificato, foto: (i.foto || []).map(f => ({ nome: f.nome, data: f.data })) })),
     toner: tons.map(t => ({ uid: t.uid, stampante_uid: t.stampante_uid, colore: t.colore, data_ora: t.data_ora, note: t.note || "", bolla_uid: t.bolla_uid || "", modificato: t.modificato })),
     bolle: window.BOL ? BOL.exportItems(mode, last) : [],
@@ -1268,11 +1329,19 @@ async function mergeFile(file, restore) {
   if (!data || !["helpdesk-pc", "helpdesk-telefono"].includes(data.tipo)) throw new Error("Questo non è un file dell'app Help Desk.");
   if (restore && data.tipo !== "helpdesk-telefono") throw new Error("Per ripristinare serve un file creato da questa app (non quello che arriva dal PC).");
   const fromPc = data.tipo === "helpdesk-pc";
+  /* persone unite sul PC: il PC manda ogni volta l'elenco completo, quindi lo sostituisco (se il file lo ha) */
+  uniU = (await getMeta("utentiUniti")) || {};
+  if (fromPc && Array.isArray(data.utenti_uniti)) {
+    const nm_ = {};
+    for (const m of data.utenti_uniti) { const da = keyOf(m && m.da), a = normName(m && m.a); if (da && a && da !== keyOf(a)) nm_[da] = a; }
+    uniU = nm_; await setMeta("utentiUniti", uniU);
+  }
   let nu = 0, au = 0, ni = 0, ai = 0, sk = 0, ne = 0, ns = 0, nt = 0, pt = 0, skt = 0, nm = 0, am = 0, pm = 0, skm = 0, nsc = 0;
   for (const u of data.utenti || []) {
     const nome = normName(u.nome || ""); if (!nome) continue;
+    if (uniU[keyOf(nome)]) continue;      /* unita a un'altra persona sul PC: non la faccio tornare */
     const k = keyOf(nome), cur = users.find(x => x.key === k), mod = u.modificato || "";
-    const rec = { key: k, nome: cur ? cur.nome : nome, ufficio: "ufficio" in u ? oneLine(u.ufficio) : (cur ? cur.ufficio || "" : ""), dotazione: "dotazione" in u ? cleanDot(u.dotazione) : (cur ? cleanDot(cur.dotazione) : []), matricola: "matricola" in u ? String(u.matricola || "").trim() : (cur ? cur.matricola || "" : ""), sede: normName(u.sede || ""), telefono: String(u.telefono || "").trim(), seriale_pc: String(u.seriale_pc || "").trim(), imei: String(u.imei || "").trim(), ordine: "ordine" in u ? String(u.ordine || "").trim() : (cur ? cur.ordine || "" : ""), modificato: mod || nowIso() };
+    const rec = { key: k, nome: cur ? cur.nome : nome, ufficio: "ufficio" in u ? oneLine(u.ufficio) : (cur ? cur.ufficio || "" : ""), dotazione: "dotazione" in u ? cleanDot(u.dotazione) : (cur ? cleanDot(cur.dotazione) : []), matricola: "matricola" in u ? String(u.matricola || "").trim() : (cur ? cur.matricola || "" : ""), sede: normName(u.sede || ""), telefono: String(u.telefono || "").trim(), seriale_pc: String(u.seriale_pc || "").trim(), imei: String(u.imei || "").trim(), ordine: "ordine" in u ? String(u.ordine || "").trim() : (cur ? cur.ordine || "" : ""), email: "email" in u ? (validMail(cleanMail(u.email)) ? cleanMail(u.email) : "") : (cur ? cur.email || "" : ""), modificato: mod || nowIso() };
     if (fromPc) rec.daPC = rec.modificato;   /* arrivato dal PC: non conta come «da inviare» finché non lo modifichi */
     if (!cur) { await put("utenti", rec); nu++; }
     else if (mod && mod > (cur.modificato || "")) { await put("utenti", rec); au++; }
@@ -1282,7 +1351,7 @@ async function mergeFile(file, restore) {
     if (!i.uid || !i.utente || !/^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(i.data_ora || "")) { sk++; continue; }
     const cur = await getKey("interventi", i.uid);
     if (cur && !(i.modificato > cur.modificato)) { sk++; continue; }
-    const rec = { uid: i.uid, data_ora: i.data_ora, utente: normName(i.utente), sede: i.sede || "", richiesta: i.richiesta || "", soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", stato: STATI.includes(i.stato) ? i.stato : (cur ? stOf(cur) : "Risolto"), foto: i.foto || [], creato: i.modificato, modificato: i.modificato || nowIso() };
+    const rec = { uid: i.uid, data_ora: i.data_ora, utente: canonUser(i.utente), sede: i.sede || "", richiesta: i.richiesta || "", soluzione: i.soluzione || "", note: i.note || "", ticket: i.ticket || "", stato: STATI.includes(i.stato) ? i.stato : (cur ? stOf(cur) : "Risolto"), foto: i.foto || [], creato: i.modificato, modificato: i.modificato || nowIso() };
     if (fromPc) rec.daPC = rec.modificato;   /* arrivato dal PC: non va rimandato indietro finché non lo modifichi */
     await put("interventi", rec);
     cur ? ai++ : ni++;
@@ -1347,6 +1416,7 @@ async function mergeFile(file, restore) {
     for (const b of await getAll("bolle")) if (b.stampante_uid === da || b.stampante_montata_uid === da) await put("bolle", { ...b, stampante_uid: b.stampante_uid === da ? to : b.stampante_uid, stampante_montata_uid: b.stampante_montata_uid === da ? to : b.stampante_montata_uid });
     await del("stampanti", da); nun++;
   }
+  const un = await applyUnions();
   const verb = restore ? "ripristinati" : "ricevuti dal PC";
   if (fromPc && !restore) await setMeta("lastRecv", nowIso());
   let msg = `Utenti nuovi: ${nu}, aggiornati: ${au}`;
@@ -1358,6 +1428,7 @@ async function mergeFile(file, restore) {
   if (rr && rr.msg) msg += "\n" + rr.msg;
   if (Array.isArray(data.scorta)) msg += `\nScorta toner: ${nsc} voci aggiornate`;
   if (ne || ns) msg += `\nEdifici nuovi: ${ne}, stampanti nuove: ${ns}`;
+  if (un.np || un.ni) msg += `\nPersone già unite sul PC: ${un.np}` + (un.ni ? ` (interventi spostati: ${un.ni})` : "");
   if (nun) msg += `\nStampanti doppie unite: ${nun} (lo storico è passato alla stampante col seriale)`;
   return msg;
 }

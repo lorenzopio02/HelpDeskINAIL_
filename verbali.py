@@ -469,6 +469,8 @@ def righe_dotazione(item):
     if "sim" in tipo:
         return ["ICCID: " + ((item.get("iccid") or "").strip() or BLANK),
                 "Numero: " + ((item.get("numero") or "").strip() or BLANK)]
+    if "teams" in tipo or "audiocodes" in tipo:      # il telefono da scrivania ha il S/N, non l'IMEI
+        return ["S/N: " + codice]
     if "smartphone" in tipo or "cellulare" in tipo or "telefono" in tipo:
         return ["IMEI: " + codice]
     return ["S/N: " + codice]

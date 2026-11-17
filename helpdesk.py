@@ -20,6 +20,7 @@ import threading
 import time
 import unicodedata
 import uuid
+import webbrowser
 import zipfile
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
@@ -110,7 +111,8 @@ THUMB_PX = 72
 USER_COLUMNS = [
     ("nome", "Utente", True, 55, 26), ("matricola", "Matricola", True, 28, 14),
     ("ufficio", "Ufficio", False, 45, 26), ("sede", "Sede", True, 30, 16),
-    ("telefono", "Telefono", True, 35, 18), ("seriale_pc", "Seriale PC", True, 45, 22),
+    ("telefono", "Telefono", True, 35, 18), ("email", "Email", False, 55, 30),
+    ("seriale_pc", "Seriale PC", True, 45, 22),
     ("imei", "IMEI cellulare", True, 45, 20), ("dotazione", "Dotazione", False, 70, 40),
     ("n", "N. interventi", False, 22, 14),
     ("ultimo", "Ultimo intervento", False, 32, 18),
@@ -152,6 +154,26 @@ def clean_room_code(text):
 def clean_serial(text):
     """Numero di serie: senza spazi in testa/coda o doppi, al massimo 40 caratteri."""
     return " ".join(str(text or "").split())[:40]
+
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def clean_email(text):
+    """Email in minuscolo e senza spazi, al massimo 120 caratteri."""
+    return "".join(str(text or "").split()).lower()[:120]
+
+
+def mail_to(address):
+    """Apre il programma di posta con un messaggio nuovo per questo indirizzo."""
+    address = clean_email(address)
+    if not EMAIL_RE.match(address):
+        return False
+    try:
+        webbrowser.open("mailto:" + address)
+    except Exception:
+        return False
+    return True
 
 
 # apparecchi che una persona può avere in dotazione (l'elenco è libero: si può scrivere altro)
@@ -1008,6 +1030,109 @@ def riassunto_verbale(tipo, d):
     return "", ""
 
 
+# ---------------------------------------------------------------------------------------------
+# Verbali in serie: un Word per ogni persona di una stanza o di un piano
+# ---------------------------------------------------------------------------------------------
+SERIE_TIPI = ("assegnazione", "presa_in_carico")      # i verbali che hanno senso «per ogni persona»
+SERIE_COSA = (("pc", "Il PC (notebook)"), ("cellulare", "Il cellulare"))
+_SERIE_ORDINE = {"laptop": 0, "monitor": 1, "mobile": 2, "teams": 3}
+
+
+def _code_key(text):
+    return re.sub(r"[\s-]", "", str(text or "")).casefold()
+
+
+def serie_dotazione(person):
+    """Gli oggetti da scrivere nel verbale «Assegnazione materiale» di una persona, presi dalla sua
+    scheda: [{"tipo", "modello", "codice"}]. Il PC (seriale del PC) e il cellulare (IMEI) ci sono se
+    scritti; la presa di rete non è un oggetto assegnato, quindi non c'è. Vuoto = niente da assegnare."""
+    pc, imei = clean_serial(person.get("seriale_pc")), clean_serial(person.get("imei"))
+    items, pc_ok, imei_ok = [], False, False
+    for r in clean_dotazione(person.get("dotazione")):
+        kind = _row_kind(r)
+        if kind == "presa":
+            continue
+        codice = r["seriale"]
+        if kind == "laptop" and not codice and pc and not pc_ok:
+            codice = pc
+        if kind == "mobile" and not codice and imei and not imei_ok:
+            codice = imei
+        if codice and pc and _code_key(codice) == _code_key(pc):
+            pc_ok = True
+        if codice and imei and _code_key(codice) == _code_key(imei):
+            imei_ok = True
+        items.append((_SERIE_ORDINE.get(kind, 4), {"tipo": r["tipo"] or r["modello"] or "Apparecchio",
+                                                  "modello": r["modello"] if r["tipo"] else "",
+                                                  "codice": codice}))
+    if pc and not pc_ok:
+        items.append((0, {"tipo": "Notebook aziendale", "modello": "", "codice": pc}))
+    if imei and not imei_ok:
+        items.append((2, {"tipo": "Smartphone aziendale", "modello": "", "codice": imei}))
+    items.sort(key=lambda x: x[0])
+    return [it for _, it in items]
+
+
+def serie_dati(tipo, person, data, opz=None, titolo=""):
+    """I dati del verbale di una persona (come li darebbe il modulo) oppure (None, motivo) se per
+    questa persona non si può fare. opz: {"cosa": "pc"|"cellulare", "motivo": ...}."""
+    opz = opz or {}
+    nome = " ".join(str(person.get("nome") or "").split())
+    mat = " ".join(str(person.get("matricola") or "").split())
+    if tipo == "assegnazione":
+        dot = serie_dotazione(person)
+        if not dot:
+            return None, "niente in dotazione"
+        return {"data": data, "titolo": titolo, "utente": nome, "matricola": mat,
+                "dotazione": dot, "accessori": []}, ""
+    if tipo == "presa_in_carico":
+        dot = clean_dotazione(person.get("dotazione"))
+        info = desk_phone_info(dot, person.get("imei"))
+        if opz.get("cosa") == "cellulare":
+            ser = clean_serial(person.get("imei")) or next(
+                (r["seriale"] for r in dot if _row_kind(r) == "mobile" and r["seriale"]), "")
+            if not ser:
+                return None, "senza IMEI del cellulare"
+            modello = ("Samsung Galaxy " + info["label"]) if info["mobile"] in (
+                "s24", "s24plus", "s25") else (info["label"] or "")
+            tipologia = "Smartphone"
+        else:
+            ser = clean_serial(person.get("seriale_pc")) or next(
+                (r["seriale"] for r in dot if _row_kind(r) == "laptop" and r["seriale"]), "")
+            if not ser:
+                return None, "senza seriale del PC"
+            modello, tipologia = info["laptop_label"], "Notebook"
+        motivo = (opz.get("motivo") or "").strip()
+        return {"data": data, "tipologia": tipologia, "marca_modello": modello, "seriale": ser,
+                "utente": "%s (matricola %s)" % (nome, mat) if mat else nome, "inc": "", "ric": "",
+                "motivi": [motivo] if motivo else [], "altro": "", "materiale": []}, ""
+    return None, "tipo di verbale non adatto"
+
+
+def plan_verbali_serie(persone, tipo, data, opz=None, titoli=None):
+    """Prepara i verbali in serie senza scrivere niente. persone: come da db.persone_of();
+    titoli: {nome in minuscolo: «dott.»…}. Le persone sono in ordine di cognome.
+    Restituisce {"verbali": [{"disp", "d", "persona"}], "saltati": [(disp, motivo)]}."""
+    seen, rows = set(), []
+    for p in persone:
+        key = p.get("utente_id") or p.get("id") or p.get("nome")
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(p)
+    rows.sort(key=lambda p: ((p.get("ordine") or p.get("nome") or "").casefold(),
+                             (p.get("nome") or "").casefold()))
+    out = {"verbali": [], "saltati": []}
+    for p in rows:
+        disp = p.get("ordine") or p.get("nome") or ""
+        titolo = (titoli or {}).get(str(p.get("nome") or "").casefold(), "")
+        d, why = serie_dati(tipo, p, data, opz, titolo)
+        if d is None:
+            out["saltati"].append((disp, why))
+        else:
+            out["verbali"].append({"disp": disp, "d": d, "persona": p})
+    return out
+
+
 def unique_path(folder, stem, ext):
     path = os.path.join(folder, stem + ext)
     n = 2
@@ -1126,6 +1251,12 @@ CREATE TABLE IF NOT EXISTS stampanti_unite (
     da_uid TEXT PRIMARY KEY,
     a_uid  TEXT NOT NULL,
     quando TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS utenti_uniti (
+    da_key  TEXT PRIMARY KEY,
+    da_nome TEXT NOT NULL,
+    a_nome  TEXT NOT NULL,
+    quando  TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS toner (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1308,7 +1439,7 @@ class Database:
             self.conn.execute("ALTER TABLE interventi ADD COLUMN sede TEXT NOT NULL DEFAULT ''")
         if "modificato" not in self._columns("utenti"):
             self.conn.execute("ALTER TABLE utenti ADD COLUMN modificato TEXT NOT NULL DEFAULT ''")
-        for col in ("ufficio", "dotazione", "ordine"):
+        for col in ("ufficio", "dotazione", "ordine", "email"):
             if col not in self._columns("utenti"):
                 self.conn.execute(
                     "ALTER TABLE utenti ADD COLUMN %s TEXT NOT NULL DEFAULT ''" % col)
@@ -1359,7 +1490,7 @@ class Database:
     def users_with_counts(self):
         rows = self.conn.execute(
             "SELECT u.id, u.nome, u.matricola, u.sede, u.telefono, u.seriale_pc, u.imei, "
-            "u.modificato, u.ufficio, u.dotazione, u.ordine, "
+            "u.modificato, u.ufficio, u.dotazione, u.ordine, u.email, "
             "COUNT(i.id) AS n, "
             "MAX(i.data_ora) AS ultimo "
             "FROM utenti u LEFT JOIN interventi i ON i.utente_id = u.id "
@@ -1430,6 +1561,20 @@ class Database:
                                                user_id))
         return True
 
+    def set_user_email(self, user_id, email, modificato=None):
+        """Imposta l'email di una persona (vuoto = la toglie). Con un valore uguale a quello già
+        salvato non cambia nulla, nemmeno la data di modifica."""
+        row = self.conn.execute("SELECT email FROM utenti WHERE id = ?", (user_id,)).fetchone()
+        if not row:
+            return False
+        new = clean_email(email)
+        if new == row["email"]:
+            return False
+        with self.conn:
+            self.conn.execute("UPDATE utenti SET email = ?, modificato = ? WHERE id = ?",
+                              (new, modificato or now_utc_iso(), user_id))
+        return True
+
     def set_user_ordine(self, user_id, ordine, modificato=None):
         """Imposta il «Cognome Nome» con cui si ordina la persona (vuoto = si ordina per il nome).
         Con un valore uguale a quello già salvato non cambia nulla, nemmeno la data di modifica."""
@@ -1450,7 +1595,7 @@ class Database:
     def users_basic(self):
         """Tutte le persone con i dati che servono a riconoscerle (per l'importazione da Excel)."""
         return [dict(r) for r in self.conn.execute(
-            "SELECT id, nome, matricola, sede, telefono, ufficio, ordine, seriale_pc "
+            "SELECT id, nome, matricola, sede, telefono, ufficio, ordine, seriale_pc, email "
             "FROM utenti ORDER BY id")]
 
     def uffici(self):
@@ -1463,7 +1608,7 @@ class Database:
     def find_user(self, name):
         row = self.conn.execute(
             "SELECT id, nome, matricola, sede, telefono, seriale_pc, imei, modificato, "
-            "ufficio, dotazione FROM utenti WHERE nome = ?",
+            "ufficio, dotazione, ordine, email FROM utenti WHERE nome = ?",
             (normalize_name(name),)
         ).fetchone()
         return self._user_dict(row) if row else None
@@ -1483,7 +1628,7 @@ class Database:
             return None
         row = self.conn.execute(
             "SELECT id, nome, matricola, sede, telefono, seriale_pc, imei, modificato, "
-            "ufficio, dotazione FROM utenti WHERE id = ?", (hits[0],)).fetchone()
+            "ufficio, dotazione, ordine, email FROM utenti WHERE id = ?", (hits[0],)).fetchone()
         return self._user_dict(row)
 
     def find_user_by_matricola(self, matricola):
@@ -1492,7 +1637,7 @@ class Database:
             return None
         row = self.conn.execute(
             "SELECT id, nome, matricola, sede, telefono, seriale_pc, imei, modificato, "
-            "ufficio, dotazione FROM utenti WHERE matricola = ? COLLATE NOCASE "
+            "ufficio, dotazione, ordine, email FROM utenti WHERE matricola = ? COLLATE NOCASE "
             "ORDER BY nome LIMIT 1", (m,)
         ).fetchone()
         return self._user_dict(row) if row else None
@@ -1524,6 +1669,8 @@ class Database:
         cur = self.conn.execute(
             "INSERT INTO utenti(nome, sede, telefono, seriale_pc, imei, matricola, modificato) "
             "VALUES (?,?,?,?,?,?,?)", (name,) + new + (modificato or now_utc_iso(),))
+        # una persona nuova con il nome di una già unita/rinominata è davvero nuova: l'unione cade
+        self.conn.execute("DELETE FROM utenti_uniti WHERE da_key = ?", (key_name(name),))
         return cur.lastrowid, True
 
     def add_user(self, name, sede="", telefono="", seriale_pc="", imei="", matricola="",
@@ -1542,21 +1689,97 @@ class Database:
                 "UPDATE utenti SET nome=?, sede=?, telefono=?, seriale_pc=?, imei=?, matricola=?, "
                 "modificato=? WHERE id=?", (normalize_name(name), sede, telefono, seriale_pc, imei,
                                             matricola, modificato or now_utc_iso(), user_id))
+            if old:
+                self._note_user_rename(old["nome"], normalize_name(name))
+
+    # ----- persone unite o rinominate: il telefono deve saperlo, altrimenti ne farebbe tornare una -----
+    def _note_user_rename(self, old, new):
+        """Ricorda «il nome vecchio ora è questo nome nuovo» (da dentro una transazione)."""
+        ko, kn = key_name(old), key_name(new)
+        if ko == kn:
+            return
+        for r in self.conn.execute("SELECT da_key, a_nome FROM utenti_uniti").fetchall():
+            if key_name(r["a_nome"]) == ko:             # chi era finito nel nome vecchio segue
+                self.conn.execute("UPDATE utenti_uniti SET a_nome = ? WHERE da_key = ?",
+                                  (new, r["da_key"]))
+        self.conn.execute("DELETE FROM utenti_uniti WHERE da_key = ?", (kn,))
+        self.conn.execute("INSERT OR REPLACE INTO utenti_uniti(da_key, da_nome, a_nome, quando) "
+                          "VALUES (?,?,?,?)", (ko, normalize_name(old), normalize_name(new),
+                                               now_utc_iso()))
+
+    def user_merges(self):
+        """Le unioni e i cambi di nome fatti («nome vecchio» -> «nome che resta»), da dire al telefono."""
+        return [{"da": r["da_nome"], "a": r["a_nome"]} for r in self.conn.execute(
+            "SELECT da_nome, a_nome FROM utenti_uniti ORDER BY quando, da_key")]
+
+    def resolve_user_name(self, name):
+        """Il nome con cui una persona esiste oggi: se «name» è di una persona unita a un'altra (o
+        rinominata) e non c'è più nessuno con questo nome, il nome di quella che è rimasta. Così
+        quello che arriva ancora dal telefono col nome vecchio finisce sulla persona giusta."""
+        name = normalize_name(name)
+        if not name or self.find_user(name):
+            return name
+        cur, hops = name, 0
+        while hops < 8:
+            row = self.conn.execute("SELECT a_nome FROM utenti_uniti WHERE da_key = ?",
+                                    (key_name(cur),)).fetchone()
+            if not row:
+                break
+            cur, hops = row["a_nome"], hops + 1
+            if self.find_user(cur):
+                return cur
+        return name
 
     def merge_users(self, source_id, target_id):
+        """Unisce due persone che sono la stessa: gli interventi e la postazione di «source» passano
+        a «target» e «source» si toglie. «target» tiene i suoi dati; dove gli mancano (matricola,
+        sede, telefono, ufficio, email, seriali, dotazione) prende quelli di «source». Il telefono
+        lo viene a sapere dal file di scambio. Restituisce {"interventi": n, "presi": [campi],
+        "diversi": [campi con dati diversi: restano quelli di target]}."""
+        if source_id == target_id:
+            raise ValueError("Sono la stessa persona.")
+        cols = ("nome, sede, telefono, seriale_pc, imei, matricola, ufficio, dotazione, ordine, "
+                "email")
+        src = self.conn.execute("SELECT %s FROM utenti WHERE id = ?" % cols, (source_id,)).fetchone()
+        tgt = self.conn.execute("SELECT %s FROM utenti WHERE id = ?" % cols, (target_id,)).fetchone()
+        if not src or not tgt:
+            raise ValueError("Persona non trovata.")
+        new, presi, diversi = {}, [], []
+        for f in ("sede", "telefono", "seriale_pc", "imei", "matricola", "ufficio", "email"):
+            a, b = (tgt[f] or "").strip(), (src[f] or "").strip()
+            if b and not a:
+                new[f] = b
+                presi.append(f)
+            elif a and b and (key_name(a) != key_name(b) if f != "telefono"
+                              else _phone_key(a) != _phone_key(b)):
+                diversi.append(f)
+        dot_t, dot_s = clean_dotazione(tgt["dotazione"]), clean_dotazione(src["dotazione"])
+        dot = merge_dotazione(dot_t, dot_s)
+        if dot != dot_t:
+            new["dotazione"] = json.dumps(dot, ensure_ascii=False)
+            presi.append("dotazione")
+        if not tgt["ordine"] and src["ordine"] and key_name(src["ordine"]) != key_name(tgt["nome"]):
+            new["ordine"] = src["ordine"]
         if self.posto_of_user(source_id):
             if self.posto_of_user(target_id):
                 self.rimuovi_persona(source_id)       # il bersaglio ha già la sua postazione
             else:
                 with self.conn:                       # la postazione passa al bersaglio
                     self.conn.execute("DELETE FROM postazioni WHERE utente_id = ?", (target_id,))
-                    self.conn.execute("UPDATE postazioni SET utente_id = ? WHERE utente_id = ?",
-                                      (target_id, source_id))
+                    self.conn.execute("UPDATE postazioni SET utente_id = ?, modificato = ? "
+                                      "WHERE utente_id = ?",
+                                      (target_id, now_utc_iso(), source_id))
         with self.conn:
-            self.conn.execute(
+            n = self.conn.execute(
                 "UPDATE interventi SET utente_id = ? WHERE utente_id = ?", (target_id, source_id)
-            )
+            ).rowcount
+            if new:
+                sets = ", ".join("%s = ?" % k for k in new)
+                self.conn.execute("UPDATE utenti SET %s, modificato = ? WHERE id = ?" % sets,
+                                  tuple(new.values()) + (now_utc_iso(), target_id))
             self.conn.execute("DELETE FROM utenti WHERE id = ?", (source_id,))
+            self._note_user_rename(src["nome"], tgt["nome"])
+        return {"interventi": n, "presi": presi, "diversi": diversi}
 
     def delete_user(self, user_id):
         n = self.conn.execute(
@@ -2296,7 +2519,7 @@ class Database:
         rows = self.conn.execute(
             "SELECT p.numero, p.modificato AS posto_modificato, u.id AS utente_id, u.nome, "
             "u.matricola, u.telefono, u.seriale_pc, u.imei, u.sede, u.ufficio, u.dotazione, "
-            "u.ordine FROM postazioni p "
+            "u.ordine, u.email FROM postazioni p "
             "JOIN utenti u ON u.id = p.utente_id WHERE p.stanza_id = ? "
             "ORDER BY p.numero, " + SORT_UTENTE, (stanza_id,))
         return [self._user_dict(r) for r in rows]
@@ -2973,7 +3196,7 @@ def import_phone_data(db, data):
                          "stanze e persone.")
     if not isinstance(data, dict) or data.get("tipo") not in ("helpdesk-telefono", "helpdesk-pc"):
         raise ValueError("Questo non è un file dati dell'app Help Desk.")
-    res = {"utenti_nuovi": 0, "utenti_aggiornati": 0, "interventi_nuovi": 0,
+    res = {"utenti_nuovi": 0, "utenti_aggiornati": 0, "utenti_uniti": 0, "interventi_nuovi": 0,
            "interventi_aggiornati": 0, "interventi_gia_presenti": 0, "foto": 0, "saltati": 0,
            "toner_nuovi": 0, "toner_gia_presenti": 0, "toner_saltati": 0, "scorta_bassa": [],
            "manut_nuove": 0, "manut_aggiornate": 0, "manut_gia_presenti": 0, "manut_saltate": 0,
@@ -2987,6 +3210,24 @@ def import_phone_data(db, data):
         nome = normalize_name(_clean(u.get("nome")))
         if not nome:
             continue
+        canon = db.resolve_user_name(nome)
+        if canon != nome:
+            # persona unita a un'altra (o rinominata) sul PC: il telefono ne ha ancora il vecchio
+            # record. Non la faccio tornare; a quella rimasta aggiungo solo quello che le manca.
+            res["utenti_uniti"] += 1
+            tgt = db.find_user(canon)
+            if tgt:
+                ch = [db.set_user_basic(
+                          tgt["id"], sede=None if tgt["sede"] else normalize_name(_clean(u.get("sede"))),
+                          telefono=None if tgt["telefono"] else _clean(u.get("telefono"))),
+                      db.set_user_codes(
+                          tgt["id"],
+                          seriale_pc=None if tgt["seriale_pc"] else _clean(u.get("seriale_pc")),
+                          imei=None if tgt["imei"] else _clean(u.get("imei")),
+                          matricola=None if tgt["matricola"] else _clean(u.get("matricola")))]
+                if ch[0] or ch[1]:
+                    res["utenti_aggiornati"] += 1
+            continue
         cur = db.find_user(nome)
         # un file di una versione vecchia dell'app non ha la matricola: in quel caso si tiene
         # quella già salvata
@@ -2999,19 +3240,28 @@ def import_phone_data(db, data):
         # tengono quelli già salvati
         uff = " ".join(_clean(u.get("ufficio")).split()) if "ufficio" in u else None
         dot = clean_dotazione(u.get("dotazione")) if "dotazione" in u else None
+        # anche l'email: un file di una versione vecchia non ce l'ha, e in quel caso si tiene
+        mail = clean_email(u.get("email")) if "email" in u else None
+        if mail is not None and not EMAIL_RE.match(mail):
+            mail = ""
         if not cur:
             uid, _ = db.add_user(nome, *fields, modificato=mod or now_utc_iso())
             db.set_user_extra(uid, uff, dot, modificato=mod or now_utc_iso())
+            if mail:
+                db.set_user_email(uid, mail, modificato=mod or now_utc_iso())
             res["utenti_nuovi"] += 1
         elif mod and mod > (cur.get("modificato") or ""):
             same_extra = (uff is None or uff == cur["ufficio"]) and \
-                         (dot is None or dot == cur["dotazione"])
+                         (dot is None or dot == cur["dotazione"]) and \
+                         (mail is None or mail == cur["email"])
             same_fields = fields == (cur["sede"], cur["telefono"], cur["seriale_pc"],
                                      cur["imei"], cur["matricola"])
             if not (same_fields and same_extra):
                 if not same_fields:
                     db.update_user(cur["id"], cur["nome"], *fields, modificato=mod)
                 db.set_user_extra(cur["id"], uff, dot, modificato=mod)
+                if mail is not None:
+                    db.set_user_email(cur["id"], mail, modificato=mod)
                 res["utenti_aggiornati"] += 1
 
     if data.get("tipo") != "helpdesk-telefono":
@@ -3023,7 +3273,7 @@ def import_phone_data(db, data):
     import_phone_stanze(db, data, res)
     for it in data.get("interventi") or []:
         uid = _clean(it.get("uid"))
-        utente = normalize_name(_clean(it.get("utente")))
+        utente = db.resolve_user_name(_clean(it.get("utente")))     # persona unita: quella rimasta
         try:
             datetime.strptime(_clean(it.get("data_ora")), "%Y-%m-%d %H:%M")
         except ValueError:
@@ -3282,13 +3532,13 @@ def plan_people_import(users, lists, update_sede=False):
         rec = {"id": u["id"], "nome": u["nome"], "matricola": u.get("matricola") or "",
                "sede": u.get("sede") or "", "telefono": u.get("telefono") or "",
                "ufficio": u.get("ufficio") or "", "ordine": u.get("ordine") or "",
-               "new": False, "set": {}}
+               "email": u.get("email") or "", "new": False, "set": {}}
         recs.append(rec)
         index(rec)
     st = {"persone": 0, "nuove": 0, "presenti": 0, "aggiornate": 0, "invariate": 0,
           "matricole": 0, "telefoni": 0, "sedi_scritte": 0, "sedi_cambiate": 0, "uffici": 0,
           "telefono_diverso": 0, "sede_diversa": 0, "senza_telefono": 0, "email_nel_file": 0,
-          "ordinate": 0,
+          "email": 0, "ordinate": 0,
           "doppi": 0, "conflitti": []}
     seen = set()
     for lst in lists:
@@ -3301,7 +3551,10 @@ def plan_people_import(users, lists, update_sede=False):
             mat = " ".join(str(p.get("matricola") or "").split())
             tel = p.get("cellulare") or p.get("fisso") or ""
             uff = p.get("ufficio") or ""
-            if p.get("email"):
+            mail = clean_email(p.get("email"))
+            if not EMAIL_RE.match(mail):
+                mail = ""
+            if mail:
                 st["email_nel_file"] += 1
             if not tel:
                 st["senza_telefono"] += 1
@@ -3337,6 +3590,9 @@ def plan_people_import(users, lists, update_sede=False):
                 if uff and not rec["ufficio"]:
                     ch["ufficio"] = uff
                     st["uffici"] += 1
+                if mail and not rec["email"]:
+                    ch["email"] = mail
+                    st["email"] += 1
                 # per ordinare per cognome: il «Cognome Nome» del file (vuoto se il nome è già così)
                 ordine = "" if key_name(nome) == key_name(rec["nome"]) else nome
                 if ordine != rec["ordine"]:
@@ -3357,7 +3613,7 @@ def plan_people_import(users, lists, update_sede=False):
                     st["invariate"] += 1
                 continue
             rec = {"id": None, "nome": nome, "matricola": mat, "sede": sede, "telefono": tel,
-                   "ufficio": uff, "ordine": "", "new": True, "set": {}}
+                   "ufficio": uff, "ordine": "", "email": mail, "new": True, "set": {}}
             recs.append(rec)
             index(rec)
             seen.add(id(rec))
@@ -3373,6 +3629,8 @@ def apply_people_plan(db, plan):
                                  rec["matricola"])
             if rec["ufficio"]:
                 db.set_user_extra(uid, ufficio=rec["ufficio"])
+            if rec["email"]:
+                db.set_user_email(uid, rec["email"])
             continue
         ch = rec["set"]
         db.set_user_basic(rec["id"], sede=ch.get("sede"), telefono=ch.get("telefono"))
@@ -3380,6 +3638,8 @@ def apply_people_plan(db, plan):
             db.set_user_codes(rec["id"], matricola=ch["matricola"])
         if ch.get("ufficio"):
             db.set_user_extra(rec["id"], ufficio=ch["ufficio"])
+        if ch.get("email"):
+            db.set_user_email(rec["id"], ch["email"])
         if "ordine" in ch:
             db.set_user_ordine(rec["id"], ch["ordine"])
 
@@ -3451,12 +3711,16 @@ def plan_pc_serials(users, entries):
             if u not in lst:
                 lst.append(u)
     st = {"nel_file": len(entries), "scritti": 0, "gia_uguali": 0, "diversi": [], "non_in_app": 0,
-          "ambigui": [], "senza_pc": 0, "nome_non_seriale": [], "piu_pc": []}
+          "ambigui": [], "senza_pc": 0, "nome_non_seriale": [], "piu_pc": [], "prefisso_tolto": 0}
     def disp(u):                 # nei rapporti: «Cognome Nome», così gli elenchi sono per cognome
         return u.get("ordine") or u["nome"]
     actions = []
-    used = {clean_serial(u.get("seriale_pc") or "").replace(" ", "").upper(): u["nome"]
-            for u in users if clean_serial(u.get("seriale_pc") or "")}   # seriali già dati
+    def bare(text):              # «60016-AB12CDE» scritto a mano vale «AB12CDE»
+        text = clean_serial(text or "")
+        return parse_pc_serial(text) or text
+
+    used = {bare(u.get("seriale_pc")).replace(" ", "").upper(): u["nome"]
+            for u in users if bare(u.get("seriale_pc"))}                  # seriali già dati
     for nome, vals in entries.items():
         hits = by_words.get(" ".join(sorted(key_name(normalize_name(nome)).split())), [])
         if not hits:
@@ -3492,8 +3756,12 @@ def plan_pc_serials(users, entries):
             used[sn] = disp(u)
             actions.append({"id": u["id"], "nome": u["nome"], "seriale": sn})
             st["scritti"] += 1
-        elif cur.replace(" ", "").casefold() == sn.casefold():
-            st["gia_uguali"] += 1
+        elif bare(cur).replace(" ", "").casefold() == sn.casefold():
+            if cur != bare(cur):         # scritto col codice dell'ente davanti: lo tolgo
+                actions.append({"id": u["id"], "nome": u["nome"], "seriale": sn})
+                st["prefisso_tolto"] += 1
+            else:
+                st["gia_uguali"] += 1
         else:
             st["diversi"].append("%s: nell'app %s, nel file %s" % (disp(u), cur, sn))
     return {"actions": actions, "stats": st}
@@ -3502,6 +3770,161 @@ def plan_pc_serials(users, entries):
 def apply_pc_plan(db, plan):
     for a in plan["actions"]:
         db.set_user_codes(a["id"], seriale_pc=a["seriale"])
+
+
+# ---------------------------------------------------------------------------------------------
+# Persone doppie: riconoscimento (da proporre, non da fare da soli) e scelta di quale tenere
+# ---------------------------------------------------------------------------------------------
+def _damerau(a, b):
+    """Quante lettere cambiano tra due parole (aggiunta, tolta, cambiata o due scambiate = 1)."""
+    if a == b:
+        return 0
+    prev2, prev = None, list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        cur = [i] + [0] * len(b)
+        for j in range(1, len(b) + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                cur[j] = min(cur[j], prev2[j - 2] + 1)
+        prev2, prev = prev, cur
+    return prev[len(b)]
+
+
+def _typo_kind(x, y):
+    """Due parole che differiscono poco: «sure» se sembra un errore di battitura (due lettere
+    scambiate, una lettera in più in mezzo), «maybe» se potrebbero essere due nomi veri
+    (Marco/Mario, Claudia/Claudio, Luca/Lucia), None se sono troppo diverse."""
+    if x == y or min(len(x), len(y)) < 4:
+        return None
+    if len(x) == len(y):
+        diff = [i for i in range(len(x)) if x[i] != y[i]]
+        if len(diff) == 2 and diff[1] == diff[0] + 1 and x[diff[0]] == y[diff[1]] \
+                and x[diff[1]] == y[diff[0]]:
+            return "sure" if len(x) >= 4 else None                       # lettere scambiate
+        if len(diff) == 1:
+            return "sure" if len(x) >= 7 and diff[0] < len(x) - 1 else "maybe"
+        return None
+    if abs(len(x) - len(y)) == 1:
+        short, long_ = (x, y) if len(x) < len(y) else (y, x)
+        for i in range(len(long_)):
+            if long_[:i] + long_[i + 1:] == short:
+                return "sure" if len(long_) >= 7 and i < len(long_) - 1 else "maybe"
+    return None
+
+
+def _dup_dot_count(u):
+    return (len(clean_dotazione(u.get("dotazione"))) + sum(
+        1 for k in ("seriale_pc", "imei", "matricola", "telefono", "ufficio", "email") if u.get(k)))
+
+
+def pick_duplicate_keeper(members):
+    """Quale persona tenere tra le doppie: quella scritta «Cognome Nome» (si ordina per cognome) e
+    scarto «Nome Cognome»; il «Cognome Nome» di riferimento è quello preso dalle liste INAIL
+    (campo ordine). Se non c'è modo di saperlo, quella con più dati (matricola, interventi...).
+    Restituisce (id da tenere, sicuro: True se è stata la forma del nome a deciderlo)."""
+    ref = next((m["ordine"] for m in members if m.get("ordine")), "")
+    refk = key_name(ref)
+    ref_words = sorted(refk.split())
+
+    def form(m):
+        k = key_name(m["nome"])
+        if not refk:
+            return 1
+        if k == refk:
+            return 2                              # scritta come nella lista INAIL: Cognome Nome
+        if m.get("ordine") or sorted(k.split()) == ref_words:
+            return 0                              # stesse parole in ordine diverso: Nome Cognome
+        return 1                                  # scritta in un altro modo (errore di battitura?)
+
+    ranked = sorted(members, key=lambda m: (form(m), bool(m.get("matricola")), m.get("n") or 0,
+                                            _dup_dot_count(m), -(m.get("id") or 0)), reverse=True)
+    top = form(ranked[0])
+    sure = top == 2 and all(form(m) < 2 for m in ranked[1:])
+    return ranked[0]["id"], sure
+
+
+def find_duplicate_users(users):
+    """Gruppi di persone che sembrano la stessa. users: come db.users_with_counts() (id, nome, ordine,
+    matricola, n...). Riconosce: stessa matricola; stesse parole in ordine diverso («Mario Rossi» e
+    «Rossi Mario»); una parola scritta quasi uguale («Claudia» e «Caludia»). Più incerti (da
+    controllare): una parola simile ma diversa, o una parola in più. Restituisce
+    [{"members": [...], "why": [testi], "sure": bool, "likely": bool, "keep": id,
+    "keep_sure": bool}] in ordine di cognome. Non scrive niente."""
+    from collections import Counter
+    n = len(users)
+    parent = list(range(n))
+    notes = {}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(i, j, why, sure):
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[rj] = ri
+            notes[ri] = notes.get(ri, []) + notes.pop(rj, [])
+            ri = find(i)
+        notes.setdefault(ri, []).append((why, sure))
+
+    words = [key_name(u["nome"]).split() for u in users]
+    mats = [" ".join(str(u.get("matricola") or "").split()).casefold() for u in users]
+    by_mat = {}
+    for i, m in enumerate(mats):
+        if m:
+            by_mat.setdefault(m, []).append(i)
+    for m, idx in by_mat.items():
+        for i in idx[1:]:
+            union(idx[0], i, "stessa matricola", True)
+    for i in range(n):
+        for j in range(i + 1, n):
+            wa, wb = words[i], words[j]
+            if len(wa) < 2 or len(wb) < 2:
+                continue
+            ca, cb = Counter(wa), Counter(wb)
+            da, db = list((ca - cb).elements()), list((cb - ca).elements())
+            diverse = bool(mats[i] and mats[j] and mats[i] != mats[j])
+            if not da and not db:
+                if diverse:
+                    union(i, j, "stesso nome e cognome ma matricola diversa: controlla", False)
+                else:
+                    union(i, j, "stesso nome e cognome", True)
+            elif diverse:
+                continue                       # due matricole diverse: sono persone diverse
+            elif len(da) == 1 and len(db) == 1:
+                x, y = da[0], db[0]
+                kind = _typo_kind(x, y)
+                if kind == "sure":
+                    union(i, j, "nome scritto quasi uguale", True)
+                elif kind == "maybe" or (_damerau(x, y) <= 3 and min(len(x), len(y)) >= 5
+                                         and x[0] == y[0]):
+                    union(i, j, "nome simile: controlla", False)
+            elif len(da) + len(db) == 1:
+                union(i, j, "un nome ha una parola in più: controlla", False)
+    groups = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    out = []
+    for root, idx in groups.items():
+        if len(idx) < 2:
+            continue
+        members = sorted((users[i] for i in idx),
+                         key=lambda u: ((u.get("ordine") or u["nome"]).casefold(), u["nome"].casefold()))
+        why, sure = [], True
+        for t, ok in notes.get(root, []):
+            if t not in why:
+                why.append(t)
+            sure = sure and ok
+        keep, keep_sure = pick_duplicate_keeper(members)
+        # «probabile»: una sola ha la matricola (viene dalla lista INAIL) e le altre no
+        likely = (not sure) and sum(1 for m in members if m.get("matricola")) == 1
+        out.append({"members": members, "why": why, "sure": sure, "likely": likely, "keep": keep,
+                    "keep_sure": keep_sure})
+    out.sort(key=lambda g: ((g["members"][0].get("ordine") or g["members"][0]["nome"]).casefold()))
+    return out
 
 
 ELENCO_TIPO = "helpdesk-elenco-stanze"
@@ -3705,7 +4128,7 @@ def build_phone_export(db, with_photos=False, settings=None):
     now = now_utc_iso()
     db.ensure_sync_ids()
     users = [{k: u[k] for k in ("nome", "matricola", "sede", "telefono", "seriale_pc", "imei",
-                                "ufficio", "dotazione", "ordine", "modificato")}
+                                "ufficio", "dotazione", "ordine", "email", "modificato")}
              for u in db.users_with_counts()]
     rows = db.conn.execute(
         "SELECT i.id, i.uid, i.data_ora, u.nome AS utente, i.sede, i.richiesta, i.soluzione, "
@@ -3749,7 +4172,7 @@ def build_phone_export(db, with_photos=False, settings=None):
     bolle, n_foto_b = bolle_for_phone(db, with_photos)
     out = {"tipo": "helpdesk-pc", "versione": 7, "creato": now, "utenti": users,
            "interventi": items, "edifici": edifici, "stampanti": stampanti,
-           "stampanti_unite": db.printer_merges(),
+           "stampanti_unite": db.printer_merges(), "utenti_uniti": db.user_merges(),
            "toner": toner, "bolle": bolle, "manutenzioni": manutenzioni, "scorta": db.scorta_all(),
            "scorta_aggiornata": now, "verbali": verbali,
            "impostazioni_verbali": {k: _clean((settings or {}).get(k))
@@ -4500,7 +4923,7 @@ def import_phone_stanze(db, data, res):
     for it in data.get("postazioni") or []:
         if not isinstance(it, dict):
             continue
-        u = db.find_user(normalize_name(_clean(it.get("utente"))))
+        u = db.find_user(db.resolve_user_name(_clean(it.get("utente"))))
         suid = _clean(it.get("stanza_uid"))
         sid = room_id(suid) if suid else None
         if not u or (suid and sid is None):
@@ -4810,7 +5233,7 @@ class UserDialog(ModalDialog):
 
     FIELDS = (("Nome e cognome *", "nome"), ("Ufficio", "ufficio"),
               ("Matricola aziendale", "matricola"),
-              ("Sede", "sede"), ("Telefono", "telefono"),
+              ("Sede", "sede"), ("Telefono", "telefono"), ("Email", "email"),
               ("Seriale del PC", "seriale_pc"), ("IMEI cellulare aziendale", "imei"))
 
     def __init__(self, parent, user, sedi, on_save, seat=None, on_room=None, uffici=(),
@@ -4838,6 +5261,9 @@ class UserDialog(ModalDialog):
             if key in ("seriale_pc", "imei"):
                 scan_button(body, self.vars[key], "imei" if key == "imei" else "serial", entry=w).grid(
                     row=i, column=2, sticky="w", padx=(8, 0))
+            if key == "email":
+                ttk.Button(body, text="Scrivi mail", command=self.write_mail).grid(
+                    row=i, column=2, sticky="w", padx=(8, 0))
             if i == 0:
                 w.focus_set()
         nrow = len(self.FIELDS)
@@ -4864,6 +5290,14 @@ class UserDialog(ModalDialog):
         ttk.Button(btns, text="Salva", style="Save.TButton", command=self.save).pack(
             side="right", padx=(0, 8))
         self.bind("<Return>", lambda e: self.save())
+
+    def write_mail(self):
+        address = clean_email(self.vars["email"].get())
+        if not address:
+            messagebox.showinfo(APP_NAME, "Scrivi prima l'email di questa persona.", parent=self)
+        elif not mail_to(address):
+            messagebox.showwarning(APP_NAME, "Questa email non sembra valida: %s" % address,
+                                   parent=self)
 
     # ----- dotazione: elenco libero di apparecchi (tipo, modello, seriale o IMEI) -----
     def _build_dotazione(self, body, row, items):
@@ -7997,6 +8431,213 @@ class VerbaleDialog(ModalDialog):
             self.destroy()
 
 
+class SerieVerbaliDialog(ModalDialog):
+    """Verbali in serie: scegli piano o stanza e il tipo di verbale, e per ogni persona ne esce uno."""
+
+    def __init__(self, app, on_create):
+        super().__init__(app, "Verbali in serie")
+        self.resizable(False, False)
+        self.app, self.on_create = app, on_create
+        self.eds = {b["nome"]: b for b in app.db.edifici()}
+        self.v_ed = tk.StringVar(value=next(iter(self.eds), ""))
+        self.v_piano, self.v_stanza = tk.StringVar(), tk.StringVar()
+        self.v_tipo = tk.StringVar(value=VB.TIPI[SERIE_TIPI[0]][0])
+        self.v_cosa = tk.StringVar(value=SERIE_COSA[0][1])
+        self.v_motivo = tk.StringVar()
+        self.v_data = tk.StringVar(value=fmt_date(date.today()))
+        self.v_dir = tk.StringVar(value=app.settings.get("cartella_verbali", ""))
+        self.v_firma = tk.BooleanVar(value=bool(saved_signature()))
+        self.v_info = tk.StringVar(value="")
+        body = ttk.Frame(self, padding=16)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="Un verbale Word per ogni persona", font=("Segoe UI", 11, "bold")).grid(
+            row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(body, style="Hint.TLabel", wraplength=520, justify="left",
+                  text="Scegli dove siedono le persone e il tipo di verbale: i dati (nome, matricola, "
+                       "seriali, dotazione) li prendo dalle loro schede. Chi non ha niente da "
+                       "scrivere viene saltato e te lo dico."
+                  ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 10))
+        self.cb_ed = self._row(2, "Edificio", ttk.Combobox(body, textvariable=self.v_ed, state="readonly",
+                                                           values=list(self.eds), width=34), body)
+        self.cb_piano = self._row(3, "Piano", ttk.Combobox(body, textvariable=self.v_piano,
+                                                           state="readonly", width=34), body)
+        self.cb_stanza = self._row(4, "Stanza", ttk.Combobox(body, textvariable=self.v_stanza,
+                                                             state="readonly", width=34), body)
+        self.cb_tipo = self._row(5, "Verbale", ttk.Combobox(
+            body, textvariable=self.v_tipo, state="readonly",
+            values=[VB.TIPI[t][0] for t in SERIE_TIPI], width=34), body)
+        self.cb_cosa = self._row(6, "Cosa consegni", ttk.Combobox(
+            body, textvariable=self.v_cosa, state="readonly", values=[c[1] for c in SERIE_COSA],
+            width=34), body)
+        self.cb_motivo = self._row(7, "Motivo (facoltativo)", ttk.Combobox(
+            body, textvariable=self.v_motivo, values=[""] + list(VB.MOTIVI_PRESA_IN_CARICO),
+            width=34), body)
+        self._row(8, "Data", ttk.Entry(body, textvariable=self.v_data, width=16), body)
+        fr = ttk.Frame(body)
+        ttk.Entry(fr, textvariable=self.v_dir, width=34).pack(side="left")
+        ttk.Button(fr, text="Scegli…", command=self.pick_dir).pack(side="left", padx=(6, 0))
+        self._row(9, "Salva nella cartella", fr, body)
+        self.chk_firma = ttk.Checkbutton(body, text="Metti la mia firma (tecnico) in ogni verbale",
+                                         variable=self.v_firma, command=self.update_info)
+        self.chk_firma.grid(row=10, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Label(body, style="Hint.TLabel", wraplength=520, justify="left",
+                  text="La firma di chi riceve resta da fare (a mano sul foglio o col dito sul "
+                       "telefono). Se non hai ancora salvato la tua firma, la scegli in «Dati per i "
+                       "verbali».").grid(row=11, column=0, columnspan=3, sticky="w", pady=(2, 0))
+        ttk.Label(body, wraplength=520, justify="left", textvariable=self.v_info).grid(
+            row=12, column=0, columnspan=3, sticky="w", pady=(12, 0))
+        btns = ttk.Frame(body)
+        btns.grid(row=13, column=0, columnspan=3, sticky="e", pady=(14, 0))
+        ttk.Button(btns, text="Annulla", command=self.destroy).pack(side="right")
+        ttk.Button(btns, text="Crea i verbali", style="Save.TButton", command=self.save).pack(
+            side="right", padx=(0, 8))
+        self.cb_ed.bind("<<ComboboxSelected>>", lambda e: self.refill_ed())
+        self.cb_piano.bind("<<ComboboxSelected>>", lambda e: self.refill_piano())
+        for cb in (self.cb_stanza, self.cb_tipo, self.cb_cosa, self.cb_motivo):
+            cb.bind("<<ComboboxSelected>>", lambda e: self.update_info())
+        self.v_data.trace_add("write", lambda *_: self.update_info())
+        self.v_tipo.trace_add("write", lambda *_: self.update_info())
+        self.refill_ed()
+
+    def _row(self, row, label, widget, body):
+        ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", pady=4, padx=(0, 14))
+        widget.grid(row=row, column=1, sticky="w", pady=4)
+        return widget
+
+    def pick_dir(self):
+        d = filedialog.askdirectory(parent=self, title="Dove salvo i verbali Word?",
+                                    initialdir=self.v_dir.get() or None)
+        if d:
+            self.v_dir.set(d)
+
+    def refill_ed(self):
+        b = self.eds.get(self.v_ed.get())
+        self.floors = {}
+        if b:
+            for r in self.app.db.stanze_of(b["id"]):
+                self.floors.setdefault(r["piano"], []).append(r)
+        labels = [floor_label(n) for n in sorted(self.floors, reverse=True)]
+        self.cb_piano.configure(values=labels)
+        if self.v_piano.get() not in labels:
+            self.v_piano.set(labels[0] if labels else "")
+        self.refill_piano()
+
+    def refill_piano(self):
+        piano = next((n for n in self.floors if floor_label(n) == self.v_piano.get()), None)
+        self.rooms = {"Tutto il piano": None}
+        for r in sorted(self.floors.get(piano, []), key=lambda r: natural_key(r["codice"])):
+            self.rooms["Stanza %s (%d persone)" % (r["codice"], r["n_persone"])] = r["id"]
+        self.cb_stanza.configure(values=list(self.rooms))
+        if self.v_stanza.get() not in self.rooms:
+            self.v_stanza.set("Tutto il piano")
+        self.update_info()
+
+    def params(self):
+        b = self.eds.get(self.v_ed.get())
+        piano = next((n for n in self.floors if floor_label(n) == self.v_piano.get()), None)
+        tipo = next((t for t in SERIE_TIPI if VB.TIPI[t][0] == self.v_tipo.get()), SERIE_TIPI[0])
+        cosa = next((k for k, lab in SERIE_COSA if lab == self.v_cosa.get()), "pc")
+        return {"eid": b["id"] if b else None, "piano": piano,
+                "stanza_id": self.rooms.get(self.v_stanza.get()), "tipo": tipo, "cosa": cosa,
+                "motivo": self.v_motivo.get().strip(), "data": self.v_data.get().strip(),
+                "cartella": self.v_dir.get().strip(), "firma_tecnico": bool(self.v_firma.get())}
+
+    def update_info(self):
+        presa = self.params()["tipo"] == "presa_in_carico"
+        self.cb_cosa.configure(state="readonly" if presa else "disabled")
+        self.cb_motivo.configure(state="normal" if presa else "disabled")
+        self.v_info.set(self.app.serie_preview(self.params()))
+
+    def save(self):
+        if self.on_create(self.params()):
+            self.destroy()
+
+
+class MergeDuplicatesDialog(ModalDialog):
+    """Persone doppie: per ogni gruppo scegli quale tenere (di solito quella scritta «Cognome Nome»);
+    le altre vengono unite a lei: interventi e postazione passano, i dati che mancano si completano."""
+
+    def __init__(self, app, groups, on_merge):
+        super().__init__(app, "Unisci persone doppie")
+        self.on_merge = on_merge
+        self.geometry("860x%d" % min(700, max(420, self.winfo_screenheight() - 140)))
+        self.rows = []                                   # (gruppo, spunta, scelta, {etichetta: id})
+        outer = ttk.Frame(self)
+        outer.pack(fill="both", expand=True)
+        bar = ttk.Frame(outer, padding=(16, 10))
+        bar.pack(side="bottom", fill="x")
+        ttk.Button(bar, text="Chiudi", command=self.destroy).pack(side="right")
+        ttk.Button(bar, text="Unisci le persone spuntate", style="Save.TButton",
+                   command=self.save).pack(side="right", padx=(0, 8))
+        ttk.Button(bar, text="Spunta anche i probabili", command=self.tick_likely).pack(
+            side="right", padx=(0, 8))
+        self.v_count = tk.StringVar(value="")
+        ttk.Label(bar, style="Hint.TLabel", textvariable=self.v_count).pack(side="left")
+        sf = ScrollFrame(outer)
+        sf.pack(fill="both", expand=True)
+        body = sf.inner
+        ttk.Label(body, style="Hint.TLabel", wraplength=800, justify="left",
+                  text="Ho trovato queste persone che sembrano doppie. Tengo quella scritta «Cognome "
+                       "Nome» (le liste e i verbali vanno in ordine di cognome) e le altre si "
+                       "uniscono a lei: i suoi interventi e la postazione passano, e quello che le "
+                       "manca (matricola, telefono, email, seriali, dotazione) lo prende dalle "
+                       "altre. Spunta solo dove sei sicuro: i casi incerti non sono spuntati."
+                  ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        for i, g in enumerate(groups, start=1):
+            labels = {self.label(m): m["id"] for m in g["members"]}
+            keep = next(k for k, v in labels.items() if v == g["keep"])
+            on = tk.BooleanVar(value=bool(g["sure"]))
+            choice = tk.StringVar(value=keep)
+            ttk.Checkbutton(body, variable=on, command=self.update_count,
+                            text="Unisci   (%s)" % "; ".join(g["why"])).grid(
+                row=i * 2 - 1, column=0, columnspan=2, sticky="w", pady=(10, 0))
+            ttk.Label(body, text="Tieni").grid(row=i * 2, column=0, sticky="w", padx=(24, 8))
+            ttk.Combobox(body, textvariable=choice, values=list(labels), state="readonly",
+                         width=92).grid(row=i * 2, column=1, sticky="w", pady=2)
+            self.rows.append((g, on, choice, labels))
+        self.update_count()
+
+    def tick_likely(self):
+        """Spunta anche i gruppi «probabili»: una sola persona ha la matricola (viene dalla lista
+        INAIL) e le altre no, di solito sono copie scritte a mano."""
+        for g, on, choice, labels in self.rows:
+            if g.get("likely"):
+                on.set(True)
+        self.update_count()
+
+    @staticmethod
+    def label(m):
+        bits = []
+        if m.get("matricola"):
+            bits.append("matr. %s" % m["matricola"])
+        if m.get("n"):
+            bits.append("%d interventi" % m["n"])
+        if m.get("sede"):
+            bits.append(m["sede"])
+        return m["nome"] + ("   [%s]" % ", ".join(bits) if bits else "")
+
+    def pairs(self):
+        """[(id da togliere, id da tenere)] per i gruppi spuntati."""
+        out = []
+        for g, on, choice, labels in self.rows:
+            if on.get():
+                keep = labels.get(choice.get())
+                out += [(m["id"], keep) for m in g["members"] if keep and m["id"] != keep]
+        return out
+
+    def update_count(self):
+        n = len(self.pairs())
+        self.v_count.set("%d persone da unire" % n if n else "Nessuna persona spuntata")
+
+    def save(self):
+        pairs = self.pairs()
+        if not pairs:
+            messagebox.showinfo(APP_NAME, "Spunta almeno un gruppo da unire.", parent=self)
+            return
+        if self.on_merge(pairs):
+            self.destroy()
+
+
 class Walk3DHost:
     """Ponte tra le visite 3D (corridoio3d.py) e i dati dell'app: stanze, persone, stampanti di un piano."""
 
@@ -8239,6 +8880,7 @@ class App(tk.Tk):
         m.add_command(label="Importa persone da Excel (lista INAIL)…",
                       command=self.import_people_excel)
         m.add_command(label="Importa seriali dei PC da Excel…", command=self.import_pc_serials)
+        m.add_command(label="Unisci persone doppie…", command=self.merge_duplicates_dialog)
         m.add_command(label="Unisci doppioni stampanti…", command=self.merge_printers_dialog)
         m.add_separator()
         m.add_command(label="Correggi il nome di un modello stampante…",
@@ -8246,6 +8888,7 @@ class App(tk.Tk):
         m.add_command(label="Mappa della Toscana…", command=self.open_map)
         m.add_command(label="Passeggiata nel piano in 3D…", command=self.open_walk_3d)
         m.add_command(label="Edificio intero in 3D…", command=self.open_tower_3d)
+        m.add_command(label="Verbali in serie (un Word per ogni persona)…", command=self.verbali_serie)
         m.add_command(label="Dati per i verbali Word…", command=self.verbali_settings)
         m.add_command(label="Apri la cartella dei modelli Word", command=self.open_templates_folder)
         m.add_separator()
@@ -8501,12 +9144,15 @@ class App(tk.Tk):
 
     def copy_user_data(self):
         lines = []
-        for label, var in (("Utente", self.var_user), ("Matricola", self.var_matricola),
-                           ("Sede", self.var_sede),
-                           ("Telefono", self.var_tel), ("Seriale PC", self.var_seriale),
-                           ("IMEI cellulare", self.var_imei)):
-            if var.get().strip():
-                lines.append("%s: %s" % (label, var.get().strip()))
+        known = self.db.find_user_like(self.var_user.get()) if self.var_user.get().strip() else None
+        for label, text in (("Utente", self.var_user.get()), ("Matricola", self.var_matricola.get()),
+                            ("Sede", self.var_sede.get()),
+                            ("Telefono", self.var_tel.get()),
+                            ("Email", (known or {}).get("email") or ""),
+                            ("Seriale PC", self.var_seriale.get()),
+                            ("IMEI cellulare", self.var_imei.get())):
+            if text.strip():
+                lines.append("%s: %s" % (label, text.strip()))
         if not lines:
             messagebox.showinfo(APP_NAME, "Non c'è ancora nessun dato da copiare.")
             return
@@ -9272,13 +9918,15 @@ class App(tk.Tk):
         mid.grid(row=2, column=0, sticky="nsew")
         mid.columnconfigure(0, weight=1)
         mid.rowconfigure(0, weight=1)
-        cols = ("nome", "ufficio", "matricola", "sede", "telefono", "seriale", "imei", "dot", "n")
+        cols = ("nome", "ufficio", "matricola", "sede", "telefono", "email", "seriale", "imei",
+                "dot", "n")
         self.users_tree = ttk.Treeview(mid, columns=cols, show="headings", selectmode="browse")
         for c, title, width, stretch in (
                 ("nome", "Utente", 200, True), ("ufficio", "Ufficio", 190, False),
                 ("matricola", "Matricola", 90, False),
                 ("sede", "Sede", 100, False),
-                ("telefono", "Telefono", 110, False), ("seriale", "Seriale PC", 140, False),
+                ("telefono", "Telefono", 110, False), ("email", "Email", 210, False),
+                ("seriale", "Seriale PC", 140, False),
                 ("imei", "IMEI cellulare", 140, False), ("dot", "Dotazione", 190, False),
                 ("n", "Interventi", 70, False)):
             self.users_tree.heading(c, text=title)
@@ -9296,6 +9944,9 @@ class App(tk.Tk):
                    command=self.edit_user).pack(side="left")
         ttk.Button(bf, text="Vedi i suoi interventi",
                    command=self.show_user_interventions).pack(side="left", padx=(8, 0))
+        ttk.Button(bf, text="Scrivi mail", command=self.mail_user).pack(side="left", padx=(8, 0))
+        ttk.Button(bf, text="Unisci doppie…", command=self.merge_duplicates_dialog).pack(
+            side="left", padx=(8, 0))
         ttk.Button(bf, text="Elimina", style="Danger.TButton",
                    command=self.delete_user).pack(side="left", padx=(8, 0))
         if VB is not None:
@@ -9334,13 +9985,13 @@ class App(tk.Tk):
                 continue
             dot = dotazione_text(u["dotazione"])
             text = " ".join((u["nome"], u["ufficio"], u["matricola"], u["sede"], u["telefono"],
-                             u["seriale_pc"], u["imei"], dot))
+                             u["email"], u["seriale_pc"], u["imei"], dot))
             if terms and not matches_all(terms, text):
                 continue
             self.users_visible.append(u)
             self.users_tree.insert("", "end", iid=str(u["id"]), values=(
-                u["nome"], u["ufficio"], u["matricola"], u["sede"], u["telefono"], u["seriale_pc"],
-                u["imei"], dot, u["n"]))
+                u["nome"], u["ufficio"], u["matricola"], u["sede"], u["telefono"], u["email"],
+                u["seriale_pc"], u["imei"], dot, u["n"]))
 
     def describe_user_scope(self):
         parts = []
@@ -9404,6 +10055,11 @@ class App(tk.Tk):
                   data["seriale_pc"].strip(), data["imei"].strip(), data["matricola"].strip())
         ufficio = " ".join(str(data.get("ufficio") or "").split())
         dotazione = clean_dotazione(data.get("dotazione"))
+        email = clean_email(data.get("email"))
+        if email and not EMAIL_RE.match(email):
+            messagebox.showwarning(APP_NAME, "L'email non sembra valida (manca la @ o il "
+                                             "dominio): %s" % email)
+            return False
         try:
             if user is None:
                 uid, created = self.db.add_user(nome, *fields)
@@ -9411,6 +10067,7 @@ class App(tk.Tk):
                     messagebox.showinfo(APP_NAME, "%s è già nella lista." % nome)
                     return False
                 self.db.set_user_extra(uid, ufficio, dotazione)
+                self.db.set_user_email(uid, email)
                 self.set_status("Utente aggiunto alla lista: %s." % nome)
             else:
                 other = self.db.find_user(nome)
@@ -9418,19 +10075,33 @@ class App(tk.Tk):
                     if not messagebox.askyesno(
                             APP_NAME, "\"%s\" esiste già.\nUnire i due utenti? I %d interventi di "
                                       "\"%s\" passeranno a \"%s\" (restano i dati già salvati di "
-                                      "\"%s\")." % (other["nome"], user["n"], user["nome"],
-                                                    other["nome"], other["nome"])):
+                                      "\"%s\"; quelli che gli mancano li prendo da \"%s\")."
+                                      % (other["nome"], user["n"], user["nome"], other["nome"],
+                                         other["nome"], user["nome"])):
                         return False
                     self.db.merge_users(user["id"], other["id"])
                 else:
                     self.db.update_user(user["id"], nome, *fields)
                     self.db.set_user_extra(user["id"], ufficio, dotazione)
+                    self.db.set_user_email(user["id"], email)
         except sqlite3.Error as e:
             messagebox.showerror(APP_NAME, "Non sono riuscito a salvare:\n%s" % e)
             return False
         self.refresh_users()
         self.apply_filters()
         return True
+
+    def mail_user(self):
+        user = self.selected_user()
+        if not user:
+            return
+        if not user.get("email"):
+            messagebox.showinfo(APP_NAME, "\"%s\" non ha un'email: scrivila nella sua scheda."
+                                % user["nome"])
+            return
+        if not mail_to(user["email"]):
+            messagebox.showwarning(APP_NAME, "L'email di \"%s\" non sembra valida: %s"
+                                   % (user["nome"], user["email"]))
 
     def show_user_interventions(self):
         user = self.selected_user()
@@ -9439,6 +10110,41 @@ class App(tk.Tk):
         self.reset_filters()
         self.var_f_user.set(user["nome"])
         self.nb.select(self.tab_reg)
+
+    def merge_duplicates_dialog(self):
+        groups = find_duplicate_users(self.db.users_with_counts())
+        if not groups:
+            messagebox.showinfo(APP_NAME, "Non ho trovato persone doppie.")
+            return
+        MergeDuplicatesDialog(self, groups, self.do_merge_duplicates)
+
+    def do_merge_duplicates(self, pairs):
+        if not messagebox.askyesno(
+                APP_NAME, "Unire %d persone?\n\nGli interventi e la postazione di quelle che "
+                          "scompaiono passano a quella che resta. Non si può annullare." % len(pairs)):
+            return False
+        done, interventi, diversi, errors = 0, 0, 0, []
+        for src, tgt in pairs:
+            try:
+                r = self.db.merge_users(src, tgt)
+            except (ValueError, sqlite3.Error) as e:
+                errors.append(str(e))
+                continue
+            done += 1
+            interventi += r["interventi"]
+            diversi += 1 if r["diversi"] else 0
+        self.refresh_users()
+        self.apply_filters()
+        lines = ["Persone unite: %d (interventi spostati: %d)." % (done, interventi)]
+        if diversi:
+            lines.append("In %d casi le due persone avevano un dato diverso (per esempio due "
+                         "telefoni): ho tenuto quello della persona che resta." % diversi)
+        if errors:
+            lines.append("Non riuscite: %d (%s)" % (len(errors), errors[0]))
+        lines.append("\nPer il telefono: File › Esporta dati per il telefono, poi caricalo; il "
+                     "telefono toglie da solo le persone unite.")
+        messagebox.showinfo(APP_NAME, "\n".join(lines))
+        return done > 0
 
     def delete_user(self):
         user = self.selected_user()
@@ -11077,6 +11783,8 @@ class App(tk.Tk):
         for tipo in VB.TIPI_ORDINE:
             ttk.Button(top, text=VB.TIPI[tipo][0] + "…", style="Primary.TButton",
                        command=lambda t=tipo: self.new_verbale(t)).pack(side="left", padx=(0, 8))
+        ttk.Button(top, text="Verbali in serie…", command=self.verbali_serie).pack(
+            side="left", padx=(16, 8))
         mb = ttk.Menubutton(top, text="Modelli Word")
         menu = tk.Menu(mb, tearoff=0)
         menu.add_command(label="Apri la cartella dei modelli", command=self.open_templates_folder)
@@ -11220,6 +11928,129 @@ class App(tk.Tk):
         else:
             ini = {}
         self.new_verbale(tipo, ini)
+
+    # ----- verbali in serie: un Word per ogni persona di una stanza o di un piano -----
+    def verbali_serie(self):
+        if not self.verbali_ready():
+            return
+        if not self.db.edifici():
+            messagebox.showinfo(APP_NAME, "Prima inserisci l'edificio e le stanze con le persone "
+                                "(scheda Stampanti › Piani e stanze).")
+            return
+        SerieVerbaliDialog(self, self.create_verbali_serie)
+
+    def serie_persone(self, eid, piano, stanza_id=None):
+        """Le persone sedute nella stanza (o in tutto il piano), con i dati delle loro schede."""
+        out = []
+        for r in self.db.stanze_of(eid, piano):
+            if stanza_id is None or r["id"] == stanza_id:
+                for p in self.db.persone_of(r["id"]):
+                    out.append(dict(p, stanza=r["codice"]))
+        return out
+
+    def serie_plan(self, params):
+        if params.get("eid") is None or params.get("piano") is None:
+            return {"verbali": [], "saltati": []}
+        titoli = self.verbali_storico().get("titoli", {}) if VB is not None else {}
+        return plan_verbali_serie(
+            self.serie_persone(params["eid"], params["piano"], params.get("stanza_id")),
+            params["tipo"], params["data"], {"cosa": params.get("cosa"), "motivo": params.get("motivo")},
+            titoli)
+
+    def serie_preview(self, params):
+        dt = parse_date(params["data"])
+        plan = self.serie_plan(dict(params, data=fmt_date(dt) if dt else params["data"]))
+        n, k = len(plan["verbali"]), len(plan["saltati"])
+        if not n and not k:
+            return "In questa stanza o piano non siedono persone."
+        text = "Verranno creati %d verbali." % n
+        if k:
+            text += " Saltate %d persone (non hanno niente da scrivere)." % k
+        if not dt:
+            text += "\nLa data non è valida: scrivila così gg/mm/aaaa."
+        return text
+
+    def create_verbali_serie(self, params):
+        dt = parse_date(params["data"])
+        if not dt:
+            messagebox.showwarning(APP_NAME, "La data non è valida.\nScrivila così: gg/mm/aaaa "
+                                             "(esempio 15/11/2026).")
+            return False
+        folder = params["cartella"].strip()
+        if not folder:
+            messagebox.showwarning(APP_NAME, "Scegli la cartella dove salvare i verbali.")
+            return False
+        firma = None
+        if params.get("firma_tecnico"):
+            firma = saved_signature()
+            if not firma:
+                messagebox.showwarning(APP_NAME, "Non c'è ancora un'immagine della tua firma: "
+                                       "scegline una in «Dati per i verbali», oppure togli la spunta.")
+                return False
+        tipo = params["tipo"]
+        plan = self.serie_plan(dict(params, data=fmt_date(dt)))
+        if not plan["verbali"]:
+            messagebox.showinfo(APP_NAME, "Non c'è nessun verbale da creare: " + (
+                "nessuna persona in questa stanza o piano." if not plan["saltati"] else
+                "nessuna persona ha i dati necessari."))
+            return False
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError as e:
+            messagebox.showerror(APP_NAME, "Non riesco a usare la cartella:\n%s" % e)
+            return False
+        done, error = [], None
+        for item in plan["verbali"]:
+            d = item["d"]
+            uid = VB.nuovo_codice()
+            foto_dir = os.path.join(verbali_foto_root(), uid)
+            stem = os.path.splitext(VB.nome_file_proposto(tipo, dict(d, utente=item["disp"])))[0]
+            path = unique_path(folder, stem, ".docx")
+            try:
+                firme_names, firme = {}, {}
+                if firma:
+                    firme_names, _ = VB.applica_scelte_firme(foto_dir, {}, set(),
+                                                             {"tecnico": "salvata"}, firma)
+                    firme = {k: os.path.join(foto_dir, v) for k, v in firme_names.items()}
+                VB.crea_verbale(tipo, d, path, templates_dir(), photos=[], imp=self.settings,
+                                firme=firme, avvisi=[], cartaceo=set())
+            except VB.VerbaleError as e:
+                self._drop_files([], foto_dir)
+                error = "%s: %s" % (item["disp"], e)
+                break
+            except Exception as e:
+                self._drop_files([], foto_dir)
+                error = "%s: %s" % (item["disp"], e)
+                break
+            dati = dict(d)
+            dati["_foto"], dati["_firme"], dati["_cartaceo"] = [], firme_names, {}
+            soggetto, dettaglio = riassunto_verbale(tipo, d)
+            now = now_utc_iso()
+            try:
+                self.db.add_verbale(uid, tipo, dt.isoformat(), soggetto, dettaglio, dati, path, 0,
+                                    modificato=now, word_il=now)
+            except sqlite3.Error as e:
+                error = "%s: il Word è stato creato ma non è nell'elenco (%s)" % (item["disp"], e)
+                break
+            done.append(item["disp"])
+        if done:
+            self.settings["cartella_verbali"] = folder
+            save_settings(self.settings)
+            self.refresh_verbali()
+        lines = ["Verbali creati: %d (cartella: %s)." % (len(done), folder)]
+        if plan["saltati"]:
+            lines.append("\nSaltati (%d):" % len(plan["saltati"]))
+            lines += ["   %s: %s" % (n, why) for n, why in plan["saltati"][:15]]
+            if len(plan["saltati"]) > 15:
+                lines.append("   … e altri %d" % (len(plan["saltati"]) - 15))
+        if error:
+            lines.append("\nMi sono fermato qui: %s" % error)
+            lines.append("Quelli già creati restano nell'elenco dei verbali.")
+        messagebox.showwarning(APP_NAME, "\n".join(lines)) if error else \
+            messagebox.showinfo(APP_NAME, "\n".join(lines))
+        if done and not error and messagebox.askyesno(APP_NAME, "Apro la cartella dei verbali?"):
+            open_path(folder)
+        return bool(done)
 
     def show_user_verbali(self):
         user = self.selected_user()
@@ -11598,6 +12429,9 @@ class App(tk.Tk):
                  "Già presenti (saltati): %d" % res["interventi_gia_presenti"],
                  "Foto importate: %d" % res["foto"],
                  "Utenti nuovi: %d, aggiornati: %d" % (res["utenti_nuovi"], res["utenti_aggiornati"])]
+        if res["utenti_uniti"]:
+            lines.append("Persone già unite sul PC (il telefono ne aveva ancora una copia): %d"
+                         % res["utenti_uniti"])
         if res["toner_nuovi"] or res["toner_gia_presenti"] or res["toner_saltati"]:
             lines.append("Cambi toner nuovi: %d (già presenti: %d)"
                          % (res["toner_nuovi"], res["toner_gia_presenti"]))
@@ -11766,10 +12600,10 @@ class App(tk.Tk):
         text = ["Nei file ci sono %d persone: %d nuove da aggiungere, %d già nell'elenco."
                 % (s["persone"], s["nuove"], s["presenti"])]
         if s["presenti"]:
-            text.append("A chi c'è già scrivo: matricola a %d, cellulare a %d, sede a %d; "
-                        "ordine per cognome a %d."
-                        % (s["matricole"], s["telefoni"], s["sedi_scritte"] + s["sedi_cambiate"],
-                           s["ordinate"]))
+            text.append("A chi c'è già scrivo: matricola a %d, cellulare a %d, email a %d, "
+                        "sede a %d; ordine per cognome a %d."
+                        % (s["matricole"], s["telefoni"], s["email"],
+                           s["sedi_scritte"] + s["sedi_cambiate"], s["ordinate"]))
         if s["sede_diversa"]:
             text.append("%d hanno già una sede diversa: la lascio com'è (spunta la casella qui "
                         "sopra per cambiarla)." % s["sede_diversa"])
@@ -11791,8 +12625,8 @@ class App(tk.Tk):
                  "Persone nuove aggiunte: %d" % s["nuove"],
                  "Già nell'elenco: %d (aggiornate %d, senza niente da aggiungere %d)"
                  % (s["presenti"], s["aggiornate"], s["invariate"]),
-                 "Matricole scritte: %d; cellulari scritti: %d; uffici scritti: %d"
-                 % (s["matricole"], s["telefoni"], s["uffici"]),
+                 "Matricole scritte: %d; cellulari scritti: %d; uffici scritti: %d; "
+                 "email scritte: %d" % (s["matricole"], s["telefoni"], s["uffici"], s["email"]),
                  "Sedi scritte: %d; sedi cambiate: %d" % (s["sedi_scritte"], s["sedi_cambiate"]),
                  "Messe in ordine per cognome: %d" % s["ordinate"]]
         if s["telefono_diverso"]:
@@ -11804,9 +12638,6 @@ class App(tk.Tk):
             lines.append("Senza cellulare nel file: %d" % s["senza_telefono"])
         if s["doppi"]:
             lines.append("Persone presenti in più file (contate una volta): %d" % s["doppi"])
-        if s["email_nel_file"]:
-            lines.append("\nNei file ci sono %d email: l'app non ha ancora un posto dove "
-                         "tenerle, quindi non le ho importate." % s["email_nel_file"])
         if s["conflitti"]:
             lines.append("\nDa controllare a mano:")
             lines += ["   " + t for t in s["conflitti"][:12]]
@@ -11840,9 +12671,11 @@ class App(tk.Tk):
                 APP_NAME, "Nei file ci sono %d persone.\n\nScrivo il seriale del PC a %d persone "
                           "dell'app.\nGià scritto uguale: %d. Già scritto diverso (non lo "
                           "tocco): %d.\nNel file ma non nell'app (le ignoro, non le aggiungo): "
-                          "%d.\nSenza PC nel file: %d.\n\nVuoi continuare?"
+                          "%d.\nSenza PC nel file: %d.%s\n\nVuoi continuare?"
                 % (s["nel_file"], s["scritti"], s["gia_uguali"], len(s["diversi"]),
-                   s["non_in_app"], s["senza_pc"] + len(s["nome_non_seriale"]))):
+                   s["non_in_app"], s["senza_pc"] + len(s["nome_non_seriale"]),
+                   ("\nA %d seriali già scritti tolgo il codice dell'ente davanti (60016-)."
+                    % s["prefisso_tolto"]) if s["prefisso_tolto"] else "")):
             return
         try:
             apply_pc_plan(self.db, plan)
@@ -11852,8 +12685,11 @@ class App(tk.Tk):
         self.refresh_users()
         lines = ["Seriali scritti: %d" % s["scritti"],
                  "Già uguali: %d; già diversi (non toccati): %d"
-                 % (s["gia_uguali"], len(s["diversi"])),
-                 "Persone nel file ma non nell'app (ignorate): %d" % s["non_in_app"]]
+                 % (s["gia_uguali"], len(s["diversi"]))]
+        if s["prefisso_tolto"]:
+            lines.append("Seriali scritti con 60016- davanti, sistemati: %d" % s["prefisso_tolto"])
+        lines += [
+                  "Persone nel file ma non nell'app (ignorate): %d" % s["non_in_app"]]
 
         def more(title, items, limit=15):
             if items:
