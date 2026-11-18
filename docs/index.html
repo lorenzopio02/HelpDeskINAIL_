@@ -174,7 +174,8 @@ input[type=date]::-webkit-date-and-time-value,input[type=datetime-local]::-webki
 .dkBack{font:inherit;font-weight:700;border:0;background:#dde8f3;color:var(--navy);border-radius:10px;padding:9px 14px}
 .dkStage{position:relative;margin:12px 0 6px;background:#f6f2e6;border:1px solid #cfc3a3;border-radius:14px;overflow:hidden}
 .dkDot{width:clamp(34px,11.5vw,44px);height:clamp(34px,11.5vw,44px);border-radius:50%;border:3px solid #fff;color:#fff;font:800 clamp(18px,6vw,24px)/1 -apple-system,"Segoe UI",sans-serif;padding:0;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 2px 7px rgba(0,0,0,.5)}
-.dkDot.ok{background:var(--green)}.dkDot.no{background:var(--red)}
+.dkDot.ok{background:var(--green)}.dkDot.no{background:var(--red)}.dkDot.add{background:var(--navy)}
+.dvAdd{border-style:dashed}.dvV.go{font:600 12px -apple-system,"Segoe UI",sans-serif;color:var(--navy)}
 .dkStage .dkDot{position:absolute;transform:translate(-50%,-50%)}
 .dvList{display:flex;flex-direction:column;gap:8px;margin:10px 0}
 .dvRow{display:flex;align-items:center;gap:10px;font:inherit;text-align:left;background:var(--white);border:1px solid var(--border);border-radius:12px;padding:8px 10px;color:var(--text);width:100%}
@@ -704,7 +705,8 @@ $("btnCopy").onclick = async () => {
 let regCache = [], regFiltered = [];
 const fmtDate = v => { const m = /^(\d{4})-(\d\d)-(\d\d)/.exec(v || ""); return m ? `${m[3]}/${m[2]}/${m[1]}` : (v || ""); };
 const isoDay = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const words = v => (v || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+// «60016-ABC1234» (nome del PC nel sistema) vale «ABC1234»: le 5 cifre sono il codice dell'ente
+const words = v => (v || "").trim().toLowerCase().split(/\s+/).filter(Boolean).map(w => w.replace(/^\d{5}-(?=\S{4,})/, ""));
 function regFilter() {
   return { user: words($("rUser").value), sede: $("rSede").value, tk: $("rTicket").value, tno: $("rTicketNo").value.trim().toLowerCase(), dal: $("rDal").value, al: $("rAl").value, q: words($("rSearch").value), st: $("rStato").value };
 }
@@ -848,9 +850,9 @@ function editUser(k) {
   const readDot = () => [...$("eDot").querySelectorAll(".dotRow")].map(r => ({ tipo: r.querySelector(".dT").value, modello: r.querySelector(".dM").value, seriale: r.querySelector(".dS").value }));
   const drawDot = () => {
     $("eDot").innerHTML = dot.map((r, n) => `<div class="dotRow" data-n="${n}" style="border:1px solid #d0d7e2;border-radius:8px;padding:6px;margin:4px 0">
-      <input class="dT" list="tipiDot" placeholder="Apparecchio (es. Smartphone)" value="${esc(r.tipo)}">
+      <input class="dT" id="dT${n}" list="tipiDot" placeholder="Apparecchio (es. Smartphone)" value="${esc(r.tipo)}">
       <input class="dM" placeholder="Modello" value="${esc(r.modello)}">
-      <input class="dS" placeholder="Seriale o IMEI" value="${esc(r.seriale)}">
+      <input class="dS" id="dS${n}" placeholder="Seriale o IMEI" autocapitalize="characters" autocomplete="off" spellcheck="false" value="${esc(r.seriale)}" data-scan="serial" data-scan-imei-field="dT${n}" data-scan-imei-re="^(cellulare|smartphone|sim|scheda sim|imei)">
       <button class="btn red dX" type="button">Togli</button></div>`).join("") + `<datalist id="tipiDot">${TIPI_DOT_PERS.map(t => `<option value="${esc(t)}">`).join("")}</datalist>`;
     $("eDot").querySelectorAll(".dX").forEach(b => b.onclick = () => { dot = readDot(); dot.splice(+b.closest(".dotRow").dataset.n, 1); drawDot(); });
   };

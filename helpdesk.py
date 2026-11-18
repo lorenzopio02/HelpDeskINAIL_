@@ -482,9 +482,18 @@ def one_line(text, limit=110):
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+ENTE_PREFISSO_RE = re.compile(r"^\d{5}-(?=\S{4,})")
+
+
+def senza_ente(term):
+    """«60016-ABC1234» (il nome del PC nel sistema) -> «ABC1234»: le cinque cifre prima del
+    trattino sono il codice dell'ente e nell'app il seriale si scrive senza."""
+    return ENTE_PREFISSO_RE.sub("", term)
+
+
 def matches_all(terms, haystack):
     haystack = haystack.casefold()
-    return all(t in haystack for t in terms)
+    return all(senza_ente(t) in haystack for t in terms)
 
 
 def now_utc_iso():
@@ -1825,7 +1834,8 @@ class Database:
         return [dict(r) for r in self.conn.execute(
             "SELECT id, ticket, soluzione, note, utente_id FROM interventi")]
 
-    def update_intervento_import(self, iid, soluzione=None, utente=None, togli_dedotto=False):
+    def update_intervento_import(self, iid, soluzione=None, utente=None, togli_dedotto=False,
+                                 nota_dedotto=""):
         """Dopo un'importazione: scrive la soluzione (solo se è vuota) e/o cambia la persona di un
         intervento importato con la persona «dedotta» (e toglie la dicitura che lo diceva)."""
         row = self.conn.execute("SELECT soluzione, note FROM interventi WHERE id = ?",
@@ -1841,6 +1851,9 @@ class Database:
             if togli_dedotto:
                 note = re.sub(r"( - utente dedotto da [^\n]*| - utente non riconosciuto)(?=\n|$)",
                               "", note or "")
+                if nota_dedotto:             # «… - utente dedotto da seriale (elenco dispositivi)»
+                    note = re.sub(r"(Importato da ServiceNow \([^)\n]*\))",
+                                  lambda m: m.group(1) + nota_dedotto, note or "", count=1)
             if uid is not None:
                 self.conn.execute("UPDATE interventi SET utente_id=?, soluzione=?, note=?, "
                                   "modificato=? WHERE id=?", (uid, sol, note, now_utc_iso(), iid))
@@ -3717,6 +3730,47 @@ def read_pc_xlsx(path):
     raise ValueError("non sembra un elenco di PC: servono le colonne «Nominativo» e «PC»")
 
 
+def read_pc_csv(path):
+    """Legge l'elenco dei dispositivi esportato da Intune (CSV: model;displayName;operatingSystem;
+    owner). Restituisce {proprietario: [nomi dei PC]} solo per i PC Windows con un proprietario."""
+    import csv
+    with open(path, "rb") as f:
+        raw = f.read()
+    testo = None
+    for enc in ("utf-8-sig", "utf-16", "cp1252"):
+        try:
+            testo = raw.decode(enc)
+            break
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    if testo is None:
+        testo = raw.decode("latin-1")
+    righe = testo.splitlines()
+    if not righe:
+        raise ValueError("il file è vuoto")
+    sep = max((";", ",", "\t"), key=righe[0].count)
+    lettore = csv.reader(righe, delimiter=sep)
+    heads = [_clean(c).casefold() for c in next(lettore)]
+
+    def col(*names):
+        return next((i for i, h in enumerate(heads) if h in names), None)
+    ni = col("owner", "primary user", "proprietario", "utente principale")
+    pi = col("displayname", "device name", "nome dispositivo")
+    oi = col("operatingsystem", "os", "sistema operativo")
+    if ni is None or pi is None:
+        raise ValueError("non sembra l'elenco dei dispositivi: servono le colonne «displayName» e «owner»")
+    found = {}
+    for r in lettore:
+        if len(r) <= max(ni, pi):
+            continue
+        if oi is not None and oi < len(r) and "windows" not in r[oi].casefold():
+            continue
+        nome = " ".join(_clean(r[ni]).split())
+        if nome:
+            found.setdefault(nome, []).append(" ".join(_clean(r[pi]).split()))
+    return found
+
+
 def merge_pc_entries(parts):
     """Più file con le stesse persone: i valori si sommano (senza ripetere quelli uguali)."""
     out = {}
@@ -4476,6 +4530,65 @@ def with_device_serial(dotazione, key, value, port=None):
                     if kind == "teams" else {"tipo": "Monitor", "modello": "AOC",
                                              "seriale": clean_serial(value)})
     return clean_dotazione(rows)
+
+
+def desk_others(person):
+    """Gli altri apparecchi della dotazione di una persona (tablet, SIM, cuffie, PC fisso...: quelli
+    che NON sono il portatile, il monitor AOC, il cellulare, il telefono Teams o la presa di rete,
+    che hanno già il loro bollino). [{"key": "dot:N", "kind": "serial", "idx": N, "name", "sub",
+    "label", "value", "tipo", "modello"}], N = posizione nella dotazione."""
+    out = []
+    for i, r in enumerate(clean_dotazione(person.get("dotazione"))):
+        if _row_kind(r):
+            continue
+        out.append({"key": "dot:%d" % i, "kind": "serial", "idx": i, "name": r["tipo"] or "Apparecchio",
+                    "sub": r["modello"], "label": "S/N o IMEI" + (" (%s)" % r["tipo"] if r["tipo"] else ""),
+                    "value": (r["seriale"] or "").strip(), "tipo": r["tipo"], "modello": r["modello"]})
+    return out
+
+
+def desk_addable(person):
+    """Il cellulare (IMEI) e il telefono Teams (S/N) che non ci sono ancora sulla scrivania: si
+    aggiungono scrivendo (o leggendo con la fotocamera) il loro codice."""
+    ph = desk_phone_info(person.get("dotazione"), person.get("imei"))
+    out = []
+    if not ph["mobile"]:
+        out.append({"key": "mobile", "kind": "imei", "add": True, "name": "Cellulare", "sub": "",
+                    "label": "IMEI del cellulare", "value": ""})
+    if not ph["teams"]:
+        out.append({"key": "teams", "kind": "serial", "add": True, "name": "Telefono Teams",
+                    "sub": TEAMS_MODELLO, "label": "S/N del telefono Teams", "value": ""})
+    return out
+
+
+def with_other_device(dotazione, idx, tipo, modello="", seriale=""):
+    """La dotazione con un altro apparecchio aggiunto (idx None) o cambiato (idx = posizione).
+    Restituisce (dotazione, errore). Un tipo che ha già il suo bollino (cellulare, telefono Teams,
+    monitor AOC, presa, portatile) non va bene: errore con la spiegazione."""
+    row = {"tipo": " ".join(str(tipo or "").split())[:40], "modello": " ".join(str(modello or "").split())[:80],
+           "seriale": clean_serial(seriale)}
+    if not row["tipo"]:
+        return None, "Scrivi che apparecchio è (per esempio Tablet, Scheda SIM, Cuffie)."
+    k = _row_kind(row)
+    if k:
+        return None, {"mobile": "Il cellulare ha il suo pulsante «Aggiungi: Cellulare» (con l'IMEI).",
+                      "teams": "Il telefono Teams ha il suo pulsante «Aggiungi: Telefono Teams».",
+                      "monitor": "Il monitor AOC ha il suo bollino sulla scrivania.",
+                      "presa": "La presa di rete ha il suo bollino sulla scrivania."}.get(
+            k, "Il portatile si cambia con «Portatile» qui a destra; il suo S/N è quello del Computer.")
+    rows = [dict(r) for r in clean_dotazione(dotazione)]
+    if idx is None:
+        rows.append(row)
+    elif 0 <= idx < len(rows):
+        rows[idx] = row
+    else:
+        return None, "Questo apparecchio non c'è più nella dotazione."
+    return clean_dotazione(rows), ""
+
+
+def without_other_device(dotazione, idx):
+    """La dotazione senza la riga numero idx."""
+    return [r for i, r in enumerate(clean_dotazione(dotazione)) if i != idx]
 
 
 def _luhn_ok(s):
@@ -6459,6 +6572,71 @@ class DeviceCodeDialog(ModalDialog):
         self.destroy()
 
 
+class OtherDeviceDialog(ModalDialog):
+    """Un altro apparecchio della dotazione (tablet, SIM, cuffie...): tipo, modello e codice (S/N o
+    IMEI) scritto a mano o letto con la fotocamera. `device` = None per un apparecchio nuovo."""
+
+    def __init__(self, parent, person_name, device, on_save, on_remove=None):
+        super().__init__(parent, "Apparecchio" if device else "Nuovo apparecchio", "620x420")
+        self.resizable(False, False)
+        self.on_save, self.on_remove = on_save, on_remove
+        body = ttk.Frame(self, padding=16)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+        ttk.Label(body, text=(device["name"] if device else "Aggiungi un apparecchio"),
+                  font=("Segoe UI", 14, "bold"), foreground=NAVY).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(body, text=person_name, style="Hint.TLabel").grid(row=1, column=0, columnspan=2,
+                                                                   sticky="w", pady=(0, 10))
+        self.v_t = tk.StringVar(value=device["tipo"] if device else "")
+        self.v_m = tk.StringVar(value=device["modello"] if device else "")
+        self.v = tk.StringVar(value=device["value"] if device else "")
+        ttk.Label(body, text="Che apparecchio è", font=("Segoe UI", 9, "bold")).grid(row=2, column=0, sticky="w")
+        tipi = [t for t in TIPI_DOTAZIONE_PERSONA if not _row_kind({"tipo": t, "modello": ""})]
+        ttk.Combobox(body, textvariable=self.v_t, values=tipi, width=34).grid(
+            row=3, column=0, columnspan=2, sticky="w", pady=(2, 8))
+        ttk.Label(body, text="Modello (facoltativo)", font=("Segoe UI", 9, "bold")).grid(row=4, column=0, sticky="w")
+        ttk.Entry(body, textvariable=self.v_m, width=36).grid(row=5, column=0, columnspan=2, sticky="w", pady=(2, 8))
+        ttk.Label(body, text="Seriale o IMEI", font=("Segoe UI", 9, "bold")).grid(row=6, column=0, sticky="w")
+        self.entry = ttk.Entry(body, textvariable=self.v, width=34, font=("Consolas", 14, "bold"))
+        self.entry.grid(row=7, column=0, sticky="ew", pady=(2, 2))
+        self.btn_cam = scan_button(body, self.v, kind="any", entry=self.entry,
+                                   on_code=lambda t: self.lbl_err.configure(text=""),
+                                   title="Leggi il seriale o l'IMEI")
+        self.btn_cam.grid(row=7, column=1, padx=(8, 0))
+        ttk.Label(body, style="Hint.TLabel", wraplength=560, justify="left",
+                  text="Il S/N è sull'etichetta dell'apparecchio; per una SIM c'è il numero stampato sulla "
+                       "scheda. Puoi scriverlo oppure leggerlo con la fotocamera."
+                  ).grid(row=8, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.lbl_err = ttk.Label(body, foreground=RED, wraplength=560, justify="left")
+        self.lbl_err.grid(row=9, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        bt = ttk.Frame(body)
+        bt.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        ttk.Button(bt, text="Salva", style="Save.TButton", command=self.save).pack(side="left")
+        if device and on_remove:
+            ttk.Button(bt, text="Togli l'apparecchio", command=self.remove).pack(side="left", padx=(8, 0))
+        ttk.Button(bt, text="Annulla", command=self.destroy).pack(side="right")
+        self.bind("<Return>", lambda e: self.save())
+        try:
+            self.entry.focus_set()
+        except Exception:
+            pass
+
+    def save(self):
+        value, err = check_device_code("serial", self.v.get())
+        if err:
+            self.lbl_err.configure(text=err)
+            return
+        if self.on_save(self.v_t.get(), self.v_m.get(), value or ""):
+            self.destroy()
+
+    def remove(self):
+        self.on_remove()
+        self.destroy()
+
+    def show_error(self, text):
+        self.lbl_err.configure(text=text)
+
+
 class DeskDialog(ModalDialog):
     """La scrivania a pagina intera: la scena in grande con un bollino su ogni dispositivo (PC, monitor
     AOC, cellulare, telefono Teams); cliccando un bollino si scrive il codice (S/N o IMEI) a mano o con
@@ -6600,11 +6778,40 @@ class DeskDialog(ModalDialog):
 
     def open_device(self, key):
         p = self.person()
-        d = next((x for x in self.devices if x["key"] == key), None)
+        d = next((x for x in self.devices + (desk_addable(p) if p else []) if x["key"] == key), None)
         if not p or not d:
             return None
         return DeviceCodeDialog(self, d, p["nome"],
                                 lambda value, port=None: self.save_device(key, value, port))
+
+    def open_other(self, idx=None):
+        """Un altro apparecchio della dotazione (tablet, SIM, cuffie...): cambia o aggiunge (idx None)."""
+        p = self.person()
+        if not p:
+            return None
+        d = next((x for x in desk_others(p) if x["idx"] == idx), None) if idx is not None else None
+        dlg = [None]
+
+        def on_save(tipo, modello, value):
+            new, err = with_other_device(p.get("dotazione"), idx, tipo, modello, value)
+            if err:
+                dlg[0].show_error(err)
+                return False
+            self.app.db.set_user_extra(self.utente_id, dotazione=new)
+            self.app.refresh_users()
+            self.refresh()
+            if self.on_change:
+                self.on_change()
+            return True
+
+        def on_remove():
+            self.app.db.set_user_extra(self.utente_id, dotazione=without_other_device(p.get("dotazione"), idx))
+            self.app.refresh_users()
+            self.refresh()
+            if self.on_change:
+                self.on_change()
+        dlg[0] = OtherDeviceDialog(self, p["nome"], d, on_save, on_remove if d else None)
+        return dlg[0]
 
     def save_device(self, key, value, port=None):
         """Salva il codice di un dispositivo (per la presa di rete anche la porta dello switch) e
@@ -6644,6 +6851,28 @@ class DeskDialog(ModalDialog):
                       foreground=TEXT if ok else GREY).pack(side="left", padx=(8, 0))
             ttk.Button(row, text="Modifica…" if ok else "Inserisci…",
                        command=lambda k=d["key"]: self.open_device(k)).pack(side="right")
+        # gli altri apparecchi (tablet, SIM, cuffie...), poi quelli che si possono aggiungere
+        for d in desk_others(p):
+            ok = bool(d["value"])
+            row = ttk.Frame(self.dev_frame)
+            row.pack(fill="x", pady=2)
+            dot = tk.Canvas(row, width=26, height=26, highlightthickness=0, bg=LIGHT)
+            dot.create_oval(2, 2, 24, 24, fill=GREEN if ok else RED, outline=GREEN if ok else RED)
+            dot.create_text(13, 13, text="\u2713" if ok else "+", fill=WHITE, font=("Segoe UI", 11, "bold"))
+            dot.pack(side="left")
+            ttk.Label(row, text=d["name"] + ("  ·  " + d["sub"] if d["sub"] else ""),
+                      font=("Segoe UI", 10, "bold"), width=40).pack(side="left", padx=(8, 0))
+            ttk.Label(row, text=d["value"] or "S/N mancante",
+                      font=("Consolas", 11, "bold") if ok else ("Segoe UI", 10, "italic"),
+                      foreground=TEXT if ok else GREY).pack(side="left", padx=(8, 0))
+            ttk.Button(row, text="Modifica…", command=lambda i=d["idx"]: self.open_other(i)).pack(side="right")
+        bar = ttk.Frame(self.dev_frame)
+        bar.pack(fill="x", pady=(8, 0))
+        for d in desk_addable(p):
+            ttk.Button(bar, text="+ Aggiungi: %s (%s)" % (d["name"], "IMEI" if d["kind"] == "imei" else "S/N"),
+                       command=lambda k=d["key"]: self.open_device(k)).pack(side="left", padx=(0, 8))
+        ttk.Button(bar, text="+ Aggiungi un altro apparecchio (tablet, SIM, cuffie...)",
+                   command=lambda: self.open_other(None)).pack(side="left")
 
     def person(self):
         return next((p for p in self.app.db.persone_of(self.room_id)
@@ -12646,15 +12875,15 @@ class App(tk.Tk):
 
     def import_pc_serials(self):
         paths = filedialog.askopenfilenames(
-            title="Importa seriali dei PC da Excel",
-            filetypes=[("Excel", "*.xlsx"), ("Tutti i file", "*.*")])
+            title="Importa seriali dei PC da Excel o dall'elenco dispositivi (CSV)",
+            filetypes=[("Excel o CSV", "*.xlsx *.csv"), ("Tutti i file", "*.*")])
         if not paths:
             return
         parts, errors = [], []
         for p in paths:
             try:
-                parts.append(read_pc_xlsx(p))
-            except ValueError as e:
+                parts.append(read_pc_csv(p) if p.lower().endswith(".csv") else read_pc_xlsx(p))
+            except (ValueError, OSError) as e:
                 errors.append("%s: %s" % (os.path.basename(p), e))
         if errors:
             messagebox.showwarning(APP_NAME, "Questi file non li posso usare:\n\n" +
@@ -12711,25 +12940,33 @@ class App(tk.Tk):
             messagebox.showerror(APP_NAME, "Manca il file servicenow.py accanto al programma.")
             return
         paths = filedialog.askopenfilenames(
-            title="Importa interventi da ServiceNow",
-            filetypes=[("Excel", "*.xlsx"), ("Tutti i file", "*.*")])
+            title="Importa interventi da ServiceNow (Excel) e, se vuoi, l'elenco dispositivi (CSV)",
+            filetypes=[("Excel o CSV", "*.xlsx *.csv"), ("Tutti i file", "*.*")])
         if not paths:
             return
-        rows, errors = [], []
+        rows, errors, dispositivi, n_csv = [], [], {}, 0
         for p in paths:
             try:
-                rows += SN.read_rows(p)
-            except ValueError as e:
+                if p.lower().endswith(".csv"):      # l'elenco dei dispositivi: seriale -> proprietario
+                    n_csv += 1
+                    dispositivi.update(SN.read_devices(p))
+                else:
+                    rows += SN.read_rows(p)
+            except (ValueError, OSError) as e:
                 errors.append("%s: %s" % (os.path.basename(p), e))
         if errors:
             messagebox.showwarning(APP_NAME, "Questi file non li posso usare:\n\n" +
                                    "\n".join(errors))
         if not rows:
+            if n_csv:
+                messagebox.showinfo(APP_NAME, "Hai scelto solo l'elenco dei dispositivi: scegli "
+                                              "insieme anche il file Excel dei ticket di ServiceNow "
+                                              "(si selezionano tutti e due insieme, con Ctrl).")
             return
         try:
             tickets = SN.group_tickets(rows)
             plan = SN.plan_import(tickets, self.db.users_basic(), self.db.interventi_per_import(),
-                                  self.db.sedi(), SN.technician_name(rows))
+                                  self.db.sedi(), SN.technician_name(rows), dispositivi or None)
         except (ValueError, sqlite3.Error) as e:
             messagebox.showerror(APP_NAME, "Non riesco a preparare l'importazione:\n%s" % e)
             return
@@ -12747,12 +12984,15 @@ class App(tk.Tk):
                 "Nel file ci sono %d righe, cioè %d ticket (uno per ticket, senza doppioni).\n\n"
                 "Interventi nuovi da aggiungere: %d.\nGià nell'app: %d. Annullati (saltati): %d.\n\n"
                 "Persone nuove da creare: %d.%s\nUtente preso da chi ha aperto il ticket: %d; "
-                "dedotto da matricola, seriale o testo: %d; non riconosciuto (va su «%s»): %d.\n\n"
+                "dedotto da matricola, seriale o testo: %d; non riconosciuto (va su «%s»): %d.%s\n\n"
                 "Vuoi continuare?"
                 % (s["righe_file"], s["ticket"], s["nuovi"], s["gia_presenti"], s["annullati"],
                    len([u for u in plan["utenti_nuovi"] if u["nome"] != SN.DA_ASSEGNARE]), sedi,
                    s["da_richiedente"] + s["da_chiamante"], s["dedotti"], SN.DA_ASSEGNARE,
-                   s["senza_utente"])):
+                   s["senza_utente"],
+                   ("\nElenco dispositivi letto: %d PC con proprietario; ticket risolti da lì: %d."
+                    % (len(dispositivi), s["per_come"].get("seriale (elenco dispositivi)", 0)))
+                   if dispositivi else "")):
             return
         try:
             SN.apply_plan(self.db, plan)

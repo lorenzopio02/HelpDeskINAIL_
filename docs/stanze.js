@@ -431,6 +431,28 @@ window.ROOMS = (function () {
     else if (value) rows.push(kind === "teams" ? { tipo: TEAMS_TIPO, modello: TEAMS_MODELLO, seriale: value } : { tipo: "Monitor", modello: "AOC", seriale: value });
     return rows;
   }
+  /* gli altri apparecchi della dotazione (tablet, SIM, cuffie, PC fisso…): non il portatile, il monitor AOC, il cellulare,
+     il telefono Teams e la presa, che hanno il loro bollino. «key» = dot:N, N = posizione nella dotazione */
+  const deskOthers = dot => dot.map((r, i) => ({ r, i })).filter(x => !rowKind(x.r)).map(x => ({
+    key: "dot:" + x.i, kind: "serial", other: true, idx: x.i, name: x.r.tipo || "Apparecchio", sub: x.r.modello || "",
+    label: "S/N o IMEI" + (x.r.tipo ? " (" + x.r.tipo + ")" : ""), value: String(x.r.seriale || "").trim(), tipo: x.r.tipo || "", modello: x.r.modello || "" }));
+  /* il cellulare e il telefono Teams che non ci sono ancora sulla scrivania: si aggiungono scrivendo (o leggendo) il codice */
+  const deskAddable = (u, ph) => {
+    const out = [];
+    if (!ph.mobile) out.push({ key: "mobile", kind: "imei", add: true, name: "Cellulare", sub: "", label: "IMEI del cellulare", value: "" });
+    if (!ph.teams) out.push({ key: "teams", kind: "serial", add: true, name: "Telefono Teams", sub: TEAMS_MODELLO, label: "S/N del telefono Teams", value: "" });
+    return out;
+  };
+  /* la dotazione con un altro apparecchio aggiunto (idx = null) o cambiato; un tipo che ha già il suo bollino non va bene */
+  function withOther(dot, idx, tipo, modello, seriale) {
+    const row = { tipo: String(tipo || "").replace(/\s+/g, " ").trim().slice(0, 40), modello: String(modello || "").replace(/\s+/g, " ").trim().slice(0, 80), seriale: String(seriale || "") };
+    if (!row.tipo) return { err: "Scrivi che apparecchio è (per esempio Tablet, Scheda SIM, Cuffie)." };
+    const k = rowKind(row);
+    if (k) return { err: k === "mobile" ? "Il cellulare ha il suo pulsante «Aggiungi: Cellulare» (con l'IMEI)." : k === "teams" ? "Il telefono Teams ha il suo pulsante «Aggiungi: Telefono Teams»." : k === "monitor" ? "Il monitor AOC ha il suo bollino sulla scrivania." : k === "presa" ? "La presa di rete ha il suo bollino sulla scrivania." : "Il portatile si cambia con «Portatile sulla scrivania» più in basso; il suo S/N è quello del Computer." };
+    const rows = dot.map(r => ({ ...r }));
+    if (idx == null) rows.push(row); else rows[idx] = row;
+    return { rows };
+  }
   /* come si scrive un codice: il S/N senza spazi e in maiuscolo, l'IMEI di 15 cifre con la cifra di controllo; "" = codice cancellato */
   function checkCode(kind, text) {
     const raw = String(text == null ? "" : text).replace(/[\x00-\x1f\x7f]/g, "");
@@ -464,7 +486,7 @@ window.ROOMS = (function () {
   function closeSheet() { const e = $("dvSheet"); if (e) e.remove(); }
   /* la schermata di un dispositivo: scrivi il codice o leggilo con la fotocamera */
   function openDevice(ruid, k, from, key) {
-    const u = userOf(k), dot = dotList(u), ph = phoneInfo(dot, u && u.imei), d = deskDevices(u, dot, ph).find(x => x.key === key);
+    const u = userOf(k), dot = dotList(u), ph = phoneInfo(dot, u && u.imei), d = deskDevices(u, dot, ph).find(x => x.key === key) || deskAddable(u, ph).find(x => x.key === key);
     if (!d) return;
     closeSheet();
     const el = document.createElement("div");
@@ -501,6 +523,57 @@ window.ROOMS = (function () {
     if ($("dvClear")) $("dvClear").onclick = () => done("");
     $("dvCancel").onclick = closeSheet;
   }
+  /* un altro apparecchio (tablet, SIM, cuffie…): tipo, modello e codice a mano o con la fotocamera; idx = null = nuovo */
+  function openOther(ruid, k, from, idx) {
+    const u = userOf(k), dot = dotList(u), cur = idx == null ? null : dot[idx];
+    if (idx != null && !cur) return;
+    closeSheet();
+    const el = document.createElement("div");
+    el.id = "dvSheet"; el.className = "dvSheet";
+    const tipi = typeof TIPI_DOT_PERS !== "undefined" ? TIPI_DOT_PERS.filter(t => !rowKind({ tipo: t })) : ["Tablet", "Scheda SIM", "Cuffie"];
+    el.innerHTML = `<div class="dvCard" role="dialog" aria-label="${cur ? "Apparecchio" : "Nuovo apparecchio"}">
+      <h3>${cur ? esc(cur.tipo || "Apparecchio") : "Aggiungi un apparecchio"}</h3>
+      <div class="meta">${esc((u && u.nome) || "")}</div>
+      <label for="doTipo">Che apparecchio è</label>
+      <input id="doTipo" type="text" list="doTipi" value="${esc(cur ? cur.tipo : "")}" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="per esempio Tablet, Scheda SIM, Cuffie">
+      <datalist id="doTipi">${tipi.map(t => `<option value="${esc(t)}">`).join("")}</datalist>
+      <label for="doMod">Modello (facoltativo)</label>
+      <input id="doMod" type="text" value="${esc(cur ? cur.modello : "")}" autocomplete="off" autocorrect="off" spellcheck="false">
+      <label for="dvIn">Seriale o IMEI</label>
+      <input id="dvIn" type="text" value="${esc(cur ? cur.seriale : "")}" data-scan="any" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" placeholder="Numero di serie o IMEI">
+      <button class="btn navy" id="dvCam" type="button">📷 Leggi con la fotocamera</button>
+      <div class="hint">Il S/N è sull'etichetta dell'apparecchio; per una SIM c'è il numero stampato sulla scheda. Lo scrivi a mano oppure lo leggi con la fotocamera.</div>
+      <div id="dvMsg"></div>
+      <button class="btn green" id="dvSave" type="button">Salva</button>
+      ${cur ? `<button class="btn red" id="dvDel" type="button">Togli l'apparecchio</button>` : ""}
+      <button class="btn" id="dvCancel" type="button">Annulla</button></div>`;
+    document.body.appendChild(el);
+    const inp = $("dvIn"), msg = (t, err) => { $("dvMsg").innerHTML = t ? `<div class="msg${err ? " err" : ""}">${esc(t)}</div>` : ""; };
+    if (window.SCAN) window.SCAN.attach(inp);
+    $("dvCam").onclick = () => { const b = inp.parentNode.querySelector(".scbtn"); if (b) b.click(); else msg("La fotocamera non è disponibile: scrivi il codice a mano.", true); };
+    const finish = async (rows, text) => {
+      const fresh = await getKey("utenti", k);
+      if (!fresh) return;
+      await put("utenti", { ...fresh, dotazione: rows, modificato: nowIso() });
+      await loadUsers();
+      closeSheet();
+      openDesk(ruid, k, from, { saved: text });
+    };
+    $("dvSave").onclick = async () => {
+      const c = checkCode("serial", inp.value);
+      if (c.err) { msg(c.err, true); inp.focus(); return; }
+      const fresh = await getKey("utenti", k), base = dotList(fresh || u);
+      const res = withOther(base, idx, $("doTipo").value, $("doMod").value, c.v);
+      if (res.err) { msg(res.err, true); $("doTipo").focus(); return; }
+      await finish(res.rows, (res.rows[idx == null ? res.rows.length - 1 : idx].tipo) + (idx == null ? ": apparecchio aggiunto." : ": salvato."));
+    };
+    if ($("dvDel")) $("dvDel").onclick = async () => {
+      const fresh = await getKey("utenti", k), base = dotList(fresh || u).filter((r, i) => i !== idx);
+      await finish(base, (cur.tipo || "Apparecchio") + ": tolto dalla dotazione.");
+    };
+    inp.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); $("dvSave").click(); } });
+    $("dvCancel").onclick = closeSheet;
+  }
   /* la scrivania a pagina intera: la scena in grande con un bollino su ogni dispositivo */
   function openDesk(ruid, k, from, opt) {
     const r = room(ruid), p = peopleIn(ruid).find(x => x.k === k), u = userOf(k);
@@ -511,6 +584,8 @@ window.ROOMS = (function () {
     const line = (lab, v) => v ? `<div class="meta">${lab}: <b>${esc(v)}</b></div>` : "";
     const dots = devs.map(d => `<button type="button" class="dkDot ${d.value ? "ok" : "no"}" data-d="${d.key}" style="left:${(BOLLINI[d.key][0] / 130 * 100).toFixed(2)}%;top:${(BOLLINI[d.key][1] / 66 * 100).toFixed(2)}%" aria-label="${esc(d.name)}: ${d.value ? esc(d.value) : "codice mancante"}">${d.value ? "✓" : "+"}</button>`).join("");
     const rows = devs.map(d => `<button type="button" class="dvRow" data-d="${d.key}"><span class="dkDot ${d.value ? "ok" : "no"}" aria-hidden="true">${d.value ? "✓" : "+"}</span><span class="dvT"><b>${esc(d.name)}</b>${d.sub ? `<small>${esc(d.sub)}</small>` : ""}</span><span class="dvV${d.value ? "" : " no"}">${d.value ? esc(d.value) : (d.kind === "imei" ? "IMEI mancante" : d.kind === "presa" ? "Codice mancante" : "S/N mancante")}</span></button>`).join("");
+    const addRows = deskAddable(u, ph).map(d => `<button type="button" class="dvRow dvAdd" data-d="${d.key}"><span class="dkDot add" aria-hidden="true">+</span><span class="dvT"><b>Aggiungi: ${esc(d.name)}</b>${d.sub ? `<small>${esc(d.sub)}</small>` : ""}</span><span class="dvV go">${d.kind === "imei" ? "scrivi o leggi l'IMEI" : "scrivi o leggi il S/N"}</span></button>`).join("");
+    const othRows = deskOthers(dot).map(d => `<button type="button" class="dvRow" data-o="${d.idx}"><span class="dkDot ${d.value ? "ok" : "no"}" aria-hidden="true">${d.value ? "✓" : "+"}</span><span class="dvT"><b>${esc(d.name)}</b>${d.sub ? `<small>${esc(d.sub)}</small>` : ""}</span><span class="dvV${d.value ? "" : " no"}">${d.value ? esc(d.value) : "S/N mancante"}</span></button>`).join("");
     pg.innerHTML = `<div class="dkIn"><button class="dkBack" id="dkClose" type="button">← ${from === "room" ? "Torna alla stanza" : from === "room3d" ? "Torna alla stanza 3D" : "Indietro"}</button>
       <h3>${esc(r.codice)} · Postazione ${p.numero}</h3>
       <div class="meta">${esc(bName(r.edificio_uid))} · ${floorLabel(r.piano)}</div>
@@ -519,7 +594,8 @@ window.ROOMS = (function () {
       <div class="dkStage" id="dkScene">${deskSvg("100%", ph, false, true)}${dots}</div>
       <div class="hint" style="text-align:center">Tocca un bollino: <b style="color:var(--green)">✓</b> codice scritto, <b style="color:var(--red)">+</b> codice da inserire.</div>
       ${opt && opt.saved ? `<div class="msg" id="dkSaved">${esc(opt.saved)}</div>` : ""}
-      <div class="dvList" id="dvList">${rows}</div>
+      <div class="dvList" id="dvList">${rows}${othRows}${addRows}</div>
+      <button class="btn" id="dkOtherAdd" type="button">+ Aggiungi un altro apparecchio (tablet, SIM, cuffie…)</button>
       <button class="btn" id="dkCopy" type="button"${snOf(u) ? "" : " hidden"}>Copia il S/N del computer</button><div id="dkMsg"></div>
       ${line("Telefono", u && u.telefono)}${line("Matricola", u && u.matricola)}${line("Sede", u && u.sede)}
       <div class="dkPics" id="dkPics">${picsHtml(ph)}</div>
@@ -536,6 +612,8 @@ window.ROOMS = (function () {
     pg.classList.remove("hidden"); pg.scrollTop = 0;
     const shut = () => { pg.classList.add("hidden"); pg.innerHTML = ""; closeSheet(); };
     pg.querySelectorAll("[data-d]").forEach(b => b.onclick = () => openDevice(ruid, k, from, b.dataset.d));
+    pg.querySelectorAll("[data-o]").forEach(b => b.onclick = () => openOther(ruid, k, from, +b.dataset.o));
+    $("dkOtherAdd").onclick = () => openOther(ruid, k, from, null);
     if ($("dkCopy")) $("dkCopy").onclick = async () => { const sn = snOf(userOf(k)), ok = await copyText(sn); $("dkMsg").innerHTML = ok ? `<div class="msg">Copiato: ${esc(sn)}</div>` : `<div class="msg err">Non riesco a copiare: tieni premuto sul numero e scegli Copia.</div>`; };
     const applyPhones = async () => {
       const v = $("dkMob").value, cur = (await getKey("utenti", k)) || u;
@@ -882,6 +960,6 @@ window.ROOMS = (function () {
            addRoom, addRooms, saveRoom, setPos, deleteRoom, assign, unassign, dropUser, renameUser,
            addFoto, delFoto, setPianta, delPianta, pianta, fotosOf, exportItems, countNew, importData,
            peopleIn, seatOf, roomsOf, occ, lab, roomCode: uid => { const r = uid && room(uid); return r ? r.codice : ""; },
-           _x: { room, userOf, dotList, phoneInfo, deskDevices, bName, open3d },
+           _x: { room, userOf, dotList, phoneInfo, deskDevices, deskOthers, deskAddable, withOther, bName, open3d },
            _state: () => ({ S, P, curF, view, mark, markUid, zoom }) };
 })();

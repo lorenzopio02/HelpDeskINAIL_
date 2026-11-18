@@ -1,5 +1,5 @@
 // Salva l'app sul telefono per farla funzionare anche senza campo.
-const CACHE = "helpdesk-v29";
+const CACHE = "helpdesk-v31";
 const FILES = ["./", "index.html", "manifest.webmanifest", "logo_header.png", "icon-192.png", "icon-512.png", "apple-touch-icon.png", "export.js", "verbali.js", "stanze.js", "bolle.js", "toscana.js", "barcode.js", "qr.js", "scan.js", "stampante-c250i.png", "stampante-c3350i.png", "disp-lap13.png", "disp-lap15.png", "disp-s24.png", "disp-s24plus.png", "disp-s25.png", "disp-teams.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => {

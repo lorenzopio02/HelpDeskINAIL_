@@ -2,12 +2,30 @@ HELP DESK INAIL - PC + app per iPhone
 =====================================
 
 NOVITA' DI QUESTA VERSIONE
+ - SERIALI E IMEI DI TUTTI GLI APPARECCHI DELLA POSTAZIONE, A MANO O CON LA FOTOCAMERA (PC e
+   telefono): nella scrivania a pagina intera, sotto la scena, trovi "Aggiungi: Cellulare" (IMEI),
+   "Aggiungi: Telefono Teams" (S/N) e "+ Aggiungi un altro apparecchio" (tablet, SIM, cuffie...),
+   anche se la persona non aveva ancora scelto nessun modello. Gli altri apparecchi gia' in dotazione
+   compaiono nell'elenco con il loro S/N e si correggono con un tocco. Sul telefono anche le righe della
+   dotazione nella scheda persona hanno la fotocamera. Vedi SCRIVANIA A PAGINA INTERA E BOLLINI.
+   Sul telefono la versione diventa "helpdesk-v31".
+ - ELENCO DEI DISPOSITIVI (CSV di Intune, "exportDevices_....csv") E RICERCA CON "60016-":
+   * TICKET DI SERVICENOW (PC): File > "Importa interventi da ServiceNow (Excel)...": seleziona
+     INSIEME (con Ctrl) il file Excel dei ticket e il file CSV dei dispositivi. Quando in un ticket
+     c'e' un seriale (nel CI o nel testo, anche scritto "60016-ABC1234") che nessuna persona dell'app
+     ha, il proprietario si legge dal CSV; se non e' nell'app viene creato (con la sede del ticket).
+     Vedi IMPORTARE I TICKET DA SERVICENOW.
+   * SERIALI DEI PC (PC): File > "Importa seriali dei PC da Excel...": ora accetta anche il CSV dei
+     dispositivi (legge solo i PC Windows con il proprietario). Vedi SERIALI DEI PC DA EXCEL.
+   * RICERCA (PC e telefono): se scrivi "60016-ABC1234" ti trova anche chi ha il seriale
+     "ABC1234" (le 5 cifre prima del trattino sono il codice dell'ente). Sul telefono la versione
+     diventa "helpdesk-v31".
  - TOLTE LE VISITE 3D DEL CORRIDOIO E DELL'EDIFICIO (PC e telefono): non c'e' piu' la "Passeggiata
    nel piano in 3D" ne' l'"Edificio in 3D" (menu File, schede Edificio e Piani e stanze, telefono:
    scheda del piano e scheda Edificio), e nemmeno "La mia faccia". Piani, stanze, persone,
    stampanti e la visita 3D della singola stanza sul telefono restano come prima. La foto che
    avevi scelto per "La mia faccia" (file la_mia_faccia.png nella cartella dei dati del PC) non
-   serve piu': puoi cancellarla. Sul telefono la versione diventa "helpdesk-v29".
+   serve piu': puoi cancellarla. Sul telefono la versione diventa "helpdesk-v31".
  - TICKET DI SERVICENOW COME INTERVENTI (solo PC): File > "Importa interventi da ServiceNow
    (Excel)...". Scegli il file Excel esportato da ServiceNow (anche piu' file insieme, anche lo
    stesso file piu' volte: non crea doppioni). L'app unisce le righe dello stesso ticket (le
@@ -23,7 +41,7 @@ NOVITA' DI QUESTA VERSIONE
    anche i suoi dati, ma quello che hai scritto a mano resta. Nel verbale di Assegnazione la
    dotazione scritta nella scheda (notebook, smartphone, SIM, cuffie con seriale/IMEI) e' gia'
    nell'elenco: togli le righe che non servono. Non vengono proposti monitor, telefoni Teams e
-   prese di rete. Sul telefono la versione diventa "helpdesk-v29".
+   prese di rete. Sul telefono la versione diventa "helpdesk-v31".
  - EMAIL DELLE PERSONE (PC e telefono): nella scheda della persona c'e' il campo "Email" e il
    pulsante "Scrivi mail" (apre il programma di posta con un messaggio nuovo). L'email si cerca
    come tutto il resto, si copia con "Copia dati" e viaggia fra PC e telefono. L'importazione
@@ -406,7 +424,7 @@ IMPORTARE I TICKET DA SERVICENOW
    stampanti, rete, UPS: nel testo c'e' solo "l'utente"). Nelle note dell'intervento c'e' scritto
    come e' stata trovata la persona ("utente dedotto da seriale"...).
  - PERSONE NUOVE: se la persona non e' nell'app viene creata come "Cognome Nome" (per i nomi di
-   ServiceNow, scritti "NOME COGNOME", l'ultima parola e' il cognome; "Della Polla Generoso"
+   ServiceNow, scritti "NOME COGNOME", l'ultima parola e' il cognome; "Della Gatta Ottavio"
    resta insieme). CONTROLLA l'elenco nel rapporto: un cognome doppio puo' venire girato male.
    Una persona gia' nell'app, anche col nome in ordine diverso, non si duplica.
  - SEDE: la sede del ticket. "Firenze- Porte Nuove" = Firenze; "Direzione Regionale Toscana" = DR
@@ -419,6 +437,17 @@ IMPORTARE I TICKET DA SERVICENOW
    si riconoscono dal numero: se hanno la persona "dedotta" o "non riconosciuta" la correggo con
    il Chiamante, e dove la soluzione e' vuota scrivo le Note di chiusura. Cio' che hai scritto tu
    (soluzione, persona) non si cancella.
+ - ELENCO DEI DISPOSITIVI (facoltativo): seleziona insieme al file Excel anche il CSV esportato da
+   Intune (colonne model; displayName; operatingSystem; owner). Serve quando il ticket ha un seriale
+   ma non dice chi e' la persona. Si usano solo i PC Windows con nome "60016-SERIALE" e un
+   proprietario "Cognome Nome". L'ordine di ricerca diventa: chiamante, aperto da, matricola,
+   seriale/IMEI delle persone dell'app, ELENCO DISPOSITIVI, nome nel testo. Se lo stesso seriale ha
+   due proprietari diversi non si usa, e un PC intestato a te non conta. Se il proprietario non e'
+   nell'app viene creato come "Cognome Nome", con la sede del ticket. Nelle note dell'intervento
+   c'e' scritto "utente dedotto da seriale (elenco dispositivi)". Il CSV da solo non basta: serve
+   anche l'Excel dei ticket. Se i ticket li avevi gia' importati senza il CSV, rilancia
+   l'importazione con Excel + CSV: gli interventi rimasti su "Da assegnare (ServiceNow)" per cui
+   il CSV dice chi e' la persona vengono corretti (gli altri non si toccano).
  - Il rapporto completo (persone create, ticket da controllare a mano) e' nel file
    rapporto_importazione_servicenow.txt, nella cartella dei dati (File > "Apri la cartella dei
    dati"). Per portare tutto sul telefono: File > "Esporta dati per il telefono".
@@ -598,8 +627,19 @@ SCRIVANIA A PAGINA INTERA E BOLLINI (PC e telefono)
      * Monitor AOC: S/N del monitor (c'e' sempre; la riga "Monitor" si crea da sola alla prima volta,
        con modello AOC).
      * Cellulare: IMEI. Il bollino c'e' se sulla scrivania c'e' un cellulare (modello scelto) oppure
-       se la persona ha un IMEI. Per averlo scegli prima il "Cellulare sulla scrivania".
-     * Telefono Teams: S/N. Il bollino c'e' se spunti "Telefono Teams".
+       se la persona ha un IMEI. SE NON C'E' ANCORA: nell'elenco sotto la scrivania c'e' la riga
+       "Aggiungi: Cellulare" (sul PC il pulsante "+ Aggiungi: Cellulare (IMEI)"): scrivi o leggi l'IMEI
+       e il cellulare compare (disegnato come S24; il modello lo puoi cambiare in "Cellulare sulla
+       scrivania").
+     * Telefono Teams: S/N. Il bollino c'e' se spunti "Telefono Teams". SE NON C'E' ANCORA: "Aggiungi:
+       Telefono Teams" scrive il S/N e il telefono compare.
+     * ALTRI APPARECCHI (tablet, scheda SIM, cuffie, PC fisso, token...): sono righe dell'elenco con il
+       loro S/N; ci tocchi per correggere il codice, il tipo o il modello, o per "Togli l'apparecchio".
+       "+ Aggiungi un altro apparecchio" ne aggiunge uno nuovo: scrivi che apparecchio e', il modello
+       (facoltativo) e il S/N o IMEI, a mano o con la fotocamera. Il cellulare, il Teams, il monitor
+       AOC, la presa e il portatile hanno gia' il loro posto: se li scrivi qui te lo dice.
+     * Sul telefono, nella SCHEDA DELLA PERSONA (Utenti) ogni riga della dotazione ha adesso anche la
+       fotocamera accanto al "Seriale o IMEI" (per un cellulare cerca un IMEI, per il resto un S/N).
    Verde con la spunta = codice scritto. Rosso col + = da inserire. Sotto la scrivania trovi lo
    stesso elenco con i codici scritti: tocchi la riga e si apre la stessa schermata.
  - La schermata del dispositivo: un campo dove SCRIVI il codice e il pulsante della FOTOCAMERA
@@ -767,6 +807,9 @@ SERIALI DEI PC DA EXCEL (come funziona)
    quello dell'etichetta e si ritrova con la fotocamera). Un nome senza questa forma (per esempio
    "21000PC0001", un nome casuale tipo "60016aFpsZeDiyV" oppure "PC non trovato nell'export") NON e'
    un seriale: la persona resta vuota e compare nel rapporto ("Il nome del PC non contiene un seriale").
+ - ELENCO DEI DISPOSITIVI (CSV di Intune: model; displayName; operatingSystem; owner): si sceglie nello
+   stesso modo dell'Excel (anche insieme). Si usano solo le righe Windows con un proprietario; il
+   proprietario e' gia' "Cognome Nome". Gli altri dispositivi (telefoni, tablet) si ignorano.
  - Chi e' solo nel file e non nell'app NON viene aggiunto. Se un seriale era gia' scritto (anche da te
    a mano) non viene cambiato: se e' diverso te lo dice nel rapporto. Se una persona ha piu' PC si
    scrive il primo seriale valido. Lo stesso seriale non viene dato a due persone.

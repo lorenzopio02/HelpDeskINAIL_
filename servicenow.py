@@ -114,7 +114,7 @@ def _accent_end(word):
 
 def cognome_nome(name, incerto=False):
     """«NOME COGNOME» (come scrive ServiceNow) -> «Cognome Nome». L'ultima parola è il cognome
-    (con le particelle davanti: «Della Polla»); chi non ha almeno due parole resta com'è.
+    (con le particelle davanti: «Della Gatta»); chi non ha almeno due parole resta com'è.
     Con incerto=True (un nome scritto nel testo di un ticket) se la prima parola non è un nome di
     battesimo e l'ultima sì, il nome è già «Cognome Nome» e non si gira."""
     words = [_accent_end(w) for w in " ".join(str(name or "").split()).title().split()]
@@ -348,6 +348,69 @@ def read_rows(path):
                      "del numero del ticket e della descrizione")
 
 
+PC_NAME_RE = re.compile(r"^\s*\d{5}\s*-\s*([A-Za-z0-9]{5,12})\s*$")
+_DEV_COLONNE = {
+    "nome": ("displayname", "device name", "nome dispositivo", "nome", "name"),
+    "proprietario": ("owner", "primary user", "proprietario", "utente principale", "assigned to",
+                     "primary user display name"),
+    "sistema": ("operatingsystem", "os", "sistema operativo", "operating system"),
+}
+
+
+def read_devices(path):
+    """L'elenco dei dispositivi (esportazione CSV di Intune: model;displayName;operatingSystem;owner).
+    Restituisce {SERIALE: 'Cognome Nome'} per i PC con nome «60016-SERIALE» e un proprietario.
+    Se lo stesso seriale ha proprietari diversi non lo tiene (non si sa di chi è)."""
+    with open(path, "rb") as f:
+        raw = f.read()
+    testo = None
+    for enc in ("utf-8-sig", "utf-16", "cp1252"):
+        try:
+            testo = raw.decode(enc)
+            break
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    if testo is None:
+        testo = raw.decode("latin-1")
+    righe = testo.splitlines()
+    if not righe:
+        return {}
+    prima = righe[0]
+    sep = max((";", ",", "\t"), key=prima.count)
+    import csv
+    lettore = csv.reader(righe, delimiter=sep)
+    try:
+        intest = [fold(c) for c in next(lettore)]
+    except StopIteration:
+        return {}
+    col = {}
+    for campo, alias in _DEV_COLONNE.items():
+        for i, h in enumerate(intest):
+            if h in alias and campo not in col:
+                col[campo] = i
+    if "nome" not in col or "proprietario" not in col:
+        return {}
+    out, doppi = {}, set()
+    for r in lettore:
+        try:
+            m = PC_NAME_RE.match(r[col["nome"]])
+            owner = " ".join(r[col["proprietario"]].split())
+        except IndexError:
+            continue
+        if not m or not owner:
+            continue
+        sistema = fold(r[col["sistema"]]) if "sistema" in col and col["sistema"] < len(r) else "windows"
+        if sistema and "windows" not in sistema:
+            continue
+        ser = m.group(1).upper()
+        if ser in out and words_key(out[ser]) != words_key(owner):
+            doppi.add(ser)
+        out[ser] = owner
+    for ser in doppi:
+        out.pop(ser, None)
+    return out
+
+
 def technician_name(rows):
     """Il nome di chi lavora i ticket (la colonna Actor, la più frequente), se c'è."""
     names = [r["actor"] for r in rows if r.get("actor")]
@@ -446,8 +509,10 @@ def _uniq(users):
     return out
 
 
-def _find_by_clues(ix, t, escludi):
-    """Chi è la persona dai dati scritti nel ticket. Restituisce (persona, come, da_controllare)."""
+def _find_by_clues(ix, t, escludi, dispositivi=None, escludi_chiave=""):
+    """Chi è la persona dai dati scritti nel ticket. Restituisce (persona, come, da_controllare,
+    proprietario): il proprietario è un NOME (dall'elenco dei dispositivi) quando il seriale del
+    ticket non è di nessuna persona dell'app ma è nell'elenco."""
     text = " ".join([t["breve"], t["descr"], t["ci"]])
     esc = set(escludi)
 
@@ -468,29 +533,35 @@ def _find_by_clues(ix, t, escludi):
     imeis = _uniq(imeis)
     if mats:
         dubbio = len(mats) > 1 or (sers and sers[0]["id"] != mats[0]["id"])
-        return mats[0], "matricola", bool(dubbio)
+        return mats[0], "matricola", bool(dubbio), ""
     if sers:
-        return sers[0], "seriale", len(sers) > 1
+        return sers[0], "seriale", len(sers) > 1, ""
     if imeis:
-        return imeis[0], "IMEI", len(imeis) > 1
+        return imeis[0], "IMEI", len(imeis) > 1, ""
+    if dispositivi:
+        for m in list(SN_RE.finditer(text)) + list(ENTE_SERIAL_RE.finditer(text)):
+            owner = dispositivi.get(m.group(1).upper())
+            if owner and not (escludi_chiave and words_key(owner) == escludi_chiave):
+                return None, "seriale (elenco dispositivi)", False, owner
     tk = tokens(t["descr"] + " " + t["breve"])
     for size in (4, 3, 2):                       # il nome intero scritto nel testo
         for i in range(len(tk) - size + 1):
             hits = ok(ix.by_words.get(" ".join(sorted(tk[i:i + size])), []))
             if len(hits) == 1:
-                return hits[0], "nome nel testo", False
+                return hits[0], "nome nel testo", False, ""
     for m in TITOLO_COGNOME_RE.finditer(t["descr"] + " " + t["breve"]):
         hits = ok(ix.by_cognome.get(fold(m.group(1)), []))
         if len(hits) == 1:
-            return hits[0], "cognome nel testo", True
-    return None, "", False
+            return hits[0], "cognome nel testo", True, ""
+    return None, "", False, ""
 
 
-def plan_import(tickets, users, esistenti, sedi_note=(), tecnico=""):
+def plan_import(tickets, users, esistenti, sedi_note=(), tecnico="", dispositivi=None):
     """Prepara l'importazione senza scrivere niente.
     tickets: group_tickets(...); users: db.users_basic(); esistenti: db.interventi_per_import();
     sedi_note: le sedi già nell'app; tecnico: il nome di chi lavora i ticket (nei ticket aperti da
-    lui l'utente vero non è «Aperto da»)."""
+    lui l'utente vero non è «Aperto da»); dispositivi: {SERIALE: «Cognome Nome» del proprietario}
+    da read_devices (facoltativo)."""
     ix = _Index(users)
     by_id = {u["id"]: u for u in users}
     tel_tec = telefono_tecnico(t for t in tickets if tecnico and words_key(t.get("apertoda") or "") == words_key(tecnico))
@@ -525,13 +596,15 @@ def plan_import(tickets, users, esistenti, sedi_note=(), tecnico=""):
             rec["sede"] = sede
         return rec["nome"]
 
-    def trova_persona(nome, incerto=False):
+    def trova_persona(nome, incerto=False, gia_cognome_nome=False):
         """(persona esistente | None, nome nuovo «Cognome Nome» | '') per un nome scritto da ServiceNow."""
         hits = _uniq(ix.by_name(nome)) or ix.by_name_loose(nome)
         if len(hits) == 1:
             return hits[0], ""
         if len(hits) > 1:
             return None, ""
+        if gia_cognome_nome:                 # il nome è già «Cognome Nome» (elenco dispositivi)
+            return None, " ".join(_accent_end(w) for w in " ".join(str(nome).split()).title().split())
         return None, cognome_nome(nome, incerto)
 
     for t in tickets:
@@ -553,7 +626,11 @@ def plan_import(tickets, users, esistenti, sedi_note=(), tecnico=""):
                 break
         mat_nuovo = ""
         if not user and not nuovo:
-            user, come, dubbio = _find_by_clues(ix, t, escludi)
+            user, come, dubbio, owner = _find_by_clues(ix, t, escludi, dispositivi, tec_key)
+            if owner:
+                user, nuovo = trova_persona(owner, gia_cognome_nome=True)
+                if not user and not nuovo:
+                    come = ""
         if not user and not nuovo:                  # un nome di persona scritto nel testo, non ancora nell'app
             for nm, mat in names_in_text(t["descr"] + " " + t["breve"]):
                 if tec_key and words_key(nm) == tec_key:
@@ -574,11 +651,15 @@ def plan_import(tickets, users, esistenti, sedi_note=(), tecnico=""):
                 st["soluzioni_aggiunte"] += 1
             # un intervento importato con l'utente dedotto: se ora il file dice chi è, lo si corregge
             nota = ex.get("note") or ""
-            if (come in ("chiamante", "richiedente") and (user or nuovo) and SEGNO in nota
-                    and (DEDOTTO in nota or "utente non riconosciuto" in nota)):
+            dal_file = come in ("chiamante", "richiedente")
+            dai_dispositivi = come == "seriale (elenco dispositivi)"      # solo dove non c'era nessuno
+            if ((dal_file or dai_dispositivi) and (user or nuovo) and SEGNO in nota
+                    and ((DEDOTTO in nota or "utente non riconosciuto" in nota) if dal_file
+                         else "utente non riconosciuto" in nota)):
                 plan["riassegna"].append({"id": ex["id"], "ticket": t["ticket"],
                                           "utente": user["nome"] if user else nuovo,
-                                          "nuovo": bool(nuovo)})
+                                          "nuovo": bool(nuovo),
+                                          "nota": (" - %s da %s" % (DEDOTTO, come)) if dai_dispositivi else ""})
                 if nuovo:
                     nuovo = registra(nuovo, sede)
                     plan["riassegna"][-1]["utente"] = nuovo
@@ -663,5 +744,6 @@ def apply_plan(db, plan):
     for s in plan["soluzioni"]:
         db.update_intervento_import(s["id"], soluzione=s["soluzione"])
     for r in plan["riassegna"]:
-        db.update_intervento_import(r["id"], utente=r["utente"], togli_dedotto=True)
+        db.update_intervento_import(r["id"], utente=r["utente"], togli_dedotto=True,
+                                    nota_dedotto=r.get("nota", ""))
     return len(plan["nuovi"])
